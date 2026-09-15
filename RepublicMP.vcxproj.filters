@@ -1,0 +1,234 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
+    </Filter>
+    <Filter Include="Resource Files">
+      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
+      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    </Filter>
+    <!-- Filters mirror the actual physical folders on disk (hooks\, net\,
+         save\, third_party\miniz\), not just a logical grouping over a
+         flat file list. -->
+    <Filter Include="hooks">
+      <UniqueIdentifier>{A1B2C3D4-3333-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="net">
+      <UniqueIdentifier>{A1B2C3D4-4444-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="save">
+      <UniqueIdentifier>{A1B2C3D4-5555-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="third_party">
+      <UniqueIdentifier>{A1B2C3D4-1111-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="third_party\miniz">
+      <UniqueIdentifier>{A1B2C3D4-2222-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="ui">
+      <UniqueIdentifier>{A1B2C3D4-6666-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="third_party\imgui">
+      <UniqueIdentifier>{A1B2C3D4-7777-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="third_party\imgui\backends">
+      <UniqueIdentifier>{A1B2C3D4-8888-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="third_party\imgui\misc">
+      <UniqueIdentifier>{A1B2C3D4-9999-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="third_party\imrad">
+      <UniqueIdentifier>{A1B2C3D4-AAAA-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="main.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\detect_spawn.cpp">
+      <Filter>hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\present_hook.cpp">
+      <Filter>hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\game_speed.cpp">
+      <Filter>hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="save\save_zip.cpp">
+      <Filter>save</Filter>
+    </ClCompile>
+    <ClCompile Include="net\network.cpp">
+      <Filter>net</Filter>
+    </ClCompile>
+    <ClCompile Include="net\save_sync.cpp">
+      <Filter>net</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\miniz\miniz.c">
+      <Filter>third_party\miniz</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\miniz\miniz_tdef.c">
+      <Filter>third_party\miniz</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\miniz\miniz_tinfl.c">
+      <Filter>third_party\miniz</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\miniz\miniz_zip.c">
+      <Filter>third_party\miniz</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\save_load.cpp">
+      <Filter>hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="net\build_sync.cpp">
+      <Filter>net</Filter>
+    </ClCompile>
+    <ClCompile Include="net\road_sync.cpp">
+      <Filter>net</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\imgui_hook.cpp">
+      <Filter>hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="ui\main_menu.cpp">
+      <Filter>ui</Filter>
+    </ClCompile>
+    <ClCompile Include="ui\debugui.cpp">
+      <Filter>ui</Filter>
+    </ClCompile>
+    <ClCompile Include="ui\ui_log.cpp">
+      <Filter>ui</Filter>
+    </ClCompile>
+    <ClCompile Include="ui\debug_log.cpp">
+      <Filter>ui</Filter>
+    </ClCompile>
+    <ClCompile Include="ui\sync_block.cpp">
+      <Filter>ui</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\imgui\misc\cpp\imgui_stdlib.cpp">
+      <Filter>third_party\imgui\misc</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\imgui\imgui.cpp">
+      <Filter>third_party\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\imgui\imgui_draw.cpp">
+      <Filter>third_party\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\imgui\imgui_tables.cpp">
+      <Filter>third_party\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\imgui\imgui_widgets.cpp">
+      <Filter>third_party\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\imgui\backends\imgui_impl_win32.cpp">
+      <Filter>third_party\imgui\backends</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\imgui\backends\imgui_impl_dx11.cpp">
+      <Filter>third_party\imgui\backends</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="hooks\detect_spawn.h">
+      <Filter>hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\present_hook.h">
+      <Filter>hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\game_speed.h">
+      <Filter>hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\window_focus.h">
+      <Filter>hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="save\save_zip.h">
+      <Filter>save</Filter>
+    </ClInclude>
+    <ClInclude Include="net\network.h">
+      <Filter>net</Filter>
+    </ClInclude>
+    <ClInclude Include="net\save_sync.h">
+      <Filter>net</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\miniz\miniz.h">
+      <Filter>third_party\miniz</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\miniz\miniz_common.h">
+      <Filter>third_party\miniz</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\miniz\miniz_export.h">
+      <Filter>third_party\miniz</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\miniz\miniz_tdef.h">
+      <Filter>third_party\miniz</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\miniz\miniz_tinfl.h">
+      <Filter>third_party\miniz</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\miniz\miniz_zip.h">
+      <Filter>third_party\miniz</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\save_load.h">
+      <Filter>hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="net\build_sync.h">
+      <Filter>net</Filter>
+    </ClInclude>
+    <ClInclude Include="net\road_sync.h">
+      <Filter>net</Filter>
+    </ClInclude>
+    <ClInclude Include="mp_config.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\imgui_hook.h">
+      <Filter>hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="ui\main_menu.h">
+      <Filter>ui</Filter>
+    </ClInclude>
+    <ClInclude Include="ui\debugui.h">
+      <Filter>ui</Filter>
+    </ClInclude>
+    <ClInclude Include="ui\ui_log.h">
+      <Filter>ui</Filter>
+    </ClInclude>
+    <ClInclude Include="ui\debug_log.h">
+      <Filter>ui</Filter>
+    </ClInclude>
+    <ClInclude Include="ui\sync_block.h">
+      <Filter>ui</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\imgui\misc\cpp\imgui_stdlib.h">
+      <Filter>third_party\imgui\misc</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\imrad\imrad.h">
+      <Filter>third_party\imrad</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\imgui\imgui.h">
+      <Filter>third_party\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\imgui\imgui_internal.h">
+      <Filter>third_party\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\imgui\imconfig.h">
+      <Filter>third_party\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\imgui\imstb_rectpack.h">
+      <Filter>third_party\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\imgui\imstb_textedit.h">
+      <Filter>third_party\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\imgui\imstb_truetype.h">
+      <Filter>third_party\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\imgui\backends\imgui_impl_win32.h">
+      <Filter>third_party\imgui\backends</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\imgui\backends\imgui_impl_dx11.h">
+      <Filter>third_party\imgui\backends</Filter>
+    </ClInclude>
+  </ItemGroup>
+</Project>
