@@ -179,8 +179,8 @@
     <ClInclude Include="net\road_sync.h">
       <Filter>net</Filter>
     </ClInclude>
-    <ClInclude Include="mp_config.h">
-      <Filter>Source Files</Filter>
+    <ClInclude Include="net\host_config.h">
+      <Filter>net</Filter>
     </ClInclude>
     <ClInclude Include="hooks\imgui_hook.h">
       <Filter>hooks</Filter>
@@ -230,5 +230,19 @@
     <ClInclude Include="third_party\imgui\backends\imgui_impl_dx11.h">
       <Filter>third_party\imgui\backends</Filter>
     </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include=".gitignore">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="LICENSE">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="mp_config.h.example">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="README.md">
+      <Filter>Source Files</Filter>
+    </None>
   </ItemGroup>
 </Project>

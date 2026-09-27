@@ -213,9 +213,9 @@
     <ClInclude Include="hooks\window_focus.h" />
     <ClInclude Include="hooks\save_load.h" />
     <ClInclude Include="hooks\imgui_hook.h" />
-    <ClInclude Include="mp_config.h" />
     <ClInclude Include="net\build_sync.h" />
     <ClInclude Include="net\road_sync.h" />
+    <ClInclude Include="net\host_config.h" />
     <ClInclude Include="save\save_zip.h" />
     <ClInclude Include="net\network.h" />
     <ClInclude Include="net\save_sync.h" />
@@ -240,6 +240,12 @@
     <ClInclude Include="third_party\imgui\imstb_truetype.h" />
     <ClInclude Include="third_party\imgui\backends\imgui_impl_win32.h" />
     <ClInclude Include="third_party\imgui\backends\imgui_impl_dx11.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include=".gitignore" />
+    <None Include="LICENSE" />
+    <None Include="mp_config.h.example" />
+    <None Include="README.md" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

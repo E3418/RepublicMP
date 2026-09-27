@@ -85,10 +85,7 @@ bool TriggerSaveGame(const char* saveName)
     char* nameDst = base + SAVE_NAME_FIELD_OFFSET;
     strncpy_s(nameDst, SAVE_NAME_FIELD_MAX_LEN, fullName, _TRUNCATE);
 
-    // Force these two so the dispatcher takes the plain path we expect:
-    // skip the engine's own 7z-and-cleanup zip logic (we zip ourselves via
-    // save_zip.h), and fire on the very next frame instead of waiting out
-    // whatever delay-counter value happens to be sitting there already.
+    // Skip the engine's own 7z step (we zip ourselves) and fire next frame.
     *(volatile BYTE*)(base + SAVE_ZIP_AFTER_FLAG_OFFSET) = 0;
     *(volatile float*)(base + SAVE_DELAY_COUNTER_OFFSET) = 0.0f;
 
@@ -103,8 +100,7 @@ bool WaitForSaveToFinish(DWORD timeoutMs, volatile bool* cancelFlag)
     const DWORD stepMs = 100;
 
     if (timeoutMs == 0) {
-        // No cap - just wait however long the save actually takes (it writes
-        // dozens of files: buildings, vehicles, roads, pipes, etc.)
+        // No timeout: the save writes dozens of files.
         for (;;) {
             if (*trigger == 0) return true; // dispatcher (FUN_14030d1a0) cleared it - FUN_14042cc70 is done
             if (cancelFlag && *cancelFlag) {

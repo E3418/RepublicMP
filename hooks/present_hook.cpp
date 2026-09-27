@@ -26,8 +26,8 @@ static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain* pSwapChain, UINT 
 {
     g_presentCallCount++;
     BuildSync_Tick(); // apply any building placements received over the network
-    RoadSync_Tick(); // apply any road/pipe segments received over the network
-    DetectSpawn_Tick(); // service F9 debug spawn / thisPtr diagnostics
+    RoadSync_Tick(); // apply infrastructure received over the network
+    DetectSpawn_Tick(); // drag state, captured commits, F9 debug spawn
 
     ImGuiHook_EnsureInit(pSwapChain); // one-time: grabs device/hwnd, sets up ImGui + WndProc hook
     ImGuiHook_NewFrameAndRender();    // draws the overlay on top of the game's own frame

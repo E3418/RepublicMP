@@ -1,8 +1,4 @@
-// See main_menu.h - layout ported from the ImRAD export (imrad\mp_panel.cpp),
-// GLFW/MainWindow chrome stripped out. Host/Connect now drive net\save_sync
-// (the everyday "get the save from the host" flow) - net\build_sync (the
-// building-placement relay) moved to the Debug window (ui\debugui.cpp),
-// since its network side is still rough/dev-only for now (see project docs).
+// See main_menu.h.
 #include "main_menu.h"
 #include "debugui.h"
 #include "ui_log.h"
@@ -11,9 +7,7 @@
 
 #include "imgui.h"
 
-// imrad.h ships both the interface and the implementation in one file - this
-// is the one .cpp in the whole project that defines IMRAD_H_IMPLEMENTATION,
-// so the ImRad::HBox/Spacing/SeparatorEx bodies get compiled exactly once.
+// The single translation unit that compiles the imrad.h implementation.
 #define IMRAD_H_IMPLEMENTATION
 #include <imrad.h>
 
@@ -32,7 +26,7 @@ void MainMenu::ResetLayout()
 void MainMenu::Draw()
 {
     if (!hostIpInitialized) {
-        hostIp = SaveSync_GetTargetIp(); // prefill with mp_config.h's default so the field isn't blank
+        hostIp = SaveSync_GetTargetIp(); // prefill with the default host IP
         hostIpInitialized = true;
     }
 
@@ -43,13 +37,8 @@ void MainMenu::Draw()
         bool busy = SaveSync_IsBusy();
 
         hb2.BeginLayout();
-        // While a host is just listening with nobody connected yet, there's
-        // nothing to "disconnect" from - it reads as "End Hosting"/"Close"
-        // instead, even though it calls the exact same
-        // SaveSync_RequestDisconnect() (see save_sync.h). Always enabled,
-        // not just while busy - it also tears down the build_sync AND
-        // road_sync connections that outlive the one-shot save_sync flow
-        // that started them.
+        // "End Hosting"/"Close" while a host is listening with nobody connected;
+        // always enabled because it also closes the build/road sync connections.
         bool hostAwaitingClient = busy && SaveSync_IsHostRole() && SaveSync_IsHostAwaitingClient();
         const char* disconnectLabel = hostAwaitingClient ? "End Hosting" : "Disconnect";
         if (ImGui::Button(disconnectLabel, { hb2.GetSize(), 0 }))
@@ -69,9 +58,7 @@ void MainMenu::Draw()
         ImRad::Spacing(2);
         ImRad::SeparatorEx(ImRad::SeparatorFlags_Horizontal);
 
-        // --- Host / Connect row - now drives save_sync (get/send the save),
-        // not build_sync anymore (see file header comment). Disabled while a
-        // run is in flight; the active role is tinted green. ---
+        // --- Host / Connect row (save sync); the active role is tinted green ---
         bool isHost = SaveSync_IsHostRole();
         ImGui::BeginDisabled(busy);
 
@@ -109,14 +96,8 @@ void MainMenu::Draw()
         ImRad::Spacing(1);
         ImGui::TextUnformatted("Status:");
         ImGui::SameLine(0, 2 * ImGui::GetStyle().ItemSpacing.x);
-        // Kept deliberately generic for everything past the initial wait -
-        // the flow has several distinct stages once a player is connected
-        // (pausing / saving / zipping / sending / waiting for ready), each
-        // already narrated in the log below via SaveStatus(), so this line
-        // doesn't try to track which one is current. The one distinction
-        // surfaced here: a host just listening for a player is NOT
-        // paused/locked - a visibly different line so nobody mistakes
-        // "waiting" for "frozen".
+        // Once a player is connected the log narrates each stage; this line only
+        // distinguishes "listening, not paused" from "syncing".
         if (busy && hostAwaitingClient)
             ImGui::TextColored(ImVec4(0.4f, 0.75f, 0.9f, 1.0f), "Hosting - waiting for a player (game not paused)");
         else if (busy)
@@ -127,10 +108,7 @@ void MainMenu::Draw()
         ImRad::Spacing(2);
         ImRad::SeparatorEx(ImRad::SeparatorFlags_Horizontal);
 
-        // --- Log - global/everyday info only (connect, save loading,
-        // progress %, errors), fed via SaveStatus() -> UiLog_Add(), see
-        // net/save_sync.cpp. Building-sync's own verbose log lives in the
-        // Debug window instead (ui/debugui.cpp, net/build_sync.cpp). ---
+        // --- Everyday log (save sync); verbose sync logs are in the Debug window ---
         ImRad::Spacing(2);
         ImGui::TextUnformatted("Log:");
         ImGui::SameLine();

@@ -1,3 +1,4 @@
+// RepublicMP - TesmioLoader plugin entry points.
 #include "tesmio_plugin.h"
 #include "hooks/detect_spawn.h"
 #include "hooks/present_hook.h"
@@ -11,13 +12,14 @@
 #include "net/road_sync.h"
 
 // MAJOR.FEATURE.PATCH (see README.md's Versioning section)
-#define REPUBLICMP_VERSION "0.1.0"
+#define REPUBLICMP_VERSION "0.2.0"
 
 extern "C" __declspec(dllexport) unsigned TsmPluginApiVersion(void)
 {
     return TSM_API_VERSION;
 }
 
+// Binds every module to the loader's host API.
 extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPluginInfo* info)
 {
     TsmBind(host);
@@ -32,10 +34,11 @@ extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPlugi
     RoadSync_Bind(host);
     ImGuiHook_Bind(host);
     info->name    = "republicmp";
-    info->version = "0.1";
+    info->version = REPUBLICMP_VERSION;
     return 0;
 }
 
+// Installs the engine hooks and starts the background threads.
 extern "C" __declspec(dllexport) int TsmPluginStart(void)
 {
     Logf("republicmp  version=%s", REPUBLICMP_VERSION);
@@ -45,16 +48,19 @@ extern "C" __declspec(dllexport) int TsmPluginStart(void)
                                           sizeof(kUniversalExpect), "republicmp universal");
     Logf("republicmp  universal hook: %d", okUniversal);
 
+    bool okRoadCommit = InstallInlineHook(g_exeBase + HOOK_ROAD_COMMIT_RVA, (void*)HookedRoadCommit,
+                                           (void**)&g_origRoadCommit, kRoadCommitExpect,
+                                           sizeof(kRoadCommitExpect), "republicmp road commit");
+    Logf("republicmp  road commit hook: %d%s", okRoadCommit,
+         okRoadCommit ? "" : " - infrastructure will NOT be synced");
+
     HANDLE presentHook = CreateThread(nullptr, 0, PresentHookThread, nullptr, 0, nullptr);
     Logf("republicmp  present hook thread started: %d", presentHook != nullptr);
 
     HANDLE hb = CreateThread(nullptr, 0, HeartbeatThread, nullptr, 0, nullptr);
     Logf("republicmp  heartbeat thread started: %d", hb != nullptr);
 
-    // F9/F10 are the only hotkeys left - both are dev-only diagnostics with
-    // no UI equivalent yet (synthetic spawn / instant pause toggle). O/I/P/L
-    // duplicated buttons already in ui/main_menu.cpp and ui/debugui.cpp and
-    // are gone.
+    // Dev hotkeys: F9 debug spawn, F10 pause toggle.
     HANDLE debugSpawn = CreateThread(nullptr, 0, DebugSpawnThread, nullptr, 0, nullptr);
     Logf("republicmp  debug spawn thread started: %d (hotkey F9)", debugSpawn != nullptr);
 

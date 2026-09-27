@@ -1,7 +1,4 @@
-// Shared ring buffer of status lines for the in-game log window
-// (see MainMenu::Draw in main_menu.cpp). Fed from net/save_sync.cpp's
-// SaveStatus() - every existing [BUILD_SYNC]/[HOST]/[CLIENT] status line
-// already routed through there reaches the overlay for free.
+// Ring buffer of everyday status lines (save sync), shown in the main window.
 #pragma once
 
 #include <string>
@@ -10,7 +7,5 @@
 void UiLog_Add(const char* line);
 void UiLog_Clear();
 
-// Thread-safe snapshot for rendering - copies out under a lock, safe to call
-// from the render thread (Present hook) while network threads append
-// concurrently via UiLog_Add.
+// Thread-safe copy for rendering.
 std::vector<std::string> UiLog_Snapshot();

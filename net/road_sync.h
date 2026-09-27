@@ -1,106 +1,195 @@
-// Road/pipe (and eventually rail/footpath/water/fence/electric) network
-// sync. Same idea as build_sync.h (buildings) but for the drag-based
-// infrastructure tools - see hooks/detect_spawn.cpp's drag-capture comments
-// for how this data is captured on the sending side.
+// Road sync: network replication of every drag-built infrastructure tool
+// (roads, pipes, rails, footpaths, fences, power lines, conveyors, ...).
 //
-// Unlike buildings, we don't have a single "place this with these params"
-// engine call to hand off to (g_origUniversal). Instead we drive the same
-// three primitives a real mouse-drag uses ourselves:
-//   FUN_1404fc040(manager, startPoint, ...)   - drag start
-//   FUN_1404fcaf0(manager, point, type, variant, ...)  - ONCE, final point only
-//   FUN_140518a80(manager, ...)               - commit
-// fcaf0 is called ONCE with the final captured point, not once per waypoint -
-// it recomputes the WHOLE route from
-// drag-start to whatever single point it's given (bounded by the curve
-// accumulator), it doesn't append a segment, so looping it over every
-// captured point replays the router's own output back into itself and
-// produces self-intersecting zigzags on curved paths. See
-// RoadSync_ApplySegment below and the long comment above it in
-// road_sync.cpp for exactly which constant args are safe to pass (worked
-// out from decompiles of all three functions plus the road/pipe
-// tool-select wrappers that call them).
+// How the game builds these
+// -------------------------
+// Every drag tool is a per-frame wrapper (FUN_1403d00f0 for roads and one
+// sibling per tool, dispatched by FUN_14030d1a0 on the active tool name) that
+// drives three shared engine primitives on the tool's own "manager" object,
+// found at a fixed offset off the placement god-object (thisPtr):
+//   FUN_1404fc040  drag start  - picks/creates the start node (manager+0x428)
+//   FUN_1404fcaf0  drag tick   - routes to the cursor, fills the route buffer
+//   FUN_140518a80  commit      - turns the route into a real segment
 //
-// Own dedicated TCP connection (own port), same convention as save_sync/
-// build_sync - each sync module gets its own socket rather than multiplexing
-// one connection, so a bug/crash in one doesn't take the others down.
+// A finished segment is: start node -> interior points -> end node. The
+// route buffer (manager+0x410/+0x418, 24-byte records: xyz + 3 engine floats)
+// holds ONLY the interior points; the ends are the node objects
+// manager+0x428 / manager+0x430 (or an existing node the end snapped to,
+// manager+0x740 when manager+0x749 == 1).
+//
+// Sending side
+// ------------
+// hooks/detect_spawn.cpp hooks FUN_140518a80's entry and, for a tool manager,
+// copies the interior records, both node positions and any building
+// connection port at either end (RoadSyncSegment). Commits that happen inside
+// a building placement (a building laying its own access road) are skipped -
+// the building replay recreates them on the other side.
+//
+// Receiving side
+// --------------
+// The segment is replayed through the same primitives: the tool wrapper
+// starts a drag on the start node, fc040 is re-run in fuzzy (+-1m) mode so the
+// start attaches to the existing node there, fcaf0 is called ONCE with the
+// cursor on the end node and the sender's interior records as its param_8
+// (bulk route - the engine skips its own routing), and the wrapper releases,
+// which commits. The result is bit-identical to the sender's segment.
+//
+// Upgrades (re-typing an existing segment, e.g. gravel -> panels) take a
+// different commit branch (manager+0x390 != 0) and travel as
+// RoadSyncUpgradeMsg; see ApplyUpgrade in road_sync.cpp.
+//
+// Transport: one dedicated TCP connection (ROAD_SYNC_PORT). Every payload is
+// preceded by an int32 tag (ROAD_SYNC_WIRE_*). Segments/upgrades are queued
+// while disconnected and sent in capture order once a connection is up; each
+// one is acknowledged with the receiving engine's verdict.
+//
+// Both machines must run the same build - the message layout is not versioned.
 #pragma once
 
 #include "tesmio_plugin.h"
-#include "../mp_config.h" // REPUBLICMP_HOST_IP - one shared IP for every network module
+#include "host_config.h"
 
 #define ROAD_SYNC_PORT 5558
 #define ROAD_SYNC_TEST_HOST_IP REPUBLICMP_HOST_IP
 
-#define ROAD_SYNC_MAX_POINTS 64
+// Upper bound on interior points per segment (the longest real drags seen
+// were ~125 points).
+#define ROAD_SYNC_MAX_POINTS 512
 
+// Tool categories. The value travels on the wire, so the order must match on
+// both machines. Manager offsets / wrappers: see g_categories in road_sync.cpp.
 enum RoadSyncCategory {
-    ROAD_SYNC_CATEGORY_ROAD = 0, // thisPtr+0xf7a0 manager
-    ROAD_SYNC_CATEGORY_PIPE = 1, // thisPtr+0xf858 manager
+    ROAD_SYNC_CATEGORY_ROAD = 0,         // road_*, bridges, tunnels, one-way
+    ROAD_SYNC_CATEGORY_PIPE = 1,         // pipe_underground, pipe_steam
+    ROAD_SYNC_CATEGORY_WATERPIPE = 2,    // waterpipe_*, sewage
+    ROAD_SYNC_CATEGORY_HEATPIPE = 3,     // heating_pipe
+    ROAD_SYNC_CATEGORY_RAIL = 4,         // rail_*
+    ROAD_SYNC_CATEGORY_PEDESTRIAN = 5,   // pedestrianway_*, pedestrian_tunel
+    ROAD_SYNC_CATEGORY_FENCE = 6,        // fence_*
+    ROAD_SYNC_CATEGORY_POWER_HIGH = 7,   // eletric_high*, eletric_uhigh*
+    ROAD_SYNC_CATEGORY_POWER_LOW = 8,    // eletric_low*, eletric_ulow*
+    ROAD_SYNC_CATEGORY_CONVEYOR = 9,     // conveyor
+    ROAD_SYNC_CATEGORY_CABLEWAY = 10,    // create_cableway
+    ROAD_SYNC_CATEGORY_AIRROAD = 11,     // create_airroad*
+    ROAD_SYNC_CATEGORY_FACTORYCONN = 12, // factoryconnection (disabled)
+    ROAD_SYNC_CATEGORY_COUNT
 };
 
-// Fixed-size wire message - simplest possible framing (same convention as
-// BuildSyncMsg), even though most segments use far fewer than
-// ROAD_SYNC_MAX_POINTS of the array. pointCount says how many are valid.
-//
-// curveValue: the manager+0x48 "road curve" accumulator (see
-// detect_spawn.cpp's ToolWaypointSnapshot comment) captured at commit time
-// on the SENDING machine. Without it, straight segments arrive fine but
-// curved ones flatten out on the receiving side: FUN_1404fc040 (drag
-// start) resets/defaults this accumulator on the manager it initializes,
-// so the replaying side would call FUN_1404fcaf0 with curve=0/default
-// regardless of what the original drag actually used - see
-// RoadSync_ApplySegment in road_sync.cpp for where this gets written back
-// before the per-waypoint replay loop.
-struct RoadSyncMsg {
-    int category; // RoadSyncCategory
-    int typeId;
-    int variant;
-    int pointCount; // 2..ROAD_SYNC_MAX_POINTS - anything outside that range is refused, not sent/applied
-    float curveValue;
-    float points[ROAD_SYNC_MAX_POINTS][3];
+struct RoadSyncCategoryInfo {
+    const char* name;
+    int managerOffset; // *(thisPtr + managerOffset) = the tool's manager object
+    bool enabled;      // disabled categories are neither captured nor applied
 };
+
+// nullptr for an out-of-range category.
+const RoadSyncCategoryInfo* RoadSync_GetCategoryInfo(int category);
+
+// Category whose manager object is `manager`, or -1 (also for disabled ones).
+int RoadSync_CategoryForManager(__int64 thisPtr, __int64 manager);
+
+// One route record exactly as the engine stores it in manager+0x410
+// (24 bytes). `extra` is engine-internal per-point data (orientation and
+// running length); it is transmitted verbatim, never interpreted.
+struct RoadSyncPoint {
+    float pos[3];
+    float extra[3];
+};
+
+// A building connection port at one end of a segment. Pipes, conveyors and
+// power lines can end on a building instead of a node; the engine reads that
+// from the "hovered port" globals DAT_1409e45b0 (building) / DAT_1409e45b8
+// (port index). Buildings are identified by position (obj+0x350); the port
+// index is per building type and therefore identical on both machines.
+struct RoadSyncBuildingPort {
+    int valid;       // 0 = this end is not on a building port
+    int portIndex;
+    float bldPos[3];
+};
+
+// Everything needed to rebuild one committed segment.
+struct RoadSyncSegment {
+    int category;       // RoadSyncCategory
+    int typeId;         // manager+0x528
+    int variant;        // manager+0x52c
+    float curveValue;   // manager+0x48, the tool's curve setting
+    float startNode[3]; // start node position
+    float endNode[3];   // end node position
+    RoadSyncBuildingPort startPort;
+    RoadSyncBuildingPort endPort;
+    int pointCount;     // interior points, 0..ROAD_SYNC_MAX_POINTS (power-line spans can have 0-1)
+    RoadSyncPoint points[ROAD_SYNC_MAX_POINTS];
+};
+
+// Wire message for a segment. Only the first pointCount points are meaningful.
+struct RoadSyncMsg {
+    int seq; // sender-assigned, echoed by the ack
+    RoadSyncSegment seg;
+};
+
+// Upgrade of existing segments (FUN_140518a80's manager+0x390 branch). A
+// single-segment drag re-types segment +0x380 over the point range
+// (+0x388, +0x38c); a pathfound multi-segment drag re-types whole segments.
+// Each piece identifies its segment by node positions.
+#define ROAD_SYNC_MAX_UPGRADE_PIECES 32
+struct RoadSyncUpgradePiece {
+    float segStart[3];  // segment's start node position
+    float segEnd[3];    // segment's end node position
+    int segPointCount;  // interior point count (identity check)
+    int rangeStart;     // -1 = from the start node
+    int rangeEnd;       // == segPointCount = to the end node
+    int oldType;        // manager+0x394
+    int oldVariant;     // manager+0x398
+    int flag39c;        // manager+0x39c, one-way direction (0 = none)
+};
+struct RoadSyncUpgradeMsg {
+    int seq;
+    int category;
+    int newType;    // manager+0x528
+    int newVariant; // manager+0x52c
+    int flag5c4;    // manager+0x5c4
+    int pieceCount;
+    RoadSyncUpgradePiece pieces[ROAD_SYNC_MAX_UPGRADE_PIECES];
+};
+
+// Acknowledgement for a segment or upgrade. success = the receiving engine
+// accepted it (+0x315 valid and no error category) or it already existed.
+struct RoadSyncAckMsg {
+    int seq;
+    int category;
+    int success;
+    int attempts;
+};
+
+// int32 tag sent before every payload on the connection.
+#define ROAD_SYNC_WIRE_SEGMENT 1 // RoadSyncMsg
+#define ROAD_SYNC_WIRE_ACK 2     // RoadSyncAckMsg
+#define ROAD_SYNC_WIRE_UPGRADE 3 // RoadSyncUpgradeMsg
+
+// Receiving side retries a segment only when the apply itself threw.
+#define ROAD_SYNC_MAX_APPLY_ATTEMPTS 3
 
 void RoadSync_Bind(const TsmHost* host);
 
-// Called from detect_spawn.cpp's ToolDragPoll_Tick when a LOCAL road/pipe
-// drag just committed with a valid captured snapshot. No-op if no road-sync
-// connection is active, or if pointCount is out of [2, ROAD_SYNC_MAX_POINTS].
-// curveValue: the manager's curve accumulator (manager+0x48) at commit time -
-// see the RoadSyncMsg comment above for why this needs to travel with the points.
-void RoadSync_SendSegment(int category, int typeId, int variant,
-                          const float points[][3], int pointCount, float curveValue);
+// Sends (or queues while disconnected) a locally committed segment / upgrade.
+// Game thread only. Returns the assigned seq, 0 if queued, -1 if refused.
+int RoadSync_SendSegment(const RoadSyncSegment& seg);
+int RoadSync_SendUpgrade(const RoadSyncUpgradeMsg& msg);
 
-// Called every frame from the Present hook (game thread). Applies any
-// segments received from the network since the last call.
+// Per-frame (game thread, Present hook): logs incoming acks and applies
+// received segments/upgrades once the world is loaded and the local player
+// is not in the middle of a drag.
 void RoadSync_Tick();
 
-// Replays a segment on THIS machine's own manager, by directly driving the
-// same three engine primitives a real mouse drag uses. Shared by RoadSync_Tick
-// (remote segments arriving over the network) and detect_spawn.cpp's F11
-// local self-test hotkey (replays your own last-captured segment, offset,
-// against your own local manager - no second machine/connection needed) - so
-// the exact same replay code path gets exercised safely before ever trusting
-// it with real network data. No-op (with a log line) if pointCount is out of
-// [2, ROAD_SYNC_MAX_POINTS] or the local manager handle reads as null.
-// curveValue: see the RoadSyncMsg comment above - written to the local
-// manager's own curve accumulator (offset +0x48) right after the drag-start
-// call, before the per-waypoint replay loop, so FUN_1404fcaf0 routes with
-// the same curvature the original drag used instead of whatever default
-// FUN_1404fc040 leaves the accumulator at.
-void RoadSync_ApplySegment(int category, int typeId, int variant,
-                           const float points[][3], int pointCount, float curveValue);
-
+// Connection control (UI / save-sync flow).
 void RoadSync_StartHost();
-
-// hostIp: pass nullptr (or empty) to keep using whatever IP was last set
-// (ROAD_SYNC_TEST_HOST_IP / mp_config.h by default); pass a real IP string
-// to override it for this and future calls.
-void RoadSync_StartClient(const char* hostIp = nullptr);
-
-// Force-closes an active connection so Host/Connect can be pressed again.
+void RoadSync_StartClient(const char* hostIp = nullptr); // nullptr = keep last IP
 void RoadSync_Reset();
 
 bool RoadSync_IsConnected();
 bool RoadSync_IsConnecting();
-bool RoadSync_IsHostRole(); // true after RoadSync_StartHost(), false after RoadSync_StartClient() - meaningless while fully Idle
-const char* RoadSync_GetTargetIp(); // current/default client target IP, for prefilling a UI field
+bool RoadSync_IsHostRole();
+const char* RoadSync_GetTargetIp();
+
+// True while this module is replaying a remote segment/upgrade, so the
+// commit hook does not echo it back.
+bool RoadSync_IsApplyingSegment();

@@ -1,5 +1,4 @@
-// Real pause/speed control - a plain int at a fixed address, no function
-// hook needed. 0 = paused, 1/2/3 = 1x/2x/3x.
+// Game pause/speed control: a plain int at a fixed address.
 #pragma once
 
 #include "tesmio_plugin.h"
@@ -10,7 +9,7 @@
 
 void GameSpeed_Bind(const TsmHost* host);
 
-int ReadGameSpeed();       // 0 = paused, 1/2/3 = 1x/2x/3x
+int ReadGameSpeed();       // 0 = paused, 1/2
 int ReadGameSpeedSaved();  // speed saved before pause (-1 = none)
 void WriteGameSpeed(int speed);
 

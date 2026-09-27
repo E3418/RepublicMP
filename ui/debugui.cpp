@@ -1,11 +1,11 @@
+// See debugui.h.
 #include "debugui.h"
 #include "imgui.h"
 #include <misc/cpp/imgui_stdlib.h> // ImGui::InputText(const char*, std::string*)
-#include "../hooks/present_hook.h" // g_presentCallCount
+#include "../hooks/present_hook.h"
 #include "../net/build_sync.h"
 #include "../net/road_sync.h"
-#include "../net/save_sync.h" // SaveSync_IsHostRole/GetTargetIp - "mirror save sync" button below
-#include "../hooks/detect_spawn.h" // DetectSpawn_GetLast{Road,Pipe}Snapshot - self-test button below
+#include "../net/save_sync.h"
 #include "debug_log.h"
 #include <vector>
 #include <string>
@@ -15,14 +15,13 @@ Debugui g_debugui;
 void Debugui::Open()  { isOpen = true; }
 void Debugui::Close() { isOpen = false; }
 
+// Draws the Debug window: manual building/road sync connection controls and
+// the verbose debug log.
 void Debugui::Draw()
 {
     if (!isOpen)
         return;
 
-    // Function-local statics instead of class members - this window is kept
-    // deliberately simple/hand-written (see debugui.h), no need to touch the
-    // header for a couple of widget-persistence fields.
     static std::string s_buildSyncIp;
     static bool s_buildSyncIpInit = false;
     static std::string s_roadSyncIp;
@@ -41,26 +40,18 @@ void Debugui::Draw()
     if (ImGui::Begin("Debug", &isOpen))
     {
         ImGui::Text("Present calls: %lld", g_presentCallCount);
-        // TODO: F9 spawn count / thisPtr diagnostics from hooks/detect_spawn.cpp,
-        // if/when it exposes a counter to read from here.
 
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
 
-        // --- Building sync (moved here from the main menu - it's still a
-        // rough/dev-only feature, see net/build_sync.cpp and project docs; a
-        // proper automatic connect comes later once the UI/sync story as a
-        // whole is settled) ---
-        ImGui::TextUnformatted("Building sync (dev):");
+        // --- Building sync ---
+        ImGui::TextUnformatted("Building sync:");
 
         bool bsBusy = BuildSync_IsConnected() || BuildSync_IsConnecting();
         bool bsIsHost = BuildSync_IsHostRole();
 
-        // One-click shortcut: reuses whichever role/IP the save-sync run
-        // (ui/main_menu.cpp's Host/Connect) already used, instead of typing
-        // the IP a second time into the field below. Only meaningful after
-        // a save-sync run has actually happened this session.
+        // Reuses the role/IP of this session's save-sync run.
         ImGui::BeginDisabled(bsBusy);
         if (ImGui::Button("Enable building sync (same role/IP as save sync)"))
         {
@@ -101,15 +92,9 @@ void Debugui::Draw()
         ImGui::Separator();
         ImGui::Spacing();
 
-        // --- Road/pipe sync (dev, see net/road_sync.cpp) - own connection,
-        // own port, same pattern as building sync above. Also auto-started
-        // alongside building sync at the end of the main Host/Connect
-        // (save_sync) flow - see net/save_sync.cpp's
-        // RunHostSendSaveFlow/RunClientReceiveSaveFlow. These buttons stay
-        // for manual/standalone testing (idempotent - a click here after
-        // the auto-start already connected is a harmless no-op, same as
-        // building sync's own buttons). ---
-        ImGui::TextUnformatted("Road/pipe sync (dev, UNVERIFIED - self-test first):");
+        // --- Infrastructure sync (started automatically by the save-sync
+        // flow; these buttons are for manual reconnects) ---
+        ImGui::TextUnformatted("Infrastructure sync:");
 
         bool rsBusy = RoadSync_IsConnected() || RoadSync_IsConnecting();
         bool rsIsHost = RoadSync_IsHostRole();
@@ -140,45 +125,11 @@ void Debugui::Draw()
         else
             ImGui::TextDisabled("Idle");
 
-        // Self-test: replays your OWN last captured segment against your OWN
-        // local manager, offset sideways so it lands next to the original
-        // instead of on top of it - no second machine, no network, needed
-        // before ever trusting RoadSync_ApplySegment with real remote data.
-        // Build a road/pipe segment first (see detect_spawn.cpp TOOL_COMMIT
-        // logs), then press the matching button below and check in-game/log
-        // whether a second copy appeared where expected.
-        if (ImGui::Button("Self-test: replay last ROAD (offset +15m X)"))
-        {
-            int typeId, variant, count;
-            float curveValue;
-            static float points[ROAD_SYNC_MAX_POINTS][3];
-            if (DetectSpawn_GetLastRoadSnapshot(&typeId, &variant, points, &count, &curveValue)) {
-                for (int i = 0; i < count; i++) points[i][0] += 15.0f;
-                RoadSync_ApplySegment(ROAD_SYNC_CATEGORY_ROAD, typeId, variant, points, count, curveValue);
-            } else {
-                DebugLog_Add("[ROAD_SYNC] self-test: no valid ROAD segment captured yet this session");
-            }
-        }
-        if (ImGui::Button("Self-test: replay last PIPE (offset +15m X)"))
-        {
-            int typeId, variant, count;
-            float curveValue;
-            static float points[ROAD_SYNC_MAX_POINTS][3];
-            if (DetectSpawn_GetLastPipeSnapshot(&typeId, &variant, points, &count, &curveValue)) {
-                for (int i = 0; i < count; i++) points[i][0] += 15.0f;
-                RoadSync_ApplySegment(ROAD_SYNC_CATEGORY_PIPE, typeId, variant, points, count, curveValue);
-            } else {
-                DebugLog_Add("[ROAD_SYNC] self-test: no valid PIPE segment captured yet this session");
-            }
-        }
-
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
 
-        // --- Verbose debug log - building-sync connection/placement events
-        // (net/build_sync.cpp's BuildSyncStatus()), kept out of the main
-        // window's log so that one stays readable for everyday use. ---
+        // --- Verbose sync log (kept out of the main window's log) ---
         ImGui::TextUnformatted("Debug log:");
         ImGui::SameLine();
         if (ImGui::SmallButton("Clear##dbg"))

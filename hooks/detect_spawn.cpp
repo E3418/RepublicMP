@@ -1,5 +1,4 @@
-// Detects real player-placed buildings via the single universal placement
-// hook, plus a debug synthetic spawn (F9) and a heartbeat log.
+// See detect_spawn.h.
 #include "detect_spawn.h"
 #include "present_hook.h"
 #include "game_speed.h"
@@ -10,7 +9,6 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
-#include <winnt.h>
 
 #pragma comment(lib, "User32.lib")
 
@@ -19,12 +17,9 @@ void DetectSpawn_Bind(const TsmHost* host)
     TsmBind(host);
 }
 
-// FUN_1402bade0 fires for every building placement (and cursor preview).
-// We don't trust the call itself - we check whether the city-objects
-// vector SIZE grew during the call. Size must be (end-begin)/pointer size,
-// not a raw address diff (a mid-call reallocation breaks that).
-#define VEC_BUILDINGS_END_RVA 0x9E6A20
-#define VEC_BUILDINGS_BEGIN_RVA 0x9E6A18
+// ---------------------------------------------------------------------------
+// Hook targets
+// ---------------------------------------------------------------------------
 
 const unsigned char kUniversalExpect[21] = {
     0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55,
@@ -32,7 +27,107 @@ const unsigned char kUniversalExpect[21] = {
     0x53, 0xFF, 0xFF
 };
 
+// Ends right after `lea rbp,[rax-0x4e8]`, so the trampoline never splits an
+// instruction.
+const unsigned char kRoadCommitExpect[19] = {
+    0x48, 0x8B, 0xC4, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56,
+    0x41, 0x57, 0x48, 0x8D, 0xA8, 0x18, 0xFB, 0xFF, 0xFF
+};
+
 UniversalFn g_origUniversal = nullptr;
+RoadCommitFn g_origRoadCommit = nullptr;
+
+// ---------------------------------------------------------------------------
+// Engine addresses and offsets
+// ---------------------------------------------------------------------------
+
+#define UNIVERSAL_THIS_RVA 0x9D4F10      // placement god-object (thisPtr)
+#define VEC_BUILDINGS_BEGIN_RVA 0x9E6A18 // city buildings vector
+#define VEC_BUILDINGS_END_RVA 0x9E6A20
+#define HOVER_PORT_BUILDING_RVA 0x9E45B0 // building whose connection port is hovered
+#define HOVER_PORT_INDEX_RVA 0x9E45B8
+
+// thisPtr fields.
+#define CURSOR_X_OFFSET 0xf6c            // placement cursor
+#define CURSOR_Y_OFFSET 0xf70
+#define CURSOR_Z_OFFSET 0xf74
+#define CURSOR_YAW_OFFSET 0xf94          // placement yaw (radians)
+#define PLACEMENT_RESULT_OFFSET 0x11a10  // validation code after a placement call
+#define MIRROR_EFFECTIVE_OFFSET 0x11db1  // byte: mirror state the last placement call used
+#define TOOL_DRAG_ACTIVE_OFFSET 0xd2ac   // byte: a path-tool drag is in progress
+
+// Building object fields.
+#define OBJ_ROT_SIN_OFFSET 0x340
+#define OBJ_ROT_COS_OFFSET 0x348
+#define OBJ_POS_OFFSET 0x350             // float x,y,z
+
+// Tool manager fields (see net/road_sync.cpp for the full list).
+#define MGR_CURVE_OFFSET 0x48
+#define MGR_VALID_OFFSET 0x315
+#define MGR_UPG_SEGMENT_OFFSET 0x380
+#define MGR_UPG_RANGE_START_OFFSET 0x388
+#define MGR_UPG_RANGE_END_OFFSET 0x38c
+#define MGR_UPG_GATE_OFFSET 0x390
+#define MGR_UPG_OLD_TYPE_OFFSET 0x394
+#define MGR_UPG_OLD_VARIANT_OFFSET 0x398
+#define MGR_UPG_DIR_OFFSET 0x39c
+#define MGR_UPG_MULTI_OFFSET 0x3d0
+#define MGR_UPG_PATH_INDEX_OFFSET 0x3d8
+#define MGR_UPG_PATHS_BEGIN_OFFSET 0x3f0
+#define MGR_UPG_PATHS_END_OFFSET 0x3f8
+#define MGR_ROUTE_BEGIN_OFFSET 0x410
+#define MGR_ROUTE_END_OFFSET 0x418
+#define MGR_START_NODE_OFFSET 0x428
+#define MGR_END_NODE_OFFSET 0x430
+#define MGR_START_PORT_BUILDING_OFFSET 0x350
+#define MGR_START_PORT_INDEX_OFFSET 0x358
+#define MGR_TYPE_OFFSET 0x528
+#define MGR_VARIANT_OFFSET 0x52c
+#define MGR_FLAG_5C4_OFFSET 0x5c4
+#define MGR_END_SNAPPED_NODE_OFFSET 0x740
+#define MGR_END_ATTACHED_OFFSET 0x749
+#define ROUTE_RECORD_SIZE 0x18
+
+// Segment object fields.
+#define SEG_POINTS_BEGIN_OFFSET 0x08
+#define SEG_POINTS_END_OFFSET 0x10
+#define SEG_NODE0_OFFSET 0x20
+#define SEG_NODE1_OFFSET 0x28
+#define SEG_TYPE_OFFSET 0x120
+#define SEG_VARIANT_OFFSET 0x124
+#define SEG_SKIP_FLAG_OFFSET 0x129       // commit skips segments with this set
+#define SEG_KIND_OFFSET 300              // commit skips kinds 2 and 3
+
+#define NODE_POS_OFFSET 4
+
+// Demolish/cancel tools use type ids >= 100 (e.g. road_destroy).
+#define TOOL_TYPE_DEMOLISH_MIN 100
+
+static __int64 GetPlacementManagerThisPtr()
+{
+    return (__int64)((uintptr_t)g_exe + UNIVERSAL_THIS_RVA);
+}
+
+static bool IsWorldLoaded()
+{
+    void** vecBeginPtr = (void**)((uintptr_t)g_exeBase + VEC_BUILDINGS_BEGIN_RVA);
+    void** vecEndPtr   = (void**)((uintptr_t)g_exeBase + VEC_BUILDINGS_END_RVA);
+    __try {
+        return (*vecBeginPtr != nullptr) && (*vecEndPtr != nullptr);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// Number of elements in the buildings vector, -1 if unreadable.
+static long long BuildingCount(void* begin, void* end)
+{
+    return (begin && end) ? (long long)(((uintptr_t)end - (uintptr_t)begin) / sizeof(void*)) : -1;
+}
+
+// ---------------------------------------------------------------------------
+// Heartbeat
+// ---------------------------------------------------------------------------
 
 static volatile long long g_universalCallCount = 0;
 static volatile long long g_universalMultiPushCount = 0;
@@ -45,20 +140,22 @@ DWORD WINAPI HeartbeatThread(LPVOID)
         Sleep(2000);
         long long curUniversalCalls = g_universalCallCount;
         long long curPresentCalls = g_presentCallCount;
-        int curSpeed = ReadGameSpeed();
-        int curSpeedSaved = ReadGameSpeedSaved();
         Logf("republicmp  heartbeat: universalCalls total=%lld (+%lld) universalMultiPush total=%lld presentCalls total=%lld (+%lld) gameSpeed=%d gameSpeedSaved=%d",
              curUniversalCalls, curUniversalCalls - lastUniversalCalls,
              g_universalMultiPushCount,
              curPresentCalls, curPresentCalls - lastPresentCalls,
-             curSpeed, curSpeedSaved);
+             ReadGameSpeed(), ReadGameSpeedSaved());
         lastUniversalCalls = curUniversalCalls;
         lastPresentCalls = curPresentCalls;
     }
     return 0;
 }
 
-// param_2 points directly at the ASCII building-type name.
+// ---------------------------------------------------------------------------
+// Building type name helpers
+// ---------------------------------------------------------------------------
+
+// Copies the ASCII building-type name passed to the placement function.
 static void SafeReadCStringDirect(const char* ptr, char* outBuf, size_t outBufSize)
 {
     outBuf[0] = 0;
@@ -80,167 +177,50 @@ static void SafeReadCStringDirect(const char* ptr, char* outBuf, size_t outBufSi
         strncpy(outBuf, ptr, len);
         outBuf[len] = 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        strncpy(outBuf, "<crash reading param_2>", outBufSize - 1);
+        strncpy(outBuf, "<unreadable>", outBufSize - 1);
     }
 }
 
 static bool LooksLikeValidType(const char* s)
 {
-    return strcmp(s, "<null>") != 0 &&
-           strcmp(s, "<non-ascii>") != 0 &&
-           strcmp(s, "<crash reading param_2>") != 0 &&
-           strlen(s) >= 2;
+    return s[0] != '<' && strlen(s) >= 2;
 }
 
-// Patching the finished object's sin/cos fields AFTER g_origUniversal
-// creates it (net/build_sync.cpp's ApplyOneRemotePlacement) fixes the
-// VISUAL rotation, but the engine's own placement logic (collision test,
-// road/pipe/wire auto-connection, path generation) already ran during that
-// call using whatever DEFAULT orientation it placed the object at -
-// patching afterwards can't retroactively fix any of that. The real INPUT
-// field is needed instead - same idea as the known x/y/z cursor fields
-// (param_1+0xf6c/0xf70/0xf74, DEBUG_SPAWN_OFFSET_* below) that get read
-// INTO the object when g_origUniversal runs. param_3..param_8 are not it
-// (see HookedUniversal below), so rotation must be cursor/thisPtr state set
-// some other way (mouse-drag/R-key rotation while the placement ghost is
-// up) - this dumps a wide range around the known x/y/z cluster on param_1,
-// taken right BEFORE calling g_origUniversal on a real click (so it
-// reflects whatever the player had actually set), to diff against the
-// post-creation sin/cos (logged after the call) across several
-// differently-rotated placements.
-static void LogCursorRotHexDump(__int64 thisPtr)
-{
-    unsigned char* bytes = (unsigned char*)thisPtr;
-    for (int row = 0; row < 10; row++) {
-        int base = 0xf20 + row * 16;
-        char hexLine[3 * 16 + 1] = {0};
-        for (int col = 0; col < 16; col++) {
-            char piece[4];
-            _snprintf_s(piece, sizeof(piece), _TRUNCATE, "%02X ", bytes[base + col]);
-            strcat_s(hexLine, sizeof(hexLine), piece);
-        }
-        Logf("republicmp  ROTIN_DIAG: this+0x%03x: %s", base, hexLine);
-    }
-}
+// ---------------------------------------------------------------------------
+// F9 debug spawn
+// ---------------------------------------------------------------------------
 
-// net/build_sync.cpp's BuildSyncMsg carries x/y/z plus rotation (rotSin/
-// rotCos) - a remote placement without it would land with whatever
-// rotation g_origUniversal defaults to, not the rotation the placing
-// player actually chose. A hexdump of obj+0x330..0x38f on a newly created
-// building confirms obj+0x340/obj+0x348 are a sin/cos pair (sin^2+cos^2==1
-// holds across sampled placements) - that's the yaw, atan2(sin,cos)
-// recovers the angle. See HookedUniversal below for the read-side wiring.
-
-// Sends the placement over the build-sync connection (net/build_sync.*), if
-// one is currently active. No-op otherwise - useful without a second player.
-static void NotifyBuildingPlaced(float x, float y, float z, float rotSin, float rotCos, const char* typeName)
-{
-    BuildSync_SendPlacement(x, y, z, rotSin, rotCos, typeName);
-}
-
-// Debug synthetic spawn config/offsets.
 #define DEBUG_SPAWN_VK VK_F9
 #define DEBUG_SPAWN_POLL_MS 50
-#define DEBUG_SPAWN_OFFSET_X 0xf6c
-#define DEBUG_SPAWN_OFFSET_Y 0xf70
-#define DEBUG_SPAWN_OFFSET_Z 0xf74
-#define DEBUG_SPAWN_OFFSET_VALIDATION 0x11a10
 #define DEBUG_SPAWN_TEST_TYPE_NAME "residental_brick_1"
 #define DEBUG_SPAWN_OFFSET_METERS_X 5.0f
 
 static volatile LONG g_debugSpawnPending = 0;
-static volatile LONG g_thisPtrDiagPending = 0; // F9 also requests a fresh RTTI_DIAG dump - see below
 
-// Same fixed placement-manager address net/build_sync.cpp uses - see the
-// comment there for how it was identified. Duplicated here rather than
-// shared, per this codebase's existing convention (each .cpp keeps its own
-// g_exe/g_exeBase copy already, see tesmio_plugin.h).
-#define UNIVERSAL_THIS_RVA 0x9D4F10
-
-static __int64 GetPlacementManagerThisPtr()
-{
-    return (__int64)((uintptr_t)g_exe + UNIVERSAL_THIS_RVA);
-}
-
-static bool IsWorldLoaded()
-{
-    void** vecBeginPtr = (void**)((uintptr_t)g_exeBase + VEC_BUILDINGS_BEGIN_RVA);
-    void** vecEndPtr   = (void**)((uintptr_t)g_exeBase + VEC_BUILDINGS_END_RVA);
-    __try {
-        return (*vecBeginPtr != nullptr) && (*vecEndPtr != nullptr);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
-}
-
-// Runs on the game thread (called from DetectSpawn_Tick, off the Present
-// hook) to avoid a game-state race. thisPtr comes from the fixed
-// placement-manager address (see DetectSpawn_Tick below), not from a real
-// HookedUniversal call.
+// Places a test building 5m from the current cursor through the real
+// placement function. Game thread only.
 static void RunDebugSpawn(__int64 thisPtr)
 {
     __try {
-        float* xField = (float*)(thisPtr + DEBUG_SPAWN_OFFSET_X);
-        float* yField = (float*)(thisPtr + DEBUG_SPAWN_OFFSET_Y);
-        float* zField = (float*)(thisPtr + DEBUG_SPAWN_OFFSET_Z);
-
+        float* xField = (float*)(thisPtr + CURSOR_X_OFFSET);
         float savedX = *xField;
-        float savedY = *yField;
-        float savedZ = *zField;
+        *xField = savedX + DEBUG_SPAWN_OFFSET_METERS_X;
 
-        float testX = savedX + DEBUG_SPAWN_OFFSET_METERS_X;
-        float testY = savedY;
-        float testZ = savedZ;
-
-        *xField = testX;
-        *yField = testY;
-        *zField = testZ;
-
-        char testTypeName[] = DEBUG_SPAWN_TEST_TYPE_NAME;
-
-        void** vecEndPtr   = (void**)((uintptr_t)g_exeBase + VEC_BUILDINGS_END_RVA);
+        char typeName[] = DEBUG_SPAWN_TEST_TYPE_NAME;
         void** vecBeginPtr = (void**)((uintptr_t)g_exeBase + VEC_BUILDINGS_BEGIN_RVA);
-        void* beginBefore = *vecBeginPtr;
-        void* endBefore = *vecEndPtr;
-        long long countBefore = (beginBefore && endBefore)
-            ? (long long)(((uintptr_t)endBefore - (uintptr_t)beginBefore) / sizeof(void*))
-            : -1;
+        void** vecEndPtr   = (void**)((uintptr_t)g_exeBase + VEC_BUILDINGS_END_RVA);
+        long long countBefore = BuildingCount(*vecBeginPtr, *vecEndPtr);
 
-        Logf("republicmp  DEBUG_SPAWN: calling FUN_1402bade0, this=%p type=[%s] x=%.2f y=%.2f z=%.2f",
-             (void*)thisPtr, testTypeName, testX, testY, testZ);
+        g_origUniversal(thisPtr, typeName, 0, 1, 0, 0xffffffff, 0, 1);
 
-        g_origUniversal(thisPtr, testTypeName, 0, 1, 0, 0xffffffff, 0, 1);
-
-        int validationCode = *(int*)(thisPtr + DEBUG_SPAWN_OFFSET_VALIDATION);
-
-        void* beginAfter = *vecBeginPtr;
-        void* endAfter = *vecEndPtr;
-        long long countAfter = (beginAfter && endAfter)
-            ? (long long)(((uintptr_t)endAfter - (uintptr_t)beginAfter) / sizeof(void*))
-            : -1;
-        long long countDelta = (countBefore >= 0 && countAfter >= 0) ? (countAfter - countBefore) : 0;
-
-        Logf("republicmp  DEBUG_SPAWN: param_1+0x11a10=%d after call, buildings vector %lld -> %lld (delta=%lld)",
-             validationCode, countBefore, countAfter, countDelta);
-
-        if (countDelta > 0) {
-            void* newObjPtr = *((void**)endAfter - 1);
-            if (newObjPtr) {
-                float placedX = *(float*)((char*)newObjPtr + 0x350);
-                float placedY = *(float*)((char*)newObjPtr + 0x354);
-                float placedZ = *(float*)((char*)newObjPtr + 0x358);
-                Logf("republicmp  DEBUG_SPAWN: SUCCESS obj=%p x=%.2f y=%.2f z=%.2f",
-                     newObjPtr, placedX, placedY, placedZ);
-            }
-        } else {
-            Logf("republicmp  DEBUG_SPAWN: no building created (code=%d)", validationCode);
-        }
+        long long countAfter = BuildingCount(*vecBeginPtr, *vecEndPtr);
+        int resultCode = *(int*)(thisPtr + PLACEMENT_RESULT_OFFSET);
+        Logf("republicmp  DEBUG_SPAWN: type=[%s] buildings %lld -> %lld result=%d",
+             typeName, countBefore, countAfter, resultCode);
 
         *xField = savedX;
-        *yField = savedY;
-        *zField = savedZ;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        Logf("republicmp  DEBUG_SPAWN: <exception during synthetic call>");
+        Logf("republicmp  DEBUG_SPAWN: <exception during synthetic placement>");
     }
 }
 
@@ -249,511 +229,389 @@ DWORD WINAPI DebugSpawnThread(LPVOID)
     bool keyWasDown = false;
     for (;;) {
         Sleep(DEBUG_SPAWN_POLL_MS);
-
         bool keyIsDown = IsGameWindowFocused() && (GetAsyncKeyState(DEBUG_SPAWN_VK) & 0x8000) != 0;
-        bool keyJustPressed = keyIsDown && (keyWasDown == false);
-        keyWasDown = keyIsDown;
-
-        if (keyJustPressed == false) {
-            continue;
+        if (keyIsDown && !keyWasDown) {
+            InterlockedExchange(&g_debugSpawnPending, 1);
+            Logf("republicmp  DEBUG_SPAWN: request queued (F9)");
         }
-
-        InterlockedExchange(&g_debugSpawnPending, 1);
-        InterlockedExchange(&g_thisPtrDiagPending, 1);
-        Logf("republicmp  DEBUG_SPAWN: request queued (F9)");
+        keyWasDown = keyIsDown;
     }
     return 0;
 }
 
-// Diagnostic dump of the placement-manager object ("thisPtr"), triggered by
-// F9 (piggybacking on the same key as the debug spawn - see
-// g_thisPtrDiagPending above). Useful for solo testing: press F9 once you're
-// in build mode (so param_1 is valid, same requirement as the debug spawn)
-// and get a fresh dump on demand, as many times as you like.
-//
-// This object has no vtable at offset 0 (the first 8 bytes there are a
-// small float + int that change between calls, not a stable pointer), so a
-// standard RTTI walk doesn't apply. Instead, this scans the whole loaded
-// SOVIET64.exe module's memory image for any 8-byte-aligned qword equal to
-// thisPtr. If the game keeps this object's address in an ordinary static
-// variable (like every other DAT_... global already used for save/load),
-// that variable's own address shows up as a hit here - RVA = hit_address -
-// module_base, directly usable as g_exe+RVA like everything else in this
-// codebase. Uses VirtualQuery to skip any non-readable/guard pages instead
-// of assuming the whole image is safely readable.
-static void ScanForPointerToThis(__int64 thisPtr)
+// ---------------------------------------------------------------------------
+// Infrastructure commit capture
+// ---------------------------------------------------------------------------
+
+// >0 while a building placement call is running.
+static volatile LONG g_buildingPlacementDepth = 0;
+void DetectSpawn_BeginBuildingPlacement() { InterlockedIncrement(&g_buildingPlacementDepth); }
+void DetectSpawn_EndBuildingPlacement()   { InterlockedDecrement(&g_buildingPlacementDepth); }
+
+// Captured inside the commit hook, sent from DetectSpawn_Tick. The hook runs
+// inside the game's commit and must not allocate, log or do network I/O.
+static RoadSyncSegment g_segmentCapture;
+static volatile LONG g_segmentPending = 0;
+static RoadSyncUpgradeMsg g_upgradeCapture;
+static volatile LONG g_upgradePending = 0;
+
+// Reason the last tool commit was not captured, logged from the game thread.
+static volatile LONG g_commitSkipPending = 0;
+static struct { int category; const char* reason; int count; int valid; int type; } g_commitSkip;
+
+static void NoteCommitSkip(int category, const char* reason, int count, int valid, int type)
 {
-    BYTE* base = (BYTE*)g_exeBase;
-    SIZE_T imageSize = 0;
-
-    __try {
-        IMAGE_DOS_HEADER* dos = (IMAGE_DOS_HEADER*)base;
-        if (dos->e_magic != IMAGE_DOS_SIGNATURE) {
-            Logf("republicmp  PTR_SCAN: bad DOS header at module base, aborting");
-            return;
-        }
-        IMAGE_NT_HEADERS* nt = (IMAGE_NT_HEADERS*)(base + dos->e_lfanew);
-        if (nt->Signature != IMAGE_NT_SIGNATURE) {
-            Logf("republicmp  PTR_SCAN: bad NT header, aborting");
-            return;
-        }
-        imageSize = nt->OptionalHeader.SizeOfImage;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        Logf("republicmp  PTR_SCAN: <exception reading PE headers, aborting>");
-        return;
-    }
-
-    Logf("republicmp  PTR_SCAN: scanning module base=%p size=0x%zx for qword == %p",
-         (void*)base, imageSize, (void*)thisPtr);
-
-    BYTE* end = base + imageSize;
-    BYTE* cursor = base;
-    int hits = 0;
-
-    while (cursor < end) {
-        MEMORY_BASIC_INFORMATION mbi = {};
-        if (VirtualQuery(cursor, &mbi, sizeof(mbi)) == 0) {
-            Logf("republicmp  PTR_SCAN: VirtualQuery failed at %p, stopping", (void*)cursor);
-            break;
-        }
-
-        BYTE* regionEnd = (BYTE*)mbi.BaseAddress + mbi.RegionSize;
-        if (regionEnd > end) regionEnd = end;
-
-        bool readable = (mbi.State == MEM_COMMIT) &&
-            (mbi.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_WRITECOPY)) != 0 &&
-            (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) == 0;
-
-        if (readable) {
-            __try {
-                for (BYTE* p = cursor; p + 8 <= regionEnd; p += 8) {
-                    if (*(__int64*)p == thisPtr) {
-                        DWORD rva = (DWORD)(p - base);
-                        Logf("republicmp  PTR_SCAN: hit at RVA=0x%x (addr=%p)", rva, (void*)p);
-                        hits++;
-                        if (hits >= 50) {
-                            Logf("republicmp  PTR_SCAN: too many hits (>=50), stopping early");
-                            cursor = end;
-                            goto scanDone;
-                        }
-                    }
-                }
-            } __except (EXCEPTION_EXECUTE_HANDLER) {
-                Logf("republicmp  PTR_SCAN: <exception scanning region at %p, skipping rest of it>", (void*)cursor);
-            }
-        }
-
-        cursor = regionEnd;
-    }
-
-scanDone:
-    Logf("republicmp  PTR_SCAN: done, %d hit(s)", hits);
+    if (InterlockedCompareExchange(&g_commitSkipPending, 0, 0) != 0) return;
+    g_commitSkip.category = category;
+    g_commitSkip.reason = reason;
+    g_commitSkip.count = count;
+    g_commitSkip.valid = valid;
+    g_commitSkip.type = type;
+    InterlockedExchange(&g_commitSkipPending, 1);
 }
 
-static void LogThisPtrDiagnostics(__int64 thisPtr)
+static void ReadNodePos(__int64 node, float out[3])
 {
-    __try {
-        Logf("republicmp  RTTI_DIAG: thisPtr=%p", (void*)thisPtr);
-
-        unsigned char* bytes = (unsigned char*)thisPtr;
-        for (int row = 0; row < 8; row++) {
-            char hexLine[3 * 16 + 1] = {0};
-            for (int col = 0; col < 16; col++) {
-                char piece[4];
-                _snprintf_s(piece, sizeof(piece), _TRUNCATE, "%02X ", bytes[row * 16 + col]);
-                strcat_s(hexLine, sizeof(hexLine), piece);
-            }
-            Logf("republicmp  RTTI_DIAG: +0x%02x: %s", row * 16, hexLine);
-        }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        Logf("republicmp  RTTI_DIAG: <exception during hexdump>");
-    }
-
-    ScanForPointerToThis(thisPtr);
+    for (int k = 0; k < 3; k++) out[k] = *(float*)(node + NODE_POS_OFFSET + k * 4);
 }
 
-// decompile_of_1403d00f0.c (road) and decompile_of_1403b0e60.c (pipe) - the
-// per-tool wrapper functions the giant per-frame FUN_14030d1a0 calls while
-// that tool is selected - both manage their drag (press-drag-release)
-// state through fields on the SAME world god-object (thisPtr, same one
-// everywhere else in this file), not on a separate object:
-//   thisPtr+0xd2ac  - drag-active flag (bool), shared across every path tool
-//   thisPtr+0xd2c4  - accumulated drag duration (float)
-//   thisPtr+0x350a  - char* to the currently active tool's name (the same
-//                     string FUN_14030d1a0 strcmp's against "road_asphalt"/
-//                     "pipe_underground"/etc.)
-// The actual waypoint list + committed type/variant, though, live on a
-// separate per-tool "manager" object fetched off thisPtr: road's manager is
-// *(void**)(thisPtr+0xf7a0), pipe's is *(void**)(thisPtr+0xf858) - both
-// passed as the real param_1 into the shared engine primitives
-// (FUN_1404fc040/FUN_1404fcaf0/FUN_140518a80) inside those two wrappers.
-// FUN_140518a80 (the actual commit-to-world call) is shared with ~20
-// unrelated call sites (including FUN_1402bade0, the building hook
-// itself) - too broad/risky to inline-hook directly. Polling thisPtr's
-// drag-active flag every frame (the same per-frame tick function used for
-// F9) and dumping the manager's waypoint array on the 1->0 transition
-// (drag just finished) gets the same answer with zero new hooks.
-#define TOOL_DRAG_ACTIVE_OFFSET 0xd2ac
-#define TOOL_DRAG_DURATION_OFFSET 0xd2c4
-#define TOOL_NAME_PTR_OFFSET 0x350a
-#define ROAD_MANAGER_OFFSET 0xf7a0
-#define PIPE_MANAGER_OFFSET 0xf858
-// Waypoint array + committed type/variant, read off the per-tool manager
-// object (NOT thisPtr) - matches FUN_140518a80's own field reads.
-#define TOOL_WAYPOINTS_BEGIN_OFFSET 0x410
-#define TOOL_WAYPOINTS_END_OFFSET 0x418
-#define TOOL_TYPE_OFFSET 0x528
-#define TOOL_VARIANT_OFFSET 0x52c
-
-static bool g_toolDragWasActive = false;
-static char g_toolDragLastName[64] = "<never captured>";
-static float g_toolDragLastDuration = 0.0f;
-
-// The offsets match the "road_asphalt" -> FUN_1403d00f0(this,1,0) mapping
-// in decompile_of_1403d00f0.c (ROAD's type=1/variant=0 lands on the live
-// manager). Reading the manager at the 1->0 transition itself is always one
-// frame too late: FUN_140518a80 (the commit call) clears the manager's own
-// waypoint array (and the game clears thisPtr's active-tool-name pointer)
-// as part of finishing, and that already happens on the frame BEFORE the
-// poll below ever sees d2ac go back to 0 - by the time it looks, the data
-// is gone. Fix: snapshot the manager + tool name EVERY frame while the drag
-// is active (not just once at the end), so there is always a fresh copy
-// from the frame just before the commit wiped it.
-//
-// FUN_1404fcaf0 (drag-tick) has an explicit "road curve" accumulator on the
-// manager, driven by mouse wheel ("ZOOM" axis reused) or
-// GAMEPAD_ROAD_CURVE_ADD/SUB - manager+0x48 is the current curve value
-// (float), clamped every frame between manager+0x40 (min) and manager+0x44
-// (max). The waypoint array isn't a raw mouse trail - it's a route computed
-// each frame from the drag-start point to the current cursor point,
-// constrained by this curve value. That's why the wire protocol sends
-// (start, end, curveValue, typeId, variant) rather than the whole point
-// array (see RoadSyncMsg in net/road_sync.h): the far side reproduces the
-// identical path by re-running FUN_1404fc040->FUN_1404fcaf0->FUN_140518a80
-// itself. curveMin/curveMax/curveValue are captured alongside the existing
-// point snapshot below.
-struct ToolWaypointSnapshot {
-    bool valid;
-    int typeId;
-    int variant;
-    long long count; // -1 = unreadable/garbage manager, -2 = read exception
-    float points[64][3];
-    float curveMin;
-    float curveMax;
-    float curveValue;
-};
-static ToolWaypointSnapshot g_lastRoadSnapshot = {};
-static ToolWaypointSnapshot g_lastPipeSnapshot = {};
-
-// g_lastRoadSnapshot/g_lastPipeSnapshot above get overwritten EVERY active
-// frame for BOTH categories at once, regardless of which tool is actually
-// being dragged (see ToolDragPoll_Tick below - it snapshots both managers
-// unconditionally whenever ANY drag is active). So building one road then
-// one pipe would clobber the road's "last known good" data with the road
-// manager's now-empty state while the pipe tool is active, and the
-// self-test button would find nothing valid even though a perfectly good
-// road was built moments earlier. g_lastGoodRoadSnapshot/
-// g_lastGoodPipeSnapshot below are a SEPARATE cache that's only ever
-// overwritten at the drag-end transition, and only when the count is
-// actually plausible (2..64) - i.e. it holds the last REAL committed
-// segment, not whatever the manager happened to contain on the most recent
-// active frame of ANY tool.
-static ToolWaypointSnapshot g_lastGoodRoadSnapshot = {};
-static ToolWaypointSnapshot g_lastGoodPipeSnapshot = {};
-
-static void SnapshotToolManager(ToolWaypointSnapshot* out, __int64 managerHandle)
+// Segment end nodes: start = manager+0x428; end = the existing node the end
+// snapped to (manager+0x740 when +0x749 == 1), else the temp end node +0x430.
+// Caller wraps in __try.
+static bool ReadSegmentEndNodes(__int64 manager, float outStart[3], float outEnd[3])
 {
-    if (!managerHandle) {
-        out->valid = false;
-        return;
-    }
-    __try {
-        out->valid = true;
-        out->typeId = *(int*)(managerHandle + TOOL_TYPE_OFFSET);
-        out->variant = *(int*)(managerHandle + TOOL_VARIANT_OFFSET);
-        char* beginPtr = *(char**)(managerHandle + TOOL_WAYPOINTS_BEGIN_OFFSET);
-        char* endPtr   = *(char**)(managerHandle + TOOL_WAYPOINTS_END_OFFSET);
-        long long count = (beginPtr && endPtr && endPtr >= beginPtr)
-            ? (long long)(endPtr - beginPtr) / 0x18 : -1;
-        out->count = count;
-        for (long long i = 0; i < count && i < 64; i++) {
-            float* p = (float*)(beginPtr + i * 0x18);
-            out->points[i][0] = p[0];
-            out->points[i][1] = p[1];
-            out->points[i][2] = p[2];
-        }
-        // See the ToolWaypointSnapshot comment above - manager+0x40/0x44/0x48,
-        // straight from FUN_1404fcaf0's own pointer arithmetic (it addresses
-        // the manager as C3DVECTOR3**, so param_1+8/+9 there are byte offsets
-        // 0x40/0x48; the max bound at +0x44 is a literal byte offset in that
-        // decompile, i.e. the same field family, 4 bytes apart from the min).
-        out->curveMin = *(float*)(managerHandle + 0x40);
-        out->curveMax = *(float*)(managerHandle + 0x44);
-        out->curveValue = *(float*)(managerHandle + 0x48);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        out->valid = true;
-        out->count = -2;
-    }
-}
-
-static void LogToolSnapshot(const char* label, const ToolWaypointSnapshot* s)
-{
-    if (!s->valid) {
-        Logf("republicmp  TOOL_COMMIT: %s manager=<null> (never touched this session)", label);
-        return;
-    }
-    Logf("republicmp  TOOL_COMMIT: %s type=%d variant=%d waypoints=%lld curve=%.3f (min=%.3f max=%.3f) (snapshot from last active frame)",
-         label, s->typeId, s->variant, s->count, s->curveValue, s->curveMin, s->curveMax);
-    for (long long i = 0; i < s->count && i < 64; i++) {
-        Logf("republicmp  TOOL_COMMIT:   [%lld] x=%.2f y=%.2f z=%.2f",
-             i, s->points[i][0], s->points[i][1], s->points[i][2]);
-    }
-}
-
-// Exposed for ui/debugui.cpp's self-test button - lets a "replay my own last
-// captured segment, offset, against my own local manager" test run WITHOUT
-// touching the network at all (see RoadSync_ApplySegment's comment in
-// road_sync.cpp for why that matters - this is meant to be the very first
-// time that replay code runs, before ever trusting it with remote data).
-static bool GetLastToolSnapshot(const ToolWaypointSnapshot* s, int* outTypeId, int* outVariant,
-                                float outPoints[][3], int* outCount, float* outCurveValue)
-{
-    if (!s->valid || s->count < 2 || s->count > 64) return false;
-    *outTypeId = s->typeId;
-    *outVariant = s->variant;
-    *outCount = (int)s->count;
-    *outCurveValue = s->curveValue;
-    for (long long i = 0; i < s->count; i++) {
-        outPoints[i][0] = s->points[i][0];
-        outPoints[i][1] = s->points[i][1];
-        outPoints[i][2] = s->points[i][2];
-    }
+    __int64 startNode = *(__int64*)(manager + MGR_START_NODE_OFFSET);
+    __int64 endNode = 0;
+    if (*(unsigned char*)(manager + MGR_END_ATTACHED_OFFSET) == 1)
+        endNode = *(__int64*)(manager + MGR_END_SNAPPED_NODE_OFFSET);
+    if (!endNode) endNode = *(__int64*)(manager + MGR_END_NODE_OFFSET);
+    if (!startNode || !endNode) return false;
+    ReadNodePos(startNode, outStart);
+    ReadNodePos(endNode, outEnd);
     return true;
 }
 
-bool DetectSpawn_GetLastRoadSnapshot(int* outTypeId, int* outVariant, float outPoints[][3], int* outCount, float* outCurveValue)
+// Building connection port at one segment end. Caller wraps in __try.
+static void ReadBuildingPort(__int64 building, int portIndex, RoadSyncBuildingPort* out)
 {
-    // g_lastGoodRoadSnapshot, NOT g_lastRoadSnapshot - see the comment above
-    // g_lastGoodRoadSnapshot's declaration for why (the plain per-frame
-    // cache gets clobbered by whichever tool was dragged most recently,
-    // regardless of category).
-    return GetLastToolSnapshot(&g_lastGoodRoadSnapshot, outTypeId, outVariant, outPoints, outCount, outCurveValue);
+    out->valid = building ? 1 : 0;
+    if (!building) return;
+    out->portIndex = portIndex;
+    for (int k = 0; k < 3; k++) out->bldPos[k] = *(float*)(building + OBJ_POS_OFFSET + k * 4);
 }
 
-bool DetectSpawn_GetLastPipeSnapshot(int* outTypeId, int* outVariant, float outPoints[][3], int* outCount, float* outCurveValue)
+// Identifies an existing segment by its nodes. Caller wraps in __try.
+static bool FillUpgradePiece(__int64 seg, RoadSyncUpgradePiece* p)
 {
-    return GetLastToolSnapshot(&g_lastGoodPipeSnapshot, outTypeId, outVariant, outPoints, outCount, outCurveValue);
+    if (!seg) return false;
+    __int64 n0 = *(__int64*)(seg + SEG_NODE0_OFFSET);
+    __int64 n1 = *(__int64*)(seg + SEG_NODE1_OFFSET);
+    if (!n0 || !n1) return false;
+    ReadNodePos(n0, p->segStart);
+    ReadNodePos(n1, p->segEnd);
+    p->segPointCount = (int)((*(__int64*)(seg + SEG_POINTS_END_OFFSET) -
+                              *(__int64*)(seg + SEG_POINTS_BEGIN_OFFSET)) / ROUTE_RECORD_SIZE);
+    return true;
 }
 
-// Called every frame (see DetectSpawn_Tick below). While a drag is active,
-// caches manager/tool-name state every frame (see comment above); on the
-// active->inactive transition, logs whatever was cached on the LAST active
-// frame - deliberately not what's readable right now, since that's already
-// been cleared by the engine's own commit by this point.
-static void ToolDragPoll_Tick(__int64 thisPtr)
+// Captures an upgrade commit (manager+0x390 != 0): either one segment over a
+// point range (+0x3d0 == 0), or every segment of the pathfound list the
+// commit walks (+0x3f0[+0x3d8], same filter as FUN_140518a80 lines 349-414).
+// Caller wraps in __try.
+static void CaptureUpgrade(__int64 manager, int category)
 {
-    __try {
-        bool active = *(char*)(thisPtr + TOOL_DRAG_ACTIVE_OFFSET) != 0;
+    if (InterlockedCompareExchange(&g_upgradePending, 0, 0) != 0) return;
 
-        if (active) {
-            char toolName[64];
-            char* namePtr = *(char**)(thisPtr + TOOL_NAME_PTR_OFFSET);
-            SafeReadCStringDirect(namePtr, toolName, sizeof(toolName));
-            strncpy_s(g_toolDragLastName, sizeof(g_toolDragLastName), toolName, _TRUNCATE);
-            g_toolDragLastDuration = *(float*)(thisPtr + TOOL_DRAG_DURATION_OFFSET);
-            SnapshotToolManager(&g_lastRoadSnapshot, *(__int64*)(thisPtr + ROAD_MANAGER_OFFSET));
-            SnapshotToolManager(&g_lastPipeSnapshot, *(__int64*)(thisPtr + PIPE_MANAGER_OFFSET));
+    RoadSyncUpgradeMsg m = {};
+    m.category = category;
+    m.newType = *(int*)(manager + MGR_TYPE_OFFSET);
+    m.newVariant = *(int*)(manager + MGR_VARIANT_OFFSET);
+    m.flag5c4 = *(int*)(manager + MGR_FLAG_5C4_OFFSET);
+    if (m.newType >= TOOL_TYPE_DEMOLISH_MIN) return;
+    int dirFlag = *(int*)(manager + MGR_UPG_DIR_OFFSET);
+
+    if (*(unsigned char*)(manager + MGR_UPG_MULTI_OFFSET) == 0) {
+        RoadSyncUpgradePiece& p = m.pieces[0];
+        if (!FillUpgradePiece(*(__int64*)(manager + MGR_UPG_SEGMENT_OFFSET), &p)) return;
+        p.rangeStart = *(int*)(manager + MGR_UPG_RANGE_START_OFFSET);
+        p.rangeEnd = *(int*)(manager + MGR_UPG_RANGE_END_OFFSET);
+        p.oldType = *(int*)(manager + MGR_UPG_OLD_TYPE_OFFSET);
+        p.oldVariant = *(int*)(manager + MGR_UPG_OLD_VARIANT_OFFSET);
+        p.flag39c = dirFlag;
+        m.pieceCount = 1;
+    } else {
+        int idx = *(int*)(manager + MGR_UPG_PATH_INDEX_OFFSET);
+        char* listBegin = *(char**)(manager + MGR_UPG_PATHS_BEGIN_OFFSET);
+        char* listEnd = *(char**)(manager + MGR_UPG_PATHS_END_OFFSET);
+        if (idx < 0 || !listBegin || idx >= (int)((listEnd - listBegin) / 0x18)) return;
+        __int64* segIt = *(__int64**)(listBegin + idx * 0x18);
+        __int64* segEnd = *(__int64**)(listBegin + idx * 0x18 + 8);
+        __int64 segs[ROAD_SYNC_MAX_UPGRADE_PIECES];
+        int n = 0;
+        for (; segIt && segIt < segEnd && n < ROAD_SYNC_MAX_UPGRADE_PIECES; ++segIt) {
+            __int64 seg = *segIt;
+            if (!seg || *(char*)(seg + SEG_SKIP_FLAG_OFFSET) != 0 ||
+                (unsigned)(*(int*)(seg + SEG_KIND_OFFSET) - 2) <= 1)
+                continue;
+            if (!FillUpgradePiece(seg, &m.pieces[n])) continue;
+            m.pieces[n].rangeStart = -1;
+            m.pieces[n].rangeEnd = m.pieces[n].segPointCount;
+            m.pieces[n].oldType = *(int*)(seg + SEG_TYPE_OFFSET);
+            m.pieces[n].oldVariant = *(int*)(seg + SEG_VARIANT_OFFSET);
+            segs[n++] = seg;
         }
-
-        if (g_toolDragWasActive && !active) {
-            Logf("republicmp  TOOL_COMMIT: drag just ended, activeTool=[%s] duration=%.3f",
-                 g_toolDragLastName, g_toolDragLastDuration);
-            LogToolSnapshot("ROAD", &g_lastRoadSnapshot);
-            LogToolSnapshot("PIPE", &g_lastPipeSnapshot);
-
-            // Sends over the network AND updates the "last GOOD" self-test
-            // cache (see the comment above g_lastGoodRoadSnapshot) - same
-            // "valid + sane point count" guard either way. Garbage manager
-            // reads (rail/sidewalk/water don't map to these two offsets
-            // yet) always come back with count<0, never a plausible 2..64,
-            // so both naturally stay a no-op for anything not yet identified.
-            if (g_lastRoadSnapshot.valid && g_lastRoadSnapshot.count >= 2 && g_lastRoadSnapshot.count <= 64) {
-                g_lastGoodRoadSnapshot = g_lastRoadSnapshot;
-                RoadSync_SendSegment(ROAD_SYNC_CATEGORY_ROAD, g_lastRoadSnapshot.typeId, g_lastRoadSnapshot.variant,
-                                     g_lastRoadSnapshot.points, (int)g_lastRoadSnapshot.count,
-                                     g_lastRoadSnapshot.curveValue);
+        // One-way direction per segment: the commit derives it from a path
+        // bitset; approximated here from how each segment chains to its
+        // neighbour (forward -> 1, reversed -> 2).
+        for (int i = 0; i < n; i++) {
+            if (dirFlag != 1) { m.pieces[i].flag39c = dirFlag; continue; }
+            __int64 a0 = *(__int64*)(segs[i] + SEG_NODE0_OFFSET), a1 = *(__int64*)(segs[i] + SEG_NODE1_OFFSET);
+            bool forward = true;
+            if (i + 1 < n) {
+                __int64 b0 = *(__int64*)(segs[i + 1] + SEG_NODE0_OFFSET), b1 = *(__int64*)(segs[i + 1] + SEG_NODE1_OFFSET);
+                forward = (a1 == b0 || a1 == b1);
+            } else if (i > 0) {
+                __int64 b0 = *(__int64*)(segs[i - 1] + SEG_NODE0_OFFSET), b1 = *(__int64*)(segs[i - 1] + SEG_NODE1_OFFSET);
+                forward = (a0 == b0 || a0 == b1);
             }
-            if (g_lastPipeSnapshot.valid && g_lastPipeSnapshot.count >= 2 && g_lastPipeSnapshot.count <= 64) {
-                g_lastGoodPipeSnapshot = g_lastPipeSnapshot;
-                RoadSync_SendSegment(ROAD_SYNC_CATEGORY_PIPE, g_lastPipeSnapshot.typeId, g_lastPipeSnapshot.variant,
-                                     g_lastPipeSnapshot.points, (int)g_lastPipeSnapshot.count,
-                                     g_lastPipeSnapshot.curveValue);
-            }
+            m.pieces[i].flag39c = forward ? 1 : 2;
         }
-        g_toolDragWasActive = active;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        Logf("republicmp  TOOL_COMMIT: <exception polling drag state>");
+        m.pieceCount = n;
     }
+    if (m.pieceCount < 1) return;
+
+    g_upgradeCapture = m;
+    MemoryBarrier();
+    InterlockedExchange(&g_upgradePending, 1);
 }
 
-// Exposed for net/road_sync.cpp's RoadSync_Tick(). TOOL_DRAG_ACTIVE_OFFSET
-// (thisPtr+0xd2ac) is ONE flag "shared across every path tool" (see its
-// comment above), not per-manager, per-category, or per-player - it just
-// means "the LOCAL player currently has a road/pipe/rail/etc drag in
-// progress". RoadSync_ApplySegment drives FUN_1404fc040/FUN_1404fcaf0
-// directly on the SAME manager object (thisPtr+0xf7a0/+0xf858) a real
-// local drag uses - if a network segment gets applied while the local
-// player is mid-drag on that manager, the two stomp each other's state
-// (fc040 resets the manager's drag-start/curve out from under the live
-// drag: the local drag's snap point jumps to the remote point, and the
-// curve accumulator gets stuck at its max bound for several drags
-// afterward). RoadSync_Tick() checks this before applying each queued
-// segment and defers (leaves it queued, retries next frame) instead of
-// applying into a manager the local player is actively driving. Cheap -
-// reads the value ToolDragPoll_Tick already polls every frame, no extra
-// memory read.
-bool DetectSpawn_IsToolDragActive()
+// Captures a finished segment: interior route records, both node positions
+// and building ports. Caller wraps in __try.
+static void CaptureSegment(__int64 manager, int category)
 {
-    return g_toolDragWasActive;
-}
+    char* begin = *(char**)(manager + MGR_ROUTE_BEGIN_OFFSET);
+    char* end = *(char**)(manager + MGR_ROUTE_END_OFFSET);
+    // A never-allocated route is (null, null) = 0 records - valid for a short
+    // power-line span.
+    if (!begin != !end || end < begin) {
+        NoteCommitSkip(category, "route buffer pointers inconsistent", -1, -1, -1);
+        return;
+    }
+    size_t bytes = (size_t)(end - begin);
+    int count = (int)(bytes / ROUTE_RECORD_SIZE);
+    int type = *(int*)(manager + MGR_TYPE_OFFSET);
+    unsigned char valid = *(unsigned char*)(manager + MGR_VALID_OFFSET);
 
-// Called every frame from the Present hook (game thread, same spot
-// build_sync.cpp's BuildSync_Tick() is called from) - lets F9 fire the debug
-// spawn / thisPtr diagnostics directly off the fixed placement-manager
-// address (g_exe+0x9D4F10), independent of the local player ever having
-// triggered a real HookedUniversal call. This is what makes F9 usable for
-// solo testing without a second player: RunDebugSpawn/LogThisPtrDiagnostics
-// only need a valid thisPtr, not an actual placement click.
-void DetectSpawn_Tick()
-{
-    if (!IsWorldLoaded()) {
-        // Keep any F9 request pending rather than dropping it - same
-        // "hold until the world exists" idea as build_sync.cpp's g_pending.
+    if (bytes % ROUTE_RECORD_SIZE != 0 || count > ROAD_SYNC_MAX_POINTS) {
+        NoteCommitSkip(category, "route buffer size invalid or too long", count, valid, type);
+        return;
+    }
+    if (valid != 1) {
+        NoteCommitSkip(category, "engine marked the route invalid", count, valid, type);
+        return;
+    }
+    if (type >= TOOL_TYPE_DEMOLISH_MIN) {
+        NoteCommitSkip(category, "demolish tool (not synced)", count, valid, type);
+        return;
+    }
+    if (InterlockedCompareExchange(&g_segmentPending, 0, 0) != 0) {
+        NoteCommitSkip(category, "previous capture not sent yet", count, valid, type);
         return;
     }
 
-    __int64 thisPtr = GetPlacementManagerThisPtr();
-
-    // Road/pipe drag-commit watch (see ToolDragPoll_Tick comment above) -
-    // unconditional, every frame, independent of the F9 pending flags below.
-    ToolDragPoll_Tick(thisPtr);
-
-    if (g_debugSpawnPending == 0 && g_thisPtrDiagPending == 0) return;
-
-    if (InterlockedExchange(&g_thisPtrDiagPending, 0) != 0) {
-        LogThisPtrDiagnostics(thisPtr);
+    RoadSyncSegment& seg = g_segmentCapture;
+    if (!ReadSegmentEndNodes(manager, seg.startNode, seg.endNode)) {
+        NoteCommitSkip(category, "end nodes unreadable", count, valid, type);
+        return;
     }
-    if (InterlockedExchange(&g_debugSpawnPending, 0) != 0) {
-        RunDebugSpawn(thisPtr);
+    seg.category = category;
+    seg.typeId = type;
+    seg.variant = *(int*)(manager + MGR_VARIANT_OFFSET);
+    seg.curveValue = *(float*)(manager + MGR_CURVE_OFFSET);
+    seg.pointCount = count;
+    memcpy(seg.points, begin, bytes);
+    ReadBuildingPort(*(__int64*)(manager + MGR_START_PORT_BUILDING_OFFSET),
+                     *(int*)(manager + MGR_START_PORT_INDEX_OFFSET), &seg.startPort);
+    ReadBuildingPort(*(__int64*)((uintptr_t)g_exe + HOVER_PORT_BUILDING_RVA),
+                     *(int*)((uintptr_t)g_exe + HOVER_PORT_INDEX_RVA), &seg.endPort);
+
+    MemoryBarrier();
+    InterlockedExchange(&g_segmentPending, 1);
+}
+
+// Entry of FUN_140518a80. Captures tool commits, then always runs the
+// original unchanged.
+void HookedRoadCommit(__int64 manager,
+                      unsigned __int64 p2, unsigned __int64 p3,
+                      unsigned __int64 p4, unsigned int p5,
+                      unsigned __int64 p6, unsigned __int64 p7)
+{
+    int category = RoadSync_CategoryForManager(GetPlacementManagerThisPtr(), manager);
+    // Tool wrappers always commit with p2 == 0; replays of remote work are
+    // never echoed back.
+    if (category >= 0 && p2 == 0 && !RoadSync_IsApplyingSegment()) {
+        if (InterlockedCompareExchange(&g_buildingPlacementDepth, 0, 0) != 0) {
+            NoteCommitSkip(category, "laid by a building placement (recreated by the building replay)", -1, -1, -1);
+        } else {
+            __try {
+                if (*(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) != 0)
+                    CaptureUpgrade(manager, category);
+                else
+                    CaptureSegment(manager, category);
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+                // Nothing may escape into the game's commit.
+            }
+        }
+    }
+    g_origRoadCommit(manager, p2, p3, p4, p5, p6, p7);
+}
+
+// Sends whatever the commit hook captured since the last frame.
+static void FlushCommitCaptures()
+{
+    if (InterlockedCompareExchange(&g_commitSkipPending, 0, 0) != 0) {
+        Logf("republicmp  ROAD_COMMIT: %s commit not sent - %s (points=%d valid=%d type=%d)",
+             RoadSync_GetCategoryInfo(g_commitSkip.category)->name, g_commitSkip.reason,
+             g_commitSkip.count, g_commitSkip.valid, g_commitSkip.type);
+        InterlockedExchange(&g_commitSkipPending, 0);
+    }
+
+    if (InterlockedCompareExchange(&g_segmentPending, 0, 0) != 0) {
+        const RoadSyncSegment& seg = g_segmentCapture;
+        Logf("republicmp  ROAD_COMMIT: %s type=%d variant=%d points=%d start=(%.3f,%.3f,%.3f) end=(%.3f,%.3f,%.3f) startPort=%d endPort=%d",
+             RoadSync_GetCategoryInfo(seg.category)->name, seg.typeId, seg.variant, seg.pointCount,
+             seg.startNode[0], seg.startNode[1], seg.startNode[2],
+             seg.endNode[0], seg.endNode[1], seg.endNode[2],
+             seg.startPort.valid ? seg.startPort.portIndex : -1,
+             seg.endPort.valid ? seg.endPort.portIndex : -1);
+        RoadSync_SendSegment(seg);
+        InterlockedExchange(&g_segmentPending, 0);
+    }
+
+    if (InterlockedCompareExchange(&g_upgradePending, 0, 0) != 0) {
+        RoadSyncUpgradeMsg up = g_upgradeCapture;
+        InterlockedExchange(&g_upgradePending, 0);
+        Logf("republicmp  ROAD_COMMIT: upgrade %s newType=%d newVariant=%d pieces=%d",
+             RoadSync_GetCategoryInfo(up.category)->name, up.newType, up.newVariant, up.pieceCount);
+        RoadSync_SendUpgrade(up);
     }
 }
 
+// ---------------------------------------------------------------------------
+// Per-frame tick
+// ---------------------------------------------------------------------------
+
+static bool g_toolDragActive = false;
+
+bool DetectSpawn_IsToolDragActive()
+{
+    return g_toolDragActive;
+}
+
+void DetectSpawn_Tick()
+{
+    if (!IsWorldLoaded()) return;
+
+    __int64 thisPtr = GetPlacementManagerThisPtr();
+    __try {
+        g_toolDragActive = *(char*)(thisPtr + TOOL_DRAG_ACTIVE_OFFSET) != 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        g_toolDragActive = false;
+    }
+
+    FlushCommitCaptures();
+
+    if (InterlockedExchange(&g_debugSpawnPending, 0) != 0)
+        RunDebugSpawn(thisPtr);
+}
+
+// ---------------------------------------------------------------------------
+// Building placement hook
+// ---------------------------------------------------------------------------
+
+// Entry of FUN_1402bade0. Runs the original, and if it created buildings,
+// sends the placement (see detect_spawn.h).
 void HookedUniversal(__int64 param_1, char* param_2, char param_3, char param_4,
                       unsigned __int64 param_5, unsigned int param_6,
                       char param_7, char param_8)
 {
-    // While a save-sync gray screen is up (ui/sync_block.h), refuse every
-    // placement outright - don't even call through to the real engine
-    // function. The mouse/keyboard swallow in hooks/imgui_hook.cpp's
-    // HookedWndProc does NOT stop the player from placing/clicking during a
-    // sync on its own, since the game reads at least some input some other
-    // way than window messages (raw/polled - exactly how is unconfirmed).
-    // This function is the single choke point every real placement funnels
-    // through regardless of what triggered it, so refusing it here blocks
-    // new buildings completely no matter how the click got through.
-    // Doesn't affect ApplyOneRemotePlacement() in net/build_sync.cpp - that
-    // calls g_origUniversal directly, bypassing this hook entirely.
-    if (SyncBlock_IsActive()) {
-        return;
-    }
+    // Placements are refused while the save-sync block screen is up.
+    if (SyncBlock_IsActive()) return;
 
     g_universalCallCount++;
 
-    char param2Direct[64];
-    SafeReadCStringDirect(param_2, param2Direct, sizeof(param2Direct));
+    char typeName[64];
+    SafeReadCStringDirect(param_2, typeName, sizeof(typeName));
 
-    // Unconditional entry log, independent of whether the buildings vector
-    // below grows. Roads/pipes/fences/power lines go through this SAME
-    // single placement hook, same as every building type - but the
-    // buildings-vector growth check further down only catches placements
-    // that push into that specific vector, so a road/pipe placement could
-    // otherwise fire this hook and never produce a single "UNIVERSAL fired"
-    // line below. This line makes that visible regardless: it prints before
-    // g_origUniversal is even called, with the raw param_2 type name and
-    // all of param_3..param_8.
-    Logf("republicmp  HOOK_UNIVERSAL entry: type=[%s] this=%p param3=%d param4=%d param5=%llu param6=%u param7=%d param8=%d",
-         param2Direct, (void*)param_1, (int)param_3, (int)param_4,
-         (unsigned long long)param_5, param_6, (int)param_7, (int)param_8);
-
-    void** vecEndPtr   = (void**)((uintptr_t)g_exeBase + VEC_BUILDINGS_END_RVA);
     void** vecBeginPtr = (void**)((uintptr_t)g_exeBase + VEC_BUILDINGS_BEGIN_RVA);
-
+    void** vecEndPtr   = (void**)((uintptr_t)g_exeBase + VEC_BUILDINGS_END_RVA);
     void* beginBefore = nullptr;
     void* endBefore = nullptr;
-    __try { beginBefore = *vecBeginPtr; endBefore = *vecEndPtr; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { beginBefore = nullptr; endBefore = nullptr; }
+    float cursorX = 0, cursorY = 0, cursorZ = 0, cursorYaw = 0;
+    __try {
+        beginBefore = *vecBeginPtr;
+        endBefore = *vecEndPtr;
+        // Placement inputs of this exact call - replayed as-is by the receiver.
+        cursorX = *(float*)(param_1 + CURSOR_X_OFFSET);
+        cursorY = *(float*)(param_1 + CURSOR_Y_OFFSET);
+        cursorZ = *(float*)(param_1 + CURSOR_Z_OFFSET);
+        cursorYaw = *(float*)(param_1 + CURSOR_YAW_OFFSET);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
 
-    // See the comment above LogCursorRotHexDump - taken BEFORE the real
-    // call so it reflects the player's actual pre-click rotation state, to
-    // be diffed against the post-creation sin/cos logged further below.
-    __try { LogCursorRotHexDump(param_1); }
-    __except (EXCEPTION_EXECUTE_HANDLER) { Logf("republicmp  ROTIN_DIAG: <exception dumping cursor state>"); }
-
-    g_origUniversal(param_1, param_2, param_3, param_4, param_5, param_6, param_7, param_8);
+    DetectSpawn_BeginBuildingPlacement();
+    __try {
+        g_origUniversal(param_1, param_2, param_3, param_4, param_5, param_6, param_7, param_8);
+    } __finally {
+        DetectSpawn_EndBuildingPlacement();
+    }
 
     __try {
         void* beginAfter = *vecBeginPtr;
         void* endAfter = *vecEndPtr;
+        long long countBefore = BuildingCount(beginBefore, endBefore);
+        long long countAfter = BuildingCount(beginAfter, endAfter);
+        if (countBefore < 0 || countAfter <= countBefore) return; // preview frame or refused
 
-        long long countBefore = (beginBefore && endBefore)
-            ? (long long)(((uintptr_t)endBefore - (uintptr_t)beginBefore) / sizeof(void*))
-            : -1;
-        long long countAfter = (beginAfter && endAfter)
-            ? (long long)(((uintptr_t)endAfter - (uintptr_t)beginAfter) / sizeof(void*))
-            : -1;
-        long long countDelta = (countBefore >= 0 && countAfter >= 0) ? (countAfter - countBefore) : 0;
-        bool reallocated = (beginBefore != beginAfter);
+        long long countDelta = countAfter - countBefore;
+        if (countDelta > 1) g_universalMultiPushCount++;
 
-        bool growthValid = endAfter && countDelta > 0;
-        if (growthValid && countDelta > 1) {
-            g_universalMultiPushCount++;
-            Logf("republicmp  UNIVERSAL multi-push: %lld new element(s) (param2Direct=[%s], reallocated=%d)",
-                 countDelta, param2Direct, reallocated ? 1 : 0);
+        // The main object is the one created on the cursor; helper objects
+        // of a multi-push sit elsewhere.
+        void** vec = (void**)beginAfter;
+        void* mainObj = nullptr;
+        float bestD2 = 0.0f;
+        for (long long i = countBefore; i < countAfter; i++) {
+            void* obj = vec[i];
+            if (!obj) continue;
+            float dx = *(float*)((char*)obj + OBJ_POS_OFFSET) - cursorX;
+            float dz = *(float*)((char*)obj + OBJ_POS_OFFSET + 8) - cursorZ;
+            float d2 = dx * dx + dz * dz;
+            if (!mainObj || d2 < bestD2) { mainObj = obj; bestD2 = d2; }
         }
+        if (!mainObj) return;
 
-        if (growthValid) {
-            void* newObjPtr = *((void**)endAfter - 1);
-            if (newObjPtr) {
-                float x = *(float*)((char*)newObjPtr + 0x350);
-                float y = *(float*)((char*)newObjPtr + 0x354);
-                float z = *(float*)((char*)newObjPtr + 0x358);
+        BuildSyncMsg msg = {};
+        msg.x = *(float*)((char*)mainObj + OBJ_POS_OFFSET);
+        msg.y = *(float*)((char*)mainObj + OBJ_POS_OFFSET + 4);
+        msg.z = *(float*)((char*)mainObj + OBJ_POS_OFFSET + 8);
+        msg.rotSin = *(float*)((char*)mainObj + OBJ_ROT_SIN_OFFSET);
+        msg.rotCos = *(float*)((char*)mainObj + OBJ_ROT_COS_OFFSET);
+        msg.cursorX = cursorX;
+        msg.cursorY = cursorY;
+        msg.cursorZ = cursorZ;
+        msg.cursorRot = cursorYaw;
+        msg.param5 = (unsigned long long)param_5;
+        msg.mirrored = *(unsigned char*)(param_1 + MIRROR_EFFECTIVE_OFFSET) != 0;
+        strncpy_s(msg.typeName, LooksLikeValidType(typeName) ? typeName : "<unknown>", _TRUNCATE);
 
-                const char* chosenType = LooksLikeValidType(param2Direct) ? param2Direct : "<unknown>";
+        Logf("republicmp  BUILD: placed type=[%s] objects=%lld pos=(%.2f,%.2f,%.2f) rotDeg=%.2f mirrored=%d cursor=(%.2f,%.2f,%.2f)",
+             msg.typeName, countDelta, msg.x, msg.y, msg.z,
+             atan2(msg.rotSin, msg.rotCos) * 180.0 / 3.14159265358979323846,
+             msg.mirrored, cursorX, cursorY, cursorZ);
 
-                // param_3..param_8 stay BYTE-IDENTICAL (p3=0 p4=0
-                // p6=0xffffffff p7=0 p8=0) across differently-rotated
-                // placements; p5 only ever takes 2 values (0 once, then a
-                // constant 3.0f-as-bits for the rest) with no relation to
-                // the continuously-varying angle below - rotation is not
-                // one of the engine's own placement params.
-                // obj+0x340/obj+0x348 (sin/cos, sin^2+cos^2==1 holds) is the
-                // only known place rotation lives, read off the object
-                // AFTER creation. Since there's no input field to set
-                // beforehand at this call site, net/build_sync.cpp's
-                // ApplyOneRemotePlacement instead patches the remote side's
-                // newly-created object's own sin/cos fields directly, same
-                // offsets, right after g_origUniversal creates it.
-                float rotSin = *(float*)((char*)newObjPtr + 0x340);
-                float rotCos = *(float*)((char*)newObjPtr + 0x348);
-                double rotDeg = atan2(rotSin, rotCos) * 180.0 / 3.14159265358979323846;
-
-                Logf("republicmp  UNIVERSAL fired: type=[%s] x=%.2f y=%.2f z=%.2f obj=%p rotDeg=%.2f (sin=%.4f cos=%.4f)",
-                     chosenType, x, y, z, newObjPtr, rotDeg, rotSin, rotCos);
-
-                NotifyBuildingPlaced(x, y, z, rotSin, rotCos, chosenType);
-            }
-        }
+        BuildSync_SendPlacement(msg);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        Logf("republicmp  UNIVERSAL fired: <exception reading vector/object after call>");
+        Logf("republicmp  BUILD: <exception reading the new building>");
     }
 }

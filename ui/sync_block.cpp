@@ -29,17 +29,9 @@ void SyncBlock_Draw()
     if (!g_active)
         return;
 
-    // Clicking/unpausing still works while this screen is up, despite
-    // HookedWndProc unconditionally swallowing mouse/keyboard window messages
-    // during SyncBlock_IsActive() (see hooks/imgui_hook.cpp) - the game reads
-    // mouse/keyboard state some other way for at least some of its own input
-    // (raw/polled, not through the window message queue; see sync_block.h).
-    // Re-asserting the pause every single frame is a blunt but reliable fix
-    // for the "can unpause" half of that: no matter how the player flips
-    // game speed back on (clicking the UI, an unguarded hotkey, whatever raw
-    // path the engine itself uses), this stomps it back to paused before the
-    // next frame renders. See hooks/detect_spawn.cpp's HookedUniversal for
-    // the matching fix on the "can still place buildings" half.
+    // The game also reads input outside the window message queue, so re-assert
+    // the pause every frame; building placement is refused separately in
+    // HookedUniversal.
     EnsureGamePaused();
 
     char reasonCopy[128];
@@ -73,10 +65,6 @@ void SyncBlock_Draw()
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor();
 
-    // NOTE: ImGuiWindowFlags_NoInputs above means this window itself doesn't
-    // set ImGui's WantCaptureMouse/WantCaptureKeyboard - that's intentional,
-    // the actual input block is a separate, unconditional check in
-    // hooks/imgui_hook.cpp's HookedWndProc keyed off SyncBlock_IsActive(),
-    // not off ImGui's own capture flags (which this window deliberately
-    // doesn't try to claim). This window is purely the visible dimming.
+    // NoInputs is intentional: this window only dims the screen; input is
+    // blocked in HookedWndProc.
 }

@@ -84,10 +84,8 @@ DWORD WINAPI GameSpeedHotkeyThread(LPVOID)
             continue;
         }
         if (SyncBlock_IsActive()) {
-            // F10 polls GetAsyncKeyState directly, not routed through
-            // WndProc, so it isn't covered by the input block in
-            // hooks/imgui_hook.cpp - guard it here explicitly so it can't
-            // unpause the game out from under an active save-sync.
+            // F10 is polled, not routed through WndProc, so the sync block must be
+            // checked here explicitly.
             Logf("republicmp  GAME_SPEED: F10 pressed but ignored - a save-sync is in progress");
             continue;
         }

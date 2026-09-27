@@ -1,5 +1,5 @@
-// Hand-written (not ImRAD-generated) debug window - opened from MainMenu's
-// "Debug" button. Kept deliberately simple.
+// Debug window (opened from the main menu): manual sync connections and the
+// verbose sync log.
 #pragma once
 
 class Debugui

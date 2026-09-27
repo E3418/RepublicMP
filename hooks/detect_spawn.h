@@ -1,47 +1,69 @@
-// Building-placement detection + debug synthetic spawn - public interface.
+// Local build detection: the two engine hooks that observe what the local
+// player builds and forward it to the sync modules.
+//
+// Building placement - FUN_1402bade0 (HOOK_UNIVERSAL_RVA)
+//   The game's single placement function. It runs every frame while a
+//   building is selected (preview ghost) and creates the building on the
+//   confirming click. The hook detects creation by growth of the city
+//   buildings vector, picks the new object that sits on the placement cursor
+//   (some types add helper objects elsewhere) and sends the placement INPUTS
+//   (cursor, yaw, param_5) through net/build_sync.
+//
+// Infrastructure commit - FUN_140518a80 (HOOK_ROAD_COMMIT_RVA)
+//   The commit shared by every drag tool. On entry, for a known tool manager
+//   (net/road_sync RoadSync_CategoryForManager), the hook copies the finished
+//   route - interior records, both node positions and building ports - or,
+//   for an upgrade commit, the segments being re-typed, and sends it through
+//   net/road_sync from the next frame. Commits made inside a building
+//   placement (a building laying its own access road) are not sent.
+//
+// Also provides the F9 debug spawn (a synthetic placement for solo testing)
+// and a periodic heartbeat log line.
 #pragma once
 
 #include "tesmio_plugin.h"
 
-// The single building-placement hook target (RVA in SOVIET64.exe).
 #define HOOK_UNIVERSAL_RVA 0x2BADE0
+#define HOOK_ROAD_COMMIT_RVA 0x518A80
 
-extern const unsigned char kUniversalExpect[21]; // function prologue bytes
+// Expected function prologues for the inline hooks (SOVIET64.exe, 2026-09-07).
+extern const unsigned char kUniversalExpect[21];
+extern const unsigned char kRoadCommitExpect[19];
 
 typedef void (*UniversalFn)(__int64 param_1, char* param_2, char param_3, char param_4,
                              unsigned __int64 param_5, unsigned int param_6,
                              char param_7, char param_8);
 extern UniversalFn g_origUniversal;
 
+typedef void(__fastcall* RoadCommitFn)(__int64 manager,
+                                        unsigned __int64 p2, unsigned __int64 p3,
+                                        unsigned __int64 p4, unsigned int p5,
+                                        unsigned __int64 p6, unsigned __int64 p7);
+extern RoadCommitFn g_origRoadCommit;
+
 void HookedUniversal(__int64 param_1, char* param_2, char param_3, char param_4,
                       unsigned __int64 param_5, unsigned int param_6,
                       char param_7, char param_8);
 
-DWORD WINAPI HeartbeatThread(LPVOID);
-DWORD WINAPI DebugSpawnThread(LPVOID); // F9: synthetic building spawn for testing
+void HookedRoadCommit(__int64 manager,
+                      unsigned __int64 p2, unsigned __int64 p3,
+                      unsigned __int64 p4, unsigned int p5,
+                      unsigned __int64 p6, unsigned __int64 p7);
 
-// Called every frame from the Present hook (game thread). Services F9
-// requests (debug spawn + thisPtr diagnostics) off the fixed
-// placement-manager address, independent of any real HookedUniversal call.
+// Bracket every building-placement call (local or remote replay). Commits
+// made inside it are the building's own auto-connections and are not sent.
+void DetectSpawn_BeginBuildingPlacement();
+void DetectSpawn_EndBuildingPlacement();
+
+DWORD WINAPI HeartbeatThread(LPVOID);  // logs call counters every 2s
+DWORD WINAPI DebugSpawnThread(LPVOID); // polls F9 for the debug spawn
+
+// Per-frame (game thread, Present hook): tracks the drag-active flag, sends
+// captured commits and services F9 requests.
 void DetectSpawn_Tick();
 
-// Last locally-captured drag-commit snapshot (see ToolDragPoll_Tick in
-// detect_spawn.cpp), exposed for ui/debugui.cpp's self-test button.
-// outPoints must point at a float[64][3] buffer (ROAD_SYNC_MAX_POINTS, see
-// net/road_sync.h). Returns false (buffer untouched) if nothing valid has
-// been captured yet this session.
-// outCurveValue: the manager's curve accumulator (+0x48) at commit time -
-// needed by RoadSync_ApplySegment to reproduce a curved path instead of a
-// flattened one, see road_sync.h's RoadSyncMsg comment.
-bool DetectSpawn_GetLastRoadSnapshot(int* outTypeId, int* outVariant, float outPoints[][3], int* outCount, float* outCurveValue);
-bool DetectSpawn_GetLastPipeSnapshot(int* outTypeId, int* outVariant, float outPoints[][3], int* outCount, float* outCurveValue);
-
-// True while the LOCAL player has an active road/pipe/rail/etc drag in
-// progress (thisPtr+0xd2ac, one flag shared across every path tool).
-// net/road_sync.cpp's RoadSync_Tick() uses this to avoid applying an
-// incoming network segment onto the same manager object the local player
-// is actively dragging on - see its comment for why that collision
-// corrupts both sides' state.
+// True while the LOCAL player has a drag in progress with any path tool
+// (thisPtr+0xd2ac). Remote segments are not applied meanwhile.
 bool DetectSpawn_IsToolDragActive();
 
 void DetectSpawn_Bind(const TsmHost* host);

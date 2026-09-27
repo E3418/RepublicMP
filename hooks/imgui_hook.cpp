@@ -10,9 +10,7 @@
 
 #include <d3d11.h>
 
-// Forward decl (declared in imgui_impl_win32.h, but only under
-// IMGUI_IMPL_API when compiled as part of ImGui itself - re-declaring here
-// keeps this file independent of that macro's expansion).
+// Declared in imgui_impl_win32.h only under IMGUI_IMPL_API; re-declared here.
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(
     HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -53,30 +51,16 @@ static void CleanupRenderTarget()
 
 static LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-    // While a save-sync is in progress (see ui/sync_block.h), the ImGui
-    // overlay must keep receiving/rendering input even if the user has the
-    // menu hidden (INSERT) - the gray blocking screen has to stay up and
-    // stay in control regardless of that toggle.
+    // The sync-block screen must keep receiving input even while the overlay is
+    // hidden with INSERT.
     bool syncBlocking = SyncBlock_IsActive();
     bool effectiveVisible = g_imguiVisible || syncBlocking;
 
     ImGuiIO& io = ImGui::GetIO();
 
-    // Draw ImGui's own software cursor sprite (in its own draw list, on top
-    // of everything) ONLY while the mouse is actually hovering an ImGui
-    // window/widget (io.WantCaptureMouse) - or unconditionally during the
-    // sync-block gray screen, which uses ImGuiWindowFlags_NoInputs and so
-    // never sets WantCaptureMouse on its own, but still needs a visible
-    // pointer the whole time it's up.
-    //
-    // Gated on WantCaptureMouse rather than the whole overlay being open
-    // (effectiveVisible): tying it to effectiveVisible would keep the
-    // sprite on screen everywhere, even with the mouse sitting over bare
-    // game area while a menu window is merely open somewhere else. Gating
-    // on WantCaptureMouse instead means: off the menu, WM_SETCURSOR below
-    // is left alone and the game's own WndProc/cursor logic runs exactly as
-    // it would with no mod loaded (however it prefers to hide/lock the
-    // cursor during normal gameplay); over the menu, our sprite takes over.
+    // Draw ImGui's own cursor only while the mouse is over an ImGui window, or
+    // while the sync-block screen is up (it uses NoInputs and never captures the
+    // mouse). Elsewhere the game's own cursor handling runs unmodified.
     bool showOurCursor = syncBlocking || (g_imguiVisible && io.WantCaptureMouse);
     io.MouseDrawCursor = showOurCursor;
 
@@ -85,14 +69,10 @@ static LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
 
     bool imguiWantsInput = effectiveVisible && (io.WantCaptureMouse || io.WantCaptureKeyboard);
 
-    // syncBlocking swallows input UNCONDITIONALLY, independent of ImGui's own
-    // want-capture flags - see ui/sync_block.h's header comment for why this
-    // can't just rely on WantCaptureMouse/Keyboard the way the menu-visible
-    // case above does.
+    // During a sync all input is swallowed regardless of ImGui's capture flags.
     if (imguiWantsInput || syncBlocking)
     {
-        // ImGui already consumed this event above (or we're intentionally
-        // dropping it during a sync) - don't also forward it to the game
+        // Consumed by ImGui, or dropped during a sync - do not forward to the game.
         switch (msg)
         {
         case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_LBUTTONDBLCLK:
@@ -105,12 +85,8 @@ static LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         }
     }
 
-    // WM_SETCURSOR gets its own check, separate from imguiWantsInput above:
-    // swallow it exactly while WE are drawing the cursor (showOurCursor),
-    // so the game's original WndProc can't re-assert its own cursor state
-    // over our sprite. The rest of the time (overlay open, mouse over bare
-    // game area) this falls through on purpose, so the game's own cursor
-    // behavior runs unmodified.
+    // Swallow WM_SETCURSOR only while we draw the cursor, so the game cannot
+    // override our sprite; otherwise let the game handle it.
     if (showOurCursor && msg == WM_SETCURSOR)
         return TRUE;
 
@@ -143,7 +119,7 @@ void ImGuiHook_EnsureInit(IDXGISwapChain* swapChain)
     ImGui_ImplWin32_Init(g_hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dContext);
 
-    // Input hook: subclass the game window now that its HWND is known
+    // Subclass the game window now that its HWND is known.
     g_originalWndProc = (WNDPROC)SetWindowLongPtr(g_hwnd, GWLP_WNDPROC, (LONG_PTR)HookedWndProc);
 
     g_initialized = true;
@@ -155,21 +131,16 @@ void ImGuiHook_NewFrameAndRender()
     if (!g_initialized)
         return;
 
-    // INSERT toggles the whole overlay - same window-focus guard as O/I/P/L/F9/F10
+    // INSERT toggles the overlay (only while the game window has focus).
     bool insertDown = IsGameWindowFocused() && (GetAsyncKeyState(VK_INSERT) & 0x8000) != 0;
     if (insertDown && !g_insertWasDown)
         g_imguiVisible = !g_imguiVisible;
     g_insertWasDown = insertDown;
 
-    // The sync-block screen (see ui/sync_block.h) must keep rendering even if
-    // the user hid the menu with INSERT - it's not optional UI, it's what's
-    // actually holding the game still during a save-sync.
+    // The sync-block screen renders even while the overlay is hidden.
     bool syncBlocking = SyncBlock_IsActive();
 
-    // Belt-and-suspenders re-sync of the cursor-drawing flag set in
-    // HookedWndProc (see its comment there) - covers the rare frame where
-    // hover state just changed but no window message has arrived yet to
-    // refresh it.
+    // Refresh the cursor flag for frames where hover changed without a message.
     ImGuiIO& io = ImGui::GetIO();
     io.MouseDrawCursor = syncBlocking || (g_imguiVisible && io.WantCaptureMouse);
 
@@ -190,9 +161,6 @@ void ImGuiHook_NewFrameAndRender()
     g_pd3dContext->OMSetRenderTargets(1, &g_mainRenderTargetView, nullptr);
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
-    // NOTE: no ResizeBuffers hook yet - if the game resolution changes at
-    // runtime, g_mainRenderTargetView will point at a stale back buffer.
-    // Not needed for now (fullscreen res usually fixed for a session), but if
-    // it starts flickering/crashing on alt-tab or resize, that's the fix:
-    // CleanupRenderTarget() + CreateRenderTarget() around the resize call.
+    // ResizeBuffers is not hooked: a runtime resolution change would leave
+    // g_mainRenderTargetView stale (fix: recreate the render target on resize).
 }

@@ -72,11 +72,8 @@ SOCKET NetworkHostAcceptOne(unsigned short port, DWORD acceptTimeoutMs, DWORD io
     else
         Logf("republicmp  NETWORK: listening on :%u, waiting for a client (timeout %u ms)...", port, acceptTimeoutMs);
 
-    // accept() ignores SO_RCVTIMEO, so bound the wait via select() - in short
-    // polled steps (not one single select() call) so cancelFlag can be
-    // checked between them (see network.h's doc on this parameter).
-    // acceptTimeoutMs == 0 means "wait indefinitely for a client", as an
-    // unbounded number of poll steps rather than a single infinite select().
+    // accept() ignores SO_RCVTIMEO: wait with select() in short steps so the
+    // cancel flag is checked between them. acceptTimeoutMs == 0 = no limit.
     const DWORD pollStepMs = 200;
     DWORD waited = 0;
     for (;;) {
@@ -165,12 +162,8 @@ SOCKET NetworkConnect(const char* hostIp, unsigned short port, DWORD connectTime
             return INVALID_SOCKET;
         }
 
-        // Polled in short steps (not one single select() call) so cancelFlag
-        // can be checked between them (see network.h's doc on this
-        // parameter), spread across multiple selects() that together add
-        // up to connectTimeoutMs. writeSet/exceptSet declared outside the
-        // loop and re-checked with FD_ISSET right after it breaks, from the
-        // SAME select() call that reported success - not a second query.
+        // Polled in short steps so the cancel flag is checked; the result is read
+        // from the same select() call that reported completion.
         const DWORD pollStepMs = 200;
         DWORD waited = 0;
         fd_set writeSet;
@@ -211,9 +204,8 @@ SOCKET NetworkConnect(const char* hostIp, unsigned short port, DWORD connectTime
         }
 
         if (FD_ISSET(sock, &exceptSet)) {
-            // WSAGetLastError() is 0 here - select() itself succeeded, the
-            // actual connect failure is on the socket, via SO_ERROR (e.g.
-            // WSAECONNREFUSED=10061 - nobody listening on that port/IP).
+            // select() succeeded; the connect error itself is in SO_ERROR (e.g.
+            // WSAECONNREFUSED when nothing is listening).
             int soError = 0;
             int soErrorLen = sizeof(soError);
             getsockopt(sock, SOL_SOCKET, SO_ERROR, (char*)&soError, &soErrorLen);

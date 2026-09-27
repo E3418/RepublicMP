@@ -1,7 +1,6 @@
-// Diagnostic hook on C3D_TIMER (Start/Stop/MultiplyFPS) via IAT patching.
-// Logs which timer instance fires, to help identify the real simulation
-// clock. Superseded by game_speed.h for actual pause/speed control; kept
-// as diagnostic infrastructure.
+// Diagnostic IAT hooks on C3D_TIMER (Start/Stop/MultiplyFPS): logs which
+// timer instance fires and its caller RVA. Pause control itself lives in
+// game_speed.h.
 #pragma once
 
 #include "tesmio_plugin.h"
