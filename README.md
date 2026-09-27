@@ -9,9 +9,12 @@ everything either of them builds afterwards appears on both machines.
 
 ## Features
 
-1.**Save sync** - The joining player receives the host's current game (saved, zipped and sent automatically), loads it, and both sides resume together. 
-2.**Building sync** - Buildings land at the same position, rotation and mirror state, including buildings that create helper objects or lay their own access road or conveyor. 
+1. **Save sync** - The joining player receives the host's current game (saved, zipped and sent automatically), loads it, and both sides resume together. 
+
+2. **Building sync** - Buildings land at the same position, rotation and mirror state, including buildings that create helper objects or lay their own access road or conveyor. 
+
 3. **Infrastructure sync** - Roads (incl. one-way, bridges, tunnels), rails, footpaths, pipes, water and heating pipes, power lines, fences, conveyors, cableways and air roads are rebuilt exactly as drawn and joined to existing nodes and building connections. 
+
 4. **Upgrades** - Re-typing an existing road (e.g. gravel to panels) is synced.
 
 Not synced yet: demolition, factory connections, economy and simulation
