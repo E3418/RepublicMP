@@ -1,38 +1,74 @@
 // See save_sync.h.
 #include "save_sync.h"
+#include "../version.h"
 #include "../hooks/game_speed.h"
 #include "../hooks/save_load.h"
 #include "../save/save_zip.h"
 #include "../ui/ui_log.h"
 #include "../ui/sync_block.h"
+#include "../third_party/miniz/miniz.h" // mz_crc32 for the build check
 #include "network.h"
-#include "build_sync.h" // auto-start building sync right after the world loads - see the two call sites below
-#include "road_sync.h" // same auto-start treatment - roads/pipes ride along with building sync
+#include "build_sync.h"
+#include "road_sync.h"
+#include "terrain_sync.h"
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <time.h>
+#include <vector>
 
 #pragma comment(lib, "User32.lib")
 
 // Fixed local name for the downloaded zip and its extraction folder on the client.
 #define SAVE_SYNC_CLIENT_STAGING_NAME "mp_syncsave_incoming"
 
+// How long the live sync channels get to connect after the world is loaded.
+#define CHANNELS_CONNECT_TIMEOUT_MS 30000
+#define CHANNELS_RETRY_MS 1000
+
+#define JOIN_STEPS 7
+
 void SaveSync_Bind(const TsmHost* host)
 {
     TsmBind(host);
 }
 
-// Connection state. "Busy" spans the whole blocking flow, not just the connect.
-static volatile bool g_busy = false;
-static volatile bool g_isHost = false;
-static char g_targetIp[64] = SAVE_SYNC_TEST_HOST_IP; // client target - overridable from the UI, see SaveSync_StartClient
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
 
-// Set by SaveSync_RequestDisconnect; reset at the start of every run.
+static volatile SessionState g_state = SESSION_IDLE;
+static volatile bool g_isHost = false;
+static char g_targetIp[64] = SAVE_SYNC_TEST_HOST_IP; // client target - overridable from the UI
+static char g_peerIp[64] = "";
+static char g_lastError[256] = "";
+
+// Set by SaveSync_RequestDisconnect; reset at the start of every session.
 static volatile bool g_disconnectRequested = false;
 
-// True while a host is listening with no client connected (nothing paused).
-static volatile bool g_hostAwaitingClient = false;
+// The join connection in use, so Disconnect can break a blocking recv.
+static volatile SOCKET g_activeSock = INVALID_SOCKET;
+
+static void SetState(SessionState s) { g_state = s; }
+
+static void SetPeerIp(const char* ip)
+{
+    EnterCriticalSection(&g_lock);
+    strncpy_s(g_peerIp, ip ? ip : "", _TRUNCATE);
+    LeaveCriticalSection(&g_lock);
+}
+
+static void SetSessionError(const char* fmt, ...)
+{
+    char body[256];
+    va_list ap;
+    va_start(ap, fmt);
+    _vsnprintf_s(body, sizeof(body), _TRUNCATE, fmt, ap);
+    va_end(ap);
+    EnterCriticalSection(&g_lock);
+    strncpy_s(g_lastError, body, _TRUNCATE);
+    LeaveCriticalSection(&g_lock);
+}
 
 // Writes to tesmioloader.log and the in-game UI log.
 void SaveStatus(const char* fmt, ...)
@@ -43,101 +79,233 @@ void SaveStatus(const char* fmt, ...)
     _vsnprintf_s(body, sizeof(body), _TRUNCATE, fmt, ap);
     va_end(ap);
 
-    Logf("republicmp  STATUS: %s", body); // generic tag - save_sync.cpp and build_sync.cpp both call this
-    UiLog_Add(body); // same line also reaches the in-game overlay log (ui/main_menu.cpp) - one pipe, no other call site changed
+    Logf("republicmp  STATUS: %s", body);
+    UiLog_Add(body);
 }
 
-static int g_lastPercent = -1;
-static int g_lastLoggedDecile = -1;
-static const char* g_progressLabel = "progress";
+// ---------------------------------------------------------------------------
+// Build identity
+// ---------------------------------------------------------------------------
 
-// Progress label shown in the UI log, e.g. "sending the save: 40%".
-static void ResetProgressBar(const char* label)
+static unsigned int g_dllCrc = 0;
+static bool g_dllCrcDone = false;
+
+// CRC32 of this RepublicMP.dll file on disk: two players with the same file
+// have the same build, whatever its version string says.
+unsigned int SaveSync_GetLocalDllCrc()
 {
-    g_lastPercent = -1;
-    g_lastLoggedDecile = -1;
-    g_progressLabel = label;
-}
+    if (g_dllCrcDone) return g_dllCrc;
+    g_dllCrcDone = true;
 
-static void PrintProgressBar(unsigned long long done, unsigned long long total)
-{
-    if (total == 0) return;
-
-    int percent = (int)((done * 100) / total);
-
-    // Report in ~20% steps so the UI log is informative without flooding.
-    int decile = percent / 20;
-    if (decile != g_lastLoggedDecile) {
-        g_lastLoggedDecile = decile;
-        SaveStatus("%s: %d%%", g_progressLabel, percent);
+    HMODULE self = nullptr;
+    char path[MAX_PATH] = {};
+    if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            (LPCSTR)&SaveSync_GetLocalDllCrc, &self) ||
+        !GetModuleFileNameA(self, path, MAX_PATH)) {
+        Logf("republicmp  SESSION: couldn't locate RepublicMP.dll for the build check");
+        return 0;
     }
-
-    g_lastPercent = percent;
+    FILE* f = nullptr;
+    if (fopen_s(&f, path, "rb") != 0 || !f) {
+        Logf("republicmp  SESSION: couldn't read [%s] for the build check", path);
+        return 0;
+    }
+    std::vector<unsigned char> buf(64 * 1024);
+    mz_ulong crc = MZ_CRC32_INIT;
+    size_t n;
+    while ((n = fread(buf.data(), 1, buf.size(), f)) > 0)
+        crc = mz_crc32(crc, buf.data(), n);
+    fclose(f);
+    g_dllCrc = (unsigned int)crc;
+    Logf("republicmp  SESSION: this build: version %s, protocol %d, dll crc %08X",
+         REPUBLICMP_VERSION, REPUBLICMP_PROTOCOL, g_dllCrc);
+    return g_dllCrc;
 }
 
-// Status messages the client sends after the transfer (extracting/loading/ready).
-struct SaveSyncStatusMsg {
-    char text[64];
-    unsigned char isFinalReady; // 1 = "go ahead and unpause", this is the last message
+const char* SaveSync_GetLocalVersion() { return REPUBLICMP_VERSION; }
+
+// ---------------------------------------------------------------------------
+// Wire messages
+// ---------------------------------------------------------------------------
+
+struct SessionHello {
+    char magic[8];     // "RPMPSES"
+    int protocol;      // REPUBLICMP_PROTOCOL
+    char version[16];  // REPUBLICMP_VERSION
+    unsigned int dllCrc;
 };
 
-static void SendRemoteStatus(SOCKET sock, const char* text, bool isFinalReady)
+// Step reports in both directions after the hello.
+enum SessionMsgCode {
+    MSG_STEP = 0,        // step/percent/text update
+    MSG_FILE_FOLLOWS = 1, // host -> client: the save file comes next
+    MSG_READY = 2,       // client -> host: world loaded
+    MSG_ABORT = 3,       // either way: giving up, text says why
+};
+struct SessionMsg {
+    int code;
+    int step;
+    int percent;
+    char text[64];
+};
+
+static bool SendMsg(SOCKET sock, int code, int step, int percent, const char* text)
 {
-    SaveSyncStatusMsg msg = {};
-    strncpy_s(msg.text, text, _TRUNCATE);
-    msg.isFinalReady = isFinalReady ? 1 : 0;
-    NetworkSendExact(sock, &msg, sizeof(msg)); // best-effort - a dropped status line isn't fatal
+    SessionMsg m = {};
+    m.code = code;
+    m.step = step;
+    m.percent = percent;
+    strncpy_s(m.text, text ? text : "", _TRUNCATE);
+    return NetworkSendExact(sock, &m, sizeof(m));
 }
 
-// Logs SaveSyncStatusMsg-s from sock until "ready" arrives or the connection
-// drops. Returns true only if "ready" was received.
-static bool ReceiveRemoteStatusUntilReady(SOCKET sock)
+static bool RecvMsg(SOCKET sock, SessionMsg* m)
+{
+    if (!NetworkRecvExact(sock, m, sizeof(*m))) return false;
+    m->text[sizeof(m->text) - 1] = 0;
+    return true;
+}
+
+static void MakeHello(SessionHello* h)
+{
+    memset(h, 0, sizeof(*h));
+    memcpy(h->magic, "RPMPSES", 8);
+    h->protocol = REPUBLICMP_PROTOCOL;
+    strncpy_s(h->version, REPUBLICMP_VERSION, _TRUNCATE);
+    h->dllCrc = SaveSync_GetLocalDllCrc();
+}
+
+// Compares the peer's hello with ours; fills why on a mismatch.
+static bool HelloMatches(const SessionHello& peer, char* why, size_t whySize)
+{
+    if (memcmp(peer.magic, "RPMPSES", 8) != 0) {
+        _snprintf_s(why, whySize, _TRUNCATE, "the other side is not a compatible RepublicMP (old build?)");
+        return false;
+    }
+    char peerVersion[17] = {};
+    memcpy(peerVersion, peer.version, 16);
+    if (peer.protocol != REPUBLICMP_PROTOCOL || strcmp(peerVersion, REPUBLICMP_VERSION) != 0 ||
+        peer.dllCrc != SaveSync_GetLocalDllCrc()) {
+        _snprintf_s(why, whySize, _TRUNCATE,
+                    "different RepublicMP builds - yours %s (protocol %d, crc %08X), theirs %s (protocol %d, crc %08X). "
+                    "Both players need the same RepublicMP.dll",
+                    REPUBLICMP_VERSION, REPUBLICMP_PROTOCOL, SaveSync_GetLocalDllCrc(),
+                    peerVersion, peer.protocol, peer.dllCrc);
+        return false;
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Live sync channels
+// ---------------------------------------------------------------------------
+
+static bool AllChannelsConnected()
+{
+    return BuildSync_IsConnected() && RoadSync_IsConnected() && TerrainSync_IsConnected();
+}
+
+// Closes every channel, connected or still waiting for its peer.
+static void ResetChannels()
+{
+    BuildSync_Reset();
+    RoadSync_Reset();
+    TerrainSync_Reset();
+}
+
+static void StartChannelsHost()
+{
+    BuildSync_StartHost();
+    RoadSync_StartHost();
+    TerrainSync_StartHost();
+}
+
+// Re-tries every channel that is neither connected nor connecting (the host
+// may not be listening yet when the first attempt goes out).
+static void StartChannelsClient()
+{
+    if (!BuildSync_IsConnected() && !BuildSync_IsConnecting()) BuildSync_StartClient(g_targetIp);
+    if (!RoadSync_IsConnected() && !RoadSync_IsConnecting()) RoadSync_StartClient(g_targetIp);
+    if (!TerrainSync_IsConnected() && !TerrainSync_IsConnecting()) TerrainSync_StartClient(g_targetIp);
+}
+
+// Waits until all channels are up. Client side keeps re-trying.
+static bool WaitForChannels(bool client)
+{
+    ULONGLONG start = GetTickCount64();
+    ULONGLONG lastTry = 0;
+    while (!g_disconnectRequested) {
+        if (AllChannelsConnected()) return true;
+        ULONGLONG now = GetTickCount64();
+        if (now - start > CHANNELS_CONNECT_TIMEOUT_MS) return false;
+        if (client && now - lastTry >= CHANNELS_RETRY_MS) {
+            StartChannelsClient();
+            lastTry = now;
+        }
+        Sleep(100);
+    }
+    return false;
+}
+
+// Blocks while the session is live. Returns why it ended.
+static const char* MonitorLiveSession()
 {
     for (;;) {
-        SaveSyncStatusMsg msg = {};
-        if (!NetworkRecvExact(sock, &msg, sizeof(msg))) {
-            return false;
-        }
-        msg.text[sizeof(msg.text) - 1] = 0;
-        SaveStatus("[HOST] client: %s", msg.text);
-        if (msg.isFinalReady) {
-            return true;
-        }
+        if (g_disconnectRequested) return nullptr;
+        if (!BuildSync_IsConnected()) return "building sync connection lost";
+        if (!RoadSync_IsConnected()) return "road sync connection lost";
+        if (!TerrainSync_IsConnected()) return "terrain sync connection lost";
+        Sleep(200);
     }
 }
 
-static void NetworkProgressCb(unsigned long long done, unsigned long long total, void* /*userData*/)
+// ---------------------------------------------------------------------------
+// Progress
+// ---------------------------------------------------------------------------
+
+// Shared by the progress callbacks: the step's bar, plus (optionally) a
+// relay of the percentage to the other side every 10%.
+struct ProgressCtx {
+    SOCKET relaySock; // INVALID_SOCKET = do not relay
+    int step;
+    const char* text;
+    int lastRelayed;
+};
+
+static void OnProgress(ProgressCtx* ctx, unsigned long long done, unsigned long long total)
 {
-    PrintProgressBar(done, total);
+    if (total == 0) return;
+    int percent = (int)((done * 100) / total);
+    SyncBlock_SetPercent(percent);
+    if (ctx && ctx->relaySock != INVALID_SOCKET && percent / 10 != ctx->lastRelayed / 10) {
+        ctx->lastRelayed = percent;
+        SendMsg(ctx->relaySock, MSG_STEP, ctx->step, percent, ctx->text);
+    }
 }
 
-static void ZipProgressCb(size_t done, size_t total, void* /*userData*/)
+static void NetworkProgressCb(unsigned long long done, unsigned long long total, void* userData)
 {
-    PrintProgressBar((unsigned long long)done, (unsigned long long)total);
+    OnProgress((ProgressCtx*)userData, done, total);
 }
+
+static void ZipProgressCb(size_t done, size_t total, void* userData)
+{
+    OnProgress((ProgressCtx*)userData, (unsigned long long)done, (unsigned long long)total);
+}
+
+// ---------------------------------------------------------------------------
+// Paths
+// ---------------------------------------------------------------------------
 
 static bool GetGameSaveDir(char* outPath, size_t outSize, const char* saveName)
 {
     char exePath[MAX_PATH] = {};
     DWORD len = GetModuleFileNameA(g_exe, exePath, MAX_PATH);
-    if (len == 0 || len == MAX_PATH) {
-        SaveStatus("GetModuleFileNameA failed");
-        return false;
-    }
-
+    if (len == 0 || len == MAX_PATH) return false;
     char* lastSlash = strrchr(exePath, '\\');
-    if (!lastSlash) {
-        SaveStatus("no '\\' found in exe path [%s]", exePath);
-        return false;
-    }
+    if (!lastSlash) return false;
     *lastSlash = '\0';
-
-    int written = _snprintf_s(outPath, outSize, _TRUNCATE, "%s\\media_soviet\\save\\%s", exePath, saveName);
-    if (written < 0) {
-        SaveStatus("save path didn't fit in the buffer");
-        return false;
-    }
-    return true;
+    return _snprintf_s(outPath, outSize, _TRUNCATE, "%s\\media_soviet\\save\\%s", exePath, saveName) >= 0;
 }
 
 // A save name that will not collide with the player's own saves.
@@ -152,323 +320,407 @@ static void GenerateRandomSaveName(char* out, size_t outSize)
     _snprintf_s(out, outSize, _TRUNCATE, "mp_syncsave_%08x", tag);
 }
 
-static void RunHostSendSaveFlow()
+static void PeerIpOf(SOCKET sock, char* out, size_t outSize)
 {
-    // Nothing is paused or saved until a client actually connects; the game keeps
-    // running while the host is listening.
-    if (g_disconnectRequested) {
-        SaveStatus("[HOST] disconnect requested before starting, aborting");
-        return;
-    }
+    sockaddr_in addr = {};
+    int len = sizeof(addr);
+    out[0] = 0;
+    if (getpeername(sock, (sockaddr*)&addr, &len) == 0)
+        inet_ntop(AF_INET, &addr.sin_addr, out, outSize);
+}
 
-    SaveStatus("[HOST] listening on port %d - waiting for a player to connect "
-               "(game keeps running, nothing paused yet)...", SAVE_SYNC_PORT);
+// ---------------------------------------------------------------------------
+// Host
+// ---------------------------------------------------------------------------
 
-    if (!NetworkInit()) {
-        SaveStatus("[HOST] network init failed, aborting");
-        return;
-    }
+static void HostStep(SOCKET sock, int step, const char* text, int percent = -1)
+{
+    SyncBlock_SetStep(step, JOIN_STEPS, text, percent);
+    SaveStatus("[HOST] step %d/%d: %s", step, JOIN_STEPS, text);
+    (void)sock;
+}
 
-    // acceptTimeoutMs = 0: wait for a client as long as it takes (cancellable).
-    // ioTimeoutMs = 0: the client may take a while to extract and load the save.
-    g_hostAwaitingClient = true;
-    SOCKET sock = NetworkHostAcceptOne(SAVE_SYNC_PORT, 0, 0, &g_disconnectRequested);
-    g_hostAwaitingClient = false;
-
-    if (sock == INVALID_SOCKET) {
-        if (g_disconnectRequested) {
-            SaveStatus("[HOST] closed - no player connected");
-        } else {
-            SaveStatus("[HOST] listening failed, aborting");
-        }
-        return;
-    }
-
-    // A client connected: pause, save, zip and send the current game.
-    SaveStatus("[HOST] a player connected - pausing and preparing the save...");
-    SyncBlock_SetActive(true, "Preparing save for the new player...");
+// One join, from the accepted connection to the lifted sync screen. The
+// caller's session loop decides what happens next. Returns true when the
+// player is in the game with all channels up.
+static bool RunHostJoin(SOCKET sock)
+{
+    g_activeSock = sock;
+    SyncBlock_SetActive(true, "A player is connecting");
     EnsureGamePaused();
+    bool joined = false;
 
-    char liveSaveName[64];
-    GenerateRandomSaveName(liveSaveName, sizeof(liveSaveName));
+    do {
+        // 1. Versions.
+        HostStep(sock, 1, "A player is connecting - checking versions");
+        SessionHello mine, theirs;
+        MakeHello(&mine);
+        if (!NetworkRecvExact(sock, &theirs, sizeof(theirs))) {
+            SetSessionError("the player dropped during the version check");
+            break;
+        }
+        NetworkSendExact(sock, &mine, sizeof(mine)); // always, so the client can show what differs
+        char why[256];
+        if (!HelloMatches(theirs, why, sizeof(why))) {
+            SetSessionError("join refused: %s", why);
+            SaveStatus("[HOST] join refused: %s", why);
+            break;
+        }
 
-    char saveDir[MAX_PATH] = {};
-    char zipPath[MAX_PATH] = {};
-    bool haveSaveDir = false;
-
-    if (!GetGameSaveDir(saveDir, sizeof(saveDir), liveSaveName)) {
-        NetworkCloseSocket(sock);
-        SyncBlock_SetActive(false, nullptr);
-        EnsureGameUnpaused();
-        return;
-    }
-
-    if (g_disconnectRequested) {
-        SaveStatus("[HOST] disconnected, aborting");
-        NetworkCloseSocket(sock);
-        SyncBlock_SetActive(false, nullptr);
-        EnsureGameUnpaused();
-        return;
-    }
-
-    // The engine's save writer does not create the destination folder (the Save
-    // menu does that separately), so create it before triggering the save.
-    if (!CreateDirectoryA(saveDir, nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) {
-        SaveStatus("[HOST] couldn't create save folder '%s' (error %lu), aborting", saveDir, GetLastError());
-        NetworkCloseSocket(sock);
-        SyncBlock_SetActive(false, nullptr);
-        EnsureGameUnpaused();
-        return;
-    }
-
-    if (TriggerSaveGame(liveSaveName)) {
-        SaveStatus("[HOST] saving current game as '%s'...", liveSaveName);
+        // 2. Save.
+        char liveSaveName[64];
+        GenerateRandomSaveName(liveSaveName, sizeof(liveSaveName));
+        char saveDir[MAX_PATH] = {};
+        if (!GetGameSaveDir(saveDir, sizeof(saveDir), liveSaveName)) {
+            SetSessionError("couldn't build the save path");
+            SendMsg(sock, MSG_ABORT, 0, -1, "host couldn't save the world");
+            break;
+        }
+        HostStep(sock, 2, "Saving the world");
+        SendMsg(sock, MSG_STEP, 2, -1, "saving the world");
+        // The engine's save writer does not create the destination folder.
+        if (!CreateDirectoryA(saveDir, nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) {
+            SetSessionError("couldn't create the save folder (error %lu)", GetLastError());
+            SendMsg(sock, MSG_ABORT, 0, -1, "host couldn't save the world");
+            break;
+        }
+        TriggerSaveGame(liveSaveName);
         if (!WaitForSaveToFinish(0, &g_disconnectRequested)) {
-            SaveStatus("[HOST] disconnected while saving, aborting");
-            NetworkCloseSocket(sock);
-            SyncBlock_SetActive(false, nullptr);
-            EnsureGameUnpaused();
-            return;
+            SendMsg(sock, MSG_ABORT, 0, -1, "host stopped hosting");
+            break;
         }
-        haveSaveDir = true;
-    } else {
-        // Fallback: send the existing test save instead of a fresh snapshot.
-        SaveStatus("[HOST] no live-save hook yet - sending the existing '%s' save instead", SAVE_SYNC_TEST_SAVE_NAME);
-        haveSaveDir = GetGameSaveDir(saveDir, sizeof(saveDir), SAVE_SYNC_TEST_SAVE_NAME);
-    }
 
-    if (!haveSaveDir) {
-        NetworkCloseSocket(sock);
-        SyncBlock_SetActive(false, nullptr);
-        EnsureGameUnpaused();
-        return;
-    }
-    _snprintf_s(zipPath, sizeof(zipPath), _TRUNCATE, "%s.republicmp.zip", saveDir);
+        // 3. Pack.
+        char zipPath[MAX_PATH] = {};
+        _snprintf_s(zipPath, sizeof(zipPath), _TRUNCATE, "%s.republicmp.zip", saveDir);
+        HostStep(sock, 3, "Packing the save", 0);
+        SendMsg(sock, MSG_STEP, 3, 0, "packing the save");
+        ProgressCtx packCtx = { sock, 3, "packing the save", -100 };
+        if (!ZipSaveDirectory(saveDir, zipPath, ZipProgressCb, &packCtx)) {
+            SetSessionError("packing the save failed");
+            SendMsg(sock, MSG_ABORT, 0, -1, "host couldn't pack the save");
+            break;
+        }
+        if (g_disconnectRequested) {
+            SendMsg(sock, MSG_ABORT, 0, -1, "host stopped hosting");
+            break;
+        }
 
-    if (g_disconnectRequested) {
-        SaveStatus("[HOST] disconnected, aborting");
-        NetworkCloseSocket(sock);
-        SyncBlock_SetActive(false, nullptr);
-        EnsureGameUnpaused();
-        return;
-    }
+        // 4. Send.
+        HostStep(sock, 4, "Sending the world to the player", 0);
+        SendMsg(sock, MSG_FILE_FOLLOWS, 4, -1, "");
+        ProgressCtx sendCtx = { INVALID_SOCKET, 4, nullptr, 0 };
+        if (!NetworkSendFile(sock, zipPath, NetworkProgressCb, &sendCtx)) {
+            SetSessionError("sending the save failed - connection lost");
+            break;
+        }
 
-    SaveStatus("[HOST] zipping the save...");
-    ResetProgressBar("zipping the save");
-    if (!ZipSaveDirectory(saveDir, zipPath, ZipProgressCb)) {
-        SaveStatus("[HOST] zip failed, aborting");
-        NetworkCloseSocket(sock);
-        SyncBlock_SetActive(false, nullptr);
-        EnsureGameUnpaused();
-        return;
-    }
-
-    if (g_disconnectRequested) {
-        SaveStatus("[HOST] disconnected, aborting");
-        NetworkCloseSocket(sock);
-        SyncBlock_SetActive(false, nullptr);
-        EnsureGameUnpaused();
-        return;
-    }
-
-    SaveStatus("[HOST] save packaged as '%s' - sending to the connected player...", liveSaveName);
-    SyncBlock_SetActive(true, "Sending save to the new player...");
-    ResetProgressBar("sending the save");
-    bool ok = NetworkSendFile(sock, zipPath, NetworkProgressCb);
-
-    if (ok) {
-        // Wait until the client reports it has loaded so both sides resume together.
-        SaveStatus("[HOST] waiting for the client to finish loading...");
-        if (ReceiveRemoteStatusUntilReady(sock)) {
-            SaveStatus("[HOST] client is ready, unpausing");
-
-            // The client's world is loaded - start building and road sync with the same
-            // role/IP (no-op if already connected).
-            if (!g_disconnectRequested) {
-                BuildSync_StartHost();
-                RoadSync_StartHost();
+        // 5-6. The player unpacks and loads; its steps arrive as messages.
+        HostStep(sock, 5, "Waiting for the player - unpacking", 0);
+        bool ready = false;
+        for (;;) {
+            SessionMsg m;
+            if (!RecvMsg(sock, &m)) {
+                SetSessionError("the player dropped while loading");
+                break;
             }
-        } else {
-            SaveStatus("[HOST] never heard back from the client (timed out/disconnected) - unpausing anyway");
+            if (m.code == MSG_READY) { ready = true; break; }
+            if (m.code == MSG_ABORT) {
+                SetSessionError("the player gave up: %s", m.text);
+                SaveStatus("[HOST] the player gave up: %s", m.text);
+                break;
+            }
+            if (m.code == MSG_STEP) {
+                char text[96];
+                _snprintf_s(text, sizeof(text), _TRUNCATE, "Waiting for the player - %s", m.text);
+                if (m.step == 5) SyncBlock_SetStep(5, JOIN_STEPS, text, m.percent);
+                else HostStep(sock, m.step, text, m.percent);
+            }
         }
-    }
+        if (!ready) break;
 
+        // 7. Live sync channels.
+        HostStep(sock, 7, "Starting live sync");
+        StartChannelsHost();
+        if (!WaitForChannels(false)) {
+            if (!g_disconnectRequested) SetSessionError("the live sync channels didn't connect");
+            ResetChannels();
+            break;
+        }
+        joined = true;
+    } while (false);
+
+    g_activeSock = INVALID_SOCKET;
     NetworkCloseSocket(sock);
     SyncBlock_SetActive(false, nullptr);
     EnsureGameUnpaused();
-
-    SaveStatus("[HOST] done, success=%d", ok);
+    return joined;
 }
 
-static void RunClientReceiveSaveFlow()
+static void RunHostSession()
 {
-    if (g_disconnectRequested) {
-        SaveStatus("[CLIENT] disconnect requested before starting, aborting");
+    if (!NetworkInit()) {
+        SetSessionError("network init failed");
         return;
     }
 
-    SaveStatus("[CLIENT] connecting - pausing...");
-    // Connect is the join request: the client is blocked from here on.
-    SyncBlock_SetActive(true, "Connecting to host...");
+    while (!g_disconnectRequested) {
+        SetState(SESSION_HOST_LISTENING);
+        SetPeerIp("");
+        SaveStatus("[HOST] hosting on port %d - waiting for a player (the game keeps running)", SAVE_SYNC_PORT);
 
-    char saveDir[MAX_PATH] = {};
-    if (!GetGameSaveDir(saveDir, sizeof(saveDir), SAVE_SYNC_CLIENT_STAGING_NAME)) {
-        SyncBlock_SetActive(false, nullptr);
-        return;
+        // No accept timeout (cancellable); no I/O timeout - the player may
+        // take a while to unpack and load.
+        SOCKET sock = NetworkHostAcceptOne(SAVE_SYNC_PORT, 0, 0, &g_disconnectRequested);
+        if (sock == INVALID_SOCKET) {
+            if (!g_disconnectRequested) SetSessionError("couldn't listen on port %d (already in use?)", SAVE_SYNC_PORT);
+            break;
+        }
+
+        char peer[64];
+        PeerIpOf(sock, peer, sizeof(peer));
+        SetPeerIp(peer);
+        SetState(SESSION_HOST_JOINING);
+        SetSessionError("");
+        SaveStatus("[HOST] %s is joining - both games are paused until it is loaded", peer);
+
+        if (!RunHostJoin(sock)) {
+            if (g_disconnectRequested) break;
+            SaveStatus("[HOST] the join failed (%s) - waiting for a player again", SaveSync_GetLastError());
+            continue;
+        }
+
+        SetState(SESSION_HOST_IN_GAME);
+        SaveStatus("[HOST] %s is in the game - live sync running", peer);
+        const char* why = MonitorLiveSession();
+        ResetChannels();
+        if (!why) break; // Stop hosting
+        SetSessionError("%s left: %s", peer, why);
+        SaveStatus("[HOST] %s left (%s) - waiting for a player again", peer, why);
     }
 
-    char zipPath[MAX_PATH] = {};
-    _snprintf_s(zipPath, sizeof(zipPath), _TRUNCATE, "%s.republicmp.zip", saveDir);
+    ResetChannels();
+    SetPeerIp("");
+    SaveStatus("[HOST] stopped hosting");
+}
 
-    char destDir[MAX_PATH] = {};
-    _snprintf_s(destDir, sizeof(destDir), _TRUNCATE, "%s%s", saveDir, SAVE_SYNC_RECEIVED_SUFFIX);
+// ---------------------------------------------------------------------------
+// Client
+// ---------------------------------------------------------------------------
 
+static void ClientStep(int step, const char* text, int percent = -1)
+{
+    SyncBlock_SetStep(step, JOIN_STEPS, text, percent);
+    SaveStatus("[CLIENT] step %d/%d: %s", step, JOIN_STEPS, text);
+}
+
+// Returns true when the player is in the host's game with all channels up.
+static bool RunClientJoin()
+{
+    SyncBlock_SetActive(true, "Connecting to the host");
     EnsureGamePaused();
 
-    if (!NetworkInit()) {
-        SaveStatus("[CLIENT] network init failed, aborting");
-        SyncBlock_SetActive(false, nullptr);
-        EnsureGameUnpaused();
-        return;
-    }
+    SOCKET sock = INVALID_SOCKET;
+    bool joined = false;
 
-    SaveStatus("[CLIENT] connecting to host %s:%d...", g_targetIp, SAVE_SYNC_PORT);
-    // ioTimeoutMs = 0: status messages follow the extract+load, which can take a
-    // while. The connect wait is cancellable (~200ms).
-    SOCKET sock = NetworkConnect(g_targetIp, SAVE_SYNC_PORT, 15000, 0, &g_disconnectRequested);
-    if (sock == INVALID_SOCKET) {
-        SaveStatus("[CLIENT] couldn't connect, aborting");
-        SyncBlock_SetActive(false, nullptr);
-        EnsureGameUnpaused();
-        return;
-    }
-
-    if (g_disconnectRequested) {
-        SaveStatus("[CLIENT] disconnected right after connecting, closing and aborting");
-        NetworkCloseSocket(sock);
-        SyncBlock_SetActive(false, nullptr);
-        EnsureGameUnpaused();
-        return;
-    }
-
-    SyncBlock_SetActive(true, "Receiving save from host...");
-
-    SaveStatus("[CLIENT] connected, receiving...");
-    ResetProgressBar("receiving the save");
-    bool ok = NetworkReceiveFile(sock, zipPath, NetworkProgressCb);
-    // The socket stays open for the final "ready" message.
-
-    if (ok) {
-        SaveStatus("[CLIENT] extracting...");
-        SendRemoteStatus(sock, "extracting the save...", false);
-        ResetProgressBar("extracting the save");
-        ok = UnzipToDirectory(zipPath, destDir, ZipProgressCb);
-        if (!ok) {
-            SendRemoteStatus(sock, "extraction failed, giving up", true);
+    do {
+        char saveDir[MAX_PATH] = {};
+        if (!GetGameSaveDir(saveDir, sizeof(saveDir), SAVE_SYNC_CLIENT_STAGING_NAME)) {
+            SetSessionError("couldn't build the save path");
+            break;
         }
-    }
+        char zipPath[MAX_PATH] = {};
+        _snprintf_s(zipPath, sizeof(zipPath), _TRUNCATE, "%s.republicmp.zip", saveDir);
+        char destDir[MAX_PATH] = {};
+        _snprintf_s(destDir, sizeof(destDir), _TRUNCATE, "%s%s", saveDir, SAVE_SYNC_RECEIVED_SUFFIX);
 
-    if (ok && g_disconnectRequested) {
-        SaveStatus("[CLIENT] disconnected after extraction, not loading");
-        SendRemoteStatus(sock, "cancelled by the player, not loading", true);
-        ok = false;
-    }
+        // 1. Connect + versions.
+        ClientStep(1, "Connecting to the host - checking versions");
+        if (!NetworkInit()) {
+            SetSessionError("network init failed");
+            break;
+        }
+        sock = NetworkConnect(g_targetIp, SAVE_SYNC_PORT, 15000, 0, &g_disconnectRequested);
+        if (sock == INVALID_SOCKET) {
+            if (!g_disconnectRequested)
+                SetSessionError("couldn't reach %s:%d - is the host hosting (and not already playing with someone)? is the IP right?", g_targetIp, SAVE_SYNC_PORT);
+            break;
+        }
+        g_activeSock = sock;
+        SessionHello mine, theirs;
+        MakeHello(&mine);
+        if (!NetworkSendExact(sock, &mine, sizeof(mine)) || !NetworkRecvExact(sock, &theirs, sizeof(theirs))) {
+            SetSessionError("the host dropped during the version check (old build, or already has a player?)");
+            break;
+        }
+        char why[256];
+        if (!HelloMatches(theirs, why, sizeof(why))) {
+            SetSessionError("join refused: %s", why);
+            SaveStatus("[CLIENT] join refused: %s", why);
+            break;
+        }
 
-    if (ok) {
+        // 2-3. The host saves and packs; its steps arrive as messages.
+        ClientStep(2, "Waiting for the host - saving the world");
+        bool fileFollows = false;
+        for (;;) {
+            SessionMsg m;
+            if (!RecvMsg(sock, &m)) {
+                SetSessionError("the host dropped while preparing the world");
+                break;
+            }
+            if (m.code == MSG_FILE_FOLLOWS) { fileFollows = true; break; }
+            if (m.code == MSG_ABORT) {
+                SetSessionError("the host gave up: %s", m.text);
+                break;
+            }
+            if (m.code == MSG_STEP) {
+                char text[96];
+                _snprintf_s(text, sizeof(text), _TRUNCATE, "Waiting for the host - %s", m.text);
+                SyncBlock_SetStep(m.step, JOIN_STEPS, text, m.percent);
+            }
+        }
+        if (!fileFollows) break;
+
+        // 4. Receive.
+        ClientStep(4, "Receiving the world", 0);
+        ProgressCtx recvCtx = { INVALID_SOCKET, 4, nullptr, 0 };
+        if (!NetworkReceiveFile(sock, zipPath, NetworkProgressCb, &recvCtx)) {
+            SetSessionError("receiving the world failed - connection lost");
+            break;
+        }
+
+        // 5. Unpack (relayed to the host).
+        ClientStep(5, "Unpacking", 0);
+        SendMsg(sock, MSG_STEP, 5, 0, "unpacking");
+        ProgressCtx unpackCtx = { sock, 5, "unpacking", -100 };
+        if (!UnzipToDirectory(zipPath, destDir, ZipProgressCb, &unpackCtx)) {
+            SetSessionError("unpacking the world failed");
+            SendMsg(sock, MSG_ABORT, 0, -1, "unpacking failed");
+            break;
+        }
+        if (g_disconnectRequested) {
+            SendMsg(sock, MSG_ABORT, 0, -1, "the player cancelled");
+            break;
+        }
+
+        // 6. Load.
+        ClientStep(6, "Loading the world");
+        SendMsg(sock, MSG_STEP, 6, -1, "loading the world");
         char receivedSaveName[MAX_PATH] = {};
         _snprintf_s(receivedSaveName, sizeof(receivedSaveName), _TRUNCATE, "%s%s",
                     SAVE_SYNC_CLIENT_STAGING_NAME, SAVE_SYNC_RECEIVED_SUFFIX);
         TriggerLoadSave(receivedSaveName);
-
-        SaveStatus("[CLIENT] waiting for the game to finish loading...");
-        SendRemoteStatus(sock, "loading into the world...", false);
-        // No timeout; Disconnect stops the wait (not the load already triggered).
-        bool loaded = WaitForLoadToFinish(0, &g_disconnectRequested);
-        if (loaded) {
-            SaveStatus("[CLIENT] load finished");
-
-            // World loaded - start building and road sync (no-op if already connected).
-            if (!g_disconnectRequested) {
-                BuildSync_StartClient(g_targetIp);
-                RoadSync_StartClient(g_targetIp);
-            }
-
-            // Tell the host it can unpause, so both sides resume together.
-            SendRemoteStatus(sock, "loaded, ready", true);
-        } else {
-            SaveStatus("[CLIENT] disconnected while waiting for the load to finish");
-            SendRemoteStatus(sock, "cancelled by the player while loading", true);
+        if (!WaitForLoadToFinish(0, &g_disconnectRequested)) {
+            SendMsg(sock, MSG_ABORT, 0, -1, "the player cancelled while loading");
+            break;
         }
-    }
 
-    NetworkCloseSocket(sock);
+        // 7. Ready -> the host starts listening on the channels; connect them.
+        ClientStep(7, "Starting live sync");
+        SendMsg(sock, MSG_READY, 7, -1, "");
+        if (!WaitForChannels(true)) {
+            if (!g_disconnectRequested) SetSessionError("the live sync channels didn't connect");
+            ResetChannels();
+            break;
+        }
+        joined = true;
+    } while (false);
+
+    g_activeSock = INVALID_SOCKET;
+    if (sock != INVALID_SOCKET) NetworkCloseSocket(sock);
     SyncBlock_SetActive(false, nullptr);
     EnsureGameUnpaused();
-
-    SaveStatus("[CLIENT] done, success=%d, extracted to [%s]", ok, destDir);
+    return joined;
 }
 
-// Entry points for the UI; g_busy prevents two overlapping runs.
-
-static DWORD WINAPI HostFlowThread(LPVOID)
+static void RunClientSession()
 {
-    RunHostSendSaveFlow();
-    g_busy = false;
+    SetPeerIp(g_targetIp);
+    SetState(SESSION_CLIENT_JOINING);
+    if (!RunClientJoin()) {
+        ResetChannels();
+        if (g_disconnectRequested) SaveStatus("[CLIENT] cancelled");
+        else SaveStatus("[CLIENT] couldn't join: %s", SaveSync_GetLastError());
+        return;
+    }
+
+    SetState(SESSION_CLIENT_IN_GAME);
+    SaveStatus("[CLIENT] in the game at %s - live sync running", g_targetIp);
+    const char* why = MonitorLiveSession();
+    ResetChannels();
+    if (why) {
+        SetSessionError("disconnected from the host: %s", why);
+        SaveStatus("[CLIENT] disconnected from the host (%s)", why);
+    } else {
+        SaveStatus("[CLIENT] left the session");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Entry points
+// ---------------------------------------------------------------------------
+
+static DWORD WINAPI HostSessionThread(LPVOID)
+{
+    RunHostSession();
+    SetState(SESSION_IDLE);
     return 0;
 }
 
-static DWORD WINAPI ClientFlowThread(LPVOID)
+static DWORD WINAPI ClientSessionThread(LPVOID)
 {
-    RunClientReceiveSaveFlow();
-    g_busy = false;
+    RunClientSession();
+    SetPeerIp("");
+    SetState(SESSION_IDLE);
     return 0;
 }
 
 void SaveSync_StartHost()
 {
-    if (g_busy) return;
-    g_disconnectRequested = false; // fresh run - don't inherit a stale cancel from a previous disconnected session
+    if (g_state != SESSION_IDLE) return;
+    g_disconnectRequested = false;
     g_isHost = true;
-    g_busy = true;
-    CreateThread(nullptr, 0, HostFlowThread, nullptr, 0, nullptr);
+    SetSessionError("");
+    SetState(SESSION_HOST_LISTENING);
+    CreateThread(nullptr, 0, HostSessionThread, nullptr, 0, nullptr);
 }
 
 void SaveSync_StartClient(const char* hostIp)
 {
-    if (g_busy) return;
-    g_disconnectRequested = false; // see SaveSync_StartHost() above
+    if (g_state != SESSION_IDLE) return;
+    g_disconnectRequested = false;
     if (hostIp && hostIp[0]) {
         strncpy_s(g_targetIp, hostIp, _TRUNCATE);
     }
     g_isHost = false;
-    g_busy = true;
-    CreateThread(nullptr, 0, ClientFlowThread, nullptr, 0, nullptr);
+    SetSessionError("");
+    SetState(SESSION_CLIENT_JOINING);
+    CreateThread(nullptr, 0, ClientSessionThread, nullptr, 0, nullptr);
 }
 
 void SaveSync_RequestDisconnect()
 {
-    // Disconnect leaves the whole session: close the build and road sync
-    // connections too, which outlive the save-sync run itself.
-    if (BuildSync_IsConnected() || BuildSync_IsConnecting()) {
-        BuildSync_Reset();
-    }
-    if (RoadSync_IsConnected() || RoadSync_IsConnecting()) {
-        RoadSync_Reset();
-    }
-
-    if (!g_busy) {
-        SaveStatus("[DISCONNECT] nothing running");
+    if (g_state == SESSION_IDLE) {
+        // Channels opened by hand from the Debug window.
+        ResetChannels();
         return;
     }
-
-    SaveStatus("[DISCONNECT] requested - stopping at the next safe point "
-               "(reacts within ~200ms almost everywhere now, including while "
-               "listening/connecting - see network.h's NetworkHostAcceptOne/"
-               "NetworkConnect cancelFlag)");
+    SaveStatus(g_isHost ? "[HOST] stopping..." : "[CLIENT] disconnecting...");
     g_disconnectRequested = true;
+    // Wakes a blocking recv on the join connection (closed by its owner).
+    SOCKET s = g_activeSock;
+    if (s != INVALID_SOCKET) shutdown(s, SD_BOTH);
+    ResetChannels();
 }
 
-bool SaveSync_IsBusy()      { return g_busy; }
-bool SaveSync_IsHostRole()  { return g_isHost; }
-bool SaveSync_IsHostAwaitingClient() { return g_hostAwaitingClient; }
+SessionState SaveSync_GetState() { return g_state; }
+bool SaveSync_IsBusy()           { return g_state != SESSION_IDLE; }
+bool SaveSync_IsHostRole()       { return g_isHost; }
+bool SaveSync_IsHostAwaitingClient() { return g_state == SESSION_HOST_LISTENING; }
 const char* SaveSync_GetTargetIp() { return g_targetIp; }
+
+// The returned buffers are only ever rewritten whole by the session thread;
+// the UI reads them once per frame.
+const char* SaveSync_GetPeerIp()    { return g_peerIp; }
+const char* SaveSync_GetLastError() { return g_lastError; }

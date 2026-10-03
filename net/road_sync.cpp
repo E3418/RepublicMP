@@ -3,6 +3,7 @@
 #include "network.h"
 #include "../ui/debug_log.h"
 #include "../hooks/detect_spawn.h" // DetectSpawn_IsToolDragActive, g_origRoadCommit
+#include "terrain_sync.h"            // TerrainSync_Begin/EndForeignReplay
 #include <vector>
 #include <stdio.h>
 #include <stdarg.h>
@@ -477,7 +478,11 @@ static bool ApplySegmentImpl(const RoadSyncSegment& seg, bool* outEngineAccepted
 static bool ApplySegment(const RoadSyncSegment& seg, bool* outEngineAccepted)
 {
     InterlockedIncrement(&g_applyingSegment);
+    // The sender's terrain deformation arrives over terrain sync; the
+    // replay's own would apply it a second time.
+    TerrainSync_BeginForeignReplay();
     bool result = ApplySegmentImpl(seg, outEngineAccepted);
+    TerrainSync_EndForeignReplay();
     InterlockedDecrement(&g_applyingSegment);
     return result;
 }
@@ -594,10 +599,12 @@ static int ApplyUpgrade(const RoadSyncUpgradeMsg& msg)
 
     HoverGlobals_Clear();
     InterlockedIncrement(&g_applyingSegment);
+    TerrainSync_BeginForeignReplay();
     int applied = 0;
     for (int i = 0; i < msg.pieceCount; i++) {
         if (ApplyUpgradePiece(msg.category, msg, msg.pieces[i])) applied++;
     }
+    TerrainSync_EndForeignReplay();
     InterlockedDecrement(&g_applyingSegment);
     return applied;
 }
@@ -616,6 +623,8 @@ struct RoadSyncItem {
 
 static volatile bool g_connected = false;
 static volatile bool g_connecting = false;
+// Set by Reset to abandon a pending accept/connect (polled every ~200ms).
+static volatile bool g_cancelConnect = false;
 static volatile bool g_isHost = false;
 static SOCKET g_sock = INVALID_SOCKET;
 static char g_targetIp[64] = ROAD_SYNC_TEST_HOST_IP;
@@ -732,7 +741,12 @@ static DWORD WINAPI HostAcceptWorkerThread(LPVOID)
         g_connecting = false;
         return 0;
     }
-    SOCKET sock = NetworkHostAcceptOne(ROAD_SYNC_PORT, 300000, 30000);
+    SOCKET sock = NetworkHostAcceptOne(ROAD_SYNC_PORT, 300000, 30000, &g_cancelConnect);
+    if (sock == INVALID_SOCKET && g_cancelConnect) {
+        RoadSyncStatus("[ROAD_SYNC] stopped waiting for the connection");
+        g_connecting = false;
+        return 0;
+    }
     if (sock == INVALID_SOCKET) {
         RoadSyncStatus("[ROAD_SYNC] no client connected within 5 min, aborting - press Host##rs again to retry");
         g_connecting = false;
@@ -752,7 +766,12 @@ static DWORD WINAPI ClientConnectWorkerThread(LPVOID)
         g_connecting = false;
         return 0;
     }
-    SOCKET sock = NetworkConnect(g_targetIp, ROAD_SYNC_PORT, 15000, 30000);
+    SOCKET sock = NetworkConnect(g_targetIp, ROAD_SYNC_PORT, 15000, 30000, &g_cancelConnect);
+    if (sock == INVALID_SOCKET && g_cancelConnect) {
+        RoadSyncStatus("[ROAD_SYNC] stopped waiting for the connection");
+        g_connecting = false;
+        return 0;
+    }
     if (sock == INVALID_SOCKET) {
         RoadSyncStatus("[ROAD_SYNC] couldn't connect - is the host listening (Host##rs)? Is the IP right? - press Connect##rs again to retry");
         g_connecting = false;
@@ -768,6 +787,7 @@ void RoadSync_StartHost()
 {
     if (g_connected || g_connecting) return;
     g_isHost = true;
+    g_cancelConnect = false;
     g_connecting = true;
     CreateThread(nullptr, 0, HostAcceptWorkerThread, nullptr, 0, nullptr);
 }
@@ -779,12 +799,14 @@ void RoadSync_StartClient(const char* hostIp)
         strncpy_s(g_targetIp, hostIp, _TRUNCATE);
     }
     g_isHost = false;
+    g_cancelConnect = false;
     g_connecting = true;
     CreateThread(nullptr, 0, ClientConnectWorkerThread, nullptr, 0, nullptr);
 }
 
 void RoadSync_Reset()
 {
+    if (g_connecting) g_cancelConnect = true;
     if (g_connected) {
         RoadSyncStatus("[ROAD_SYNC] connection reset by user");
         CloseConnection();
@@ -864,6 +886,7 @@ int RoadSync_SendSegment(const RoadSyncSegment& seg)
     memset(&s_item, 0, sizeof(s_item));
     s_item.tag = ROAD_SYNC_WIRE_SEGMENT;
     s_item.seg.seg = seg;
+    s_item.seg.terrainFence = TerrainSync_GetFenceSeq();
     return SendOrQueue(s_item);
 }
 
@@ -877,6 +900,7 @@ int RoadSync_SendUpgrade(const RoadSyncUpgradeMsg& up)
     memset(&s_item, 0, sizeof(s_item));
     s_item.tag = ROAD_SYNC_WIRE_UPGRADE;
     s_item.up = up;
+    s_item.up.terrainFence = TerrainSync_GetFenceSeq();
     return SendOrQueue(s_item);
 }
 
@@ -886,6 +910,26 @@ int RoadSync_SendUpgrade(const RoadSyncUpgradeMsg& up)
 
 static std::vector<RoadSyncItem> g_pending;
 static bool g_warnedWorldNotLoaded = false;
+static ULONGLONG g_fenceWaitStartMs = 0; // when the head item started waiting for its terrain fence
+
+// True when the item may be applied now: its terrain fence is reached, or it
+// has waited ROAD_SYNC_FENCE_TIMEOUT_MS for it.
+static bool TerrainFenceAllows(const RoadSyncItem& item)
+{
+    int fence = item.tag == ROAD_SYNC_WIRE_UPGRADE ? item.up.terrainFence : item.seg.terrainFence;
+    if (TerrainSync_FenceReached(fence)) {
+        if (g_fenceWaitStartMs)
+            Logf("republicmp  ROAD_SYNC: terrain fence %d reached after %llums", fence, GetTickCount64() - g_fenceWaitStartMs);
+        g_fenceWaitStartMs = 0;
+        return true;
+    }
+    ULONGLONG now = GetTickCount64();
+    if (!g_fenceWaitStartMs) g_fenceWaitStartMs = now;
+    if (now - g_fenceWaitStartMs < ROAD_SYNC_FENCE_TIMEOUT_MS) return false;
+    Logf("republicmp  ROAD_SYNC: terrain fence %d not reached after %dms - applying anyway", fence, ROAD_SYNC_FENCE_TIMEOUT_MS);
+    g_fenceWaitStartMs = 0;
+    return true;
+}
 
 static void SendAck(int seq, int category, bool success, int attempts)
 {
@@ -979,7 +1023,7 @@ void RoadSync_Tick()
     std::vector<RoadSyncItem> toApply;
     toApply.swap(g_pending);
     for (size_t i = 0; i < toApply.size(); i++) {
-        if (DetectSpawn_IsToolDragActive() || ToolWrapperGuardBusy(thisPtr)) {
+        if (DetectSpawn_IsToolDragActive() || ToolWrapperGuardBusy(thisPtr) || !TerrainFenceAllows(toApply[i])) {
             g_pending.insert(g_pending.begin(), toApply.begin() + i, toApply.end());
             break;
         }

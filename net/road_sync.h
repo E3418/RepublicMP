@@ -123,6 +123,7 @@ struct RoadSyncSegment {
 // Wire message for a segment. Only the first pointCount points are meaningful.
 struct RoadSyncMsg {
     int seq; // sender-assigned, echoed by the ack
+    int terrainFence; // TerrainSync_GetFenceSeq() at send - applied only after that terrain batch
     RoadSyncSegment seg;
 };
 
@@ -143,6 +144,7 @@ struct RoadSyncUpgradePiece {
 };
 struct RoadSyncUpgradeMsg {
     int seq;
+    int terrainFence; // as RoadSyncMsg::terrainFence
     int category;
     int newType;    // manager+0x528
     int newVariant; // manager+0x52c
@@ -164,6 +166,10 @@ struct RoadSyncAckMsg {
 #define ROAD_SYNC_WIRE_SEGMENT 1 // RoadSyncMsg
 #define ROAD_SYNC_WIRE_ACK 2     // RoadSyncAckMsg
 #define ROAD_SYNC_WIRE_UPGRADE 3 // RoadSyncUpgradeMsg
+
+// Longest a received item waits for its terrain fence before it is applied
+// anyway (lost/reset terrain stream).
+#define ROAD_SYNC_FENCE_TIMEOUT_MS 3000
 
 // Receiving side retries a segment only when the apply itself threw.
 #define ROAD_SYNC_MAX_APPLY_ATTEMPTS 3

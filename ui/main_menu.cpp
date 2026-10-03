@@ -2,25 +2,151 @@
 #include "main_menu.h"
 #include "debugui.h"
 #include "ui_log.h"
+#include "sync_block.h"
 #include "../hooks/imgui_hook.h" // g_imguiVisible - "Hide menu" button
 #include "../net/save_sync.h"
+#include "../net/build_sync.h"
+#include "../net/road_sync.h"
+#include "../net/terrain_sync.h"
 
 #include "imgui.h"
-
-// The single translation unit that compiles the imrad.h implementation.
-#define IMRAD_H_IMPLEMENTATION
-#include <imrad.h>
+#include <misc/cpp/imgui_stdlib.h> // ImGui::InputText(const char*, std::string*)
 
 #include <vector>
 #include <string>
+#include <cstdio>
 
 MainMenu g_mainMenu;
 
-void MainMenu::ResetLayout()
+static const ImVec4 kGrey   = ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
+static const ImVec4 kBlue   = ImVec4(0.4f, 0.75f, 0.95f, 1.0f);
+static const ImVec4 kYellow = ImVec4(0.95f, 0.8f, 0.25f, 1.0f);
+static const ImVec4 kGreen  = ImVec4(0.35f, 0.9f, 0.35f, 1.0f);
+static const ImVec4 kRed    = ImVec4(0.95f, 0.4f, 0.35f, 1.0f);
+
+// A coloured dot followed by text on the same line.
+static void StatusDot(const ImVec4& color)
 {
-    hb2.Reset();
-    hb4.Reset();
-    hb5.Reset();
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    float h = ImGui::GetTextLineHeight();
+    ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(p.x + h * 0.4f, p.y + h * 0.5f), h * 0.3f,
+                                                ImGui::GetColorU32(color));
+    ImGui::Dummy(ImVec2(h * 0.9f, h));
+    ImGui::SameLine();
+}
+
+// "Buildings  Roads  Terrain" with a green/red dot each.
+static void ChannelIndicators()
+{
+    struct { const char* name; bool up; } ch[] = {
+        { "Buildings", BuildSync_IsConnected() },
+        { "Roads", RoadSync_IsConnected() },
+        { "Terrain", TerrainSync_IsConnected() },
+    };
+    ImGui::TextColored(kGrey, "Live sync:");
+    for (auto& c : ch) {
+        ImGui::SameLine(0, 12);
+        StatusDot(c.up ? kGreen : kRed);
+        ImGui::TextUnformatted(c.name);
+    }
+}
+
+// The current join step (from the sync screen), e.g. "Step 4/7 - Sending...  62%".
+static void JoinStepLine()
+{
+    int step, total, percent;
+    char text[160];
+    if (!SyncBlock_GetStep(&step, &total, text, sizeof(text), &percent)) {
+        ImGui::TextColored(kGrey, "Preparing...");
+        return;
+    }
+    if (total > 0) ImGui::Text("Step %d/%d - %s", step, total, text);
+    else ImGui::TextUnformatted(text);
+    if (percent >= 0) {
+        char overlay[16];
+        _snprintf_s(overlay, sizeof(overlay), _TRUNCATE, "%d%%", percent);
+        ImGui::ProgressBar(percent / 100.0f, ImVec2(-1, 0), overlay);
+    }
+}
+
+static void StatusPanel()
+{
+    SessionState st = SaveSync_GetState();
+    const char* peer = SaveSync_GetPeerIp();
+    const char* lastError = SaveSync_GetLastError();
+
+    switch (st) {
+    case SESSION_IDLE:
+        StatusDot(kGrey);
+        ImGui::TextColored(kGrey, "Not in a multiplayer session");
+        if (lastError[0]) ImGui::TextColored(kRed, "Last session: %s", lastError);
+        break;
+
+    case SESSION_HOST_LISTENING:
+        StatusDot(kBlue);
+        ImGui::TextColored(kBlue, "Hosting - waiting for a player");
+        ImGui::TextColored(kGrey, "Your game keeps running. Players connect to your IP (port %d).", SAVE_SYNC_PORT);
+        if (lastError[0]) ImGui::TextColored(kYellow, "%s", lastError);
+        break;
+
+    case SESSION_HOST_JOINING:
+        StatusDot(kYellow);
+        ImGui::TextColored(kYellow, "Hosting - %s is joining", peer[0] ? peer : "a player");
+        JoinStepLine();
+        break;
+
+    case SESSION_HOST_IN_GAME:
+        StatusDot(kGreen);
+        ImGui::TextColored(kGreen, "Hosting - %s is in the game", peer[0] ? peer : "a player");
+        ChannelIndicators();
+        break;
+
+    case SESSION_CLIENT_JOINING:
+        StatusDot(kYellow);
+        ImGui::TextColored(kYellow, "Joining %s", peer[0] ? peer : SaveSync_GetTargetIp());
+        JoinStepLine();
+        break;
+
+    case SESSION_CLIENT_IN_GAME:
+        StatusDot(kGreen);
+        ImGui::TextColored(kGreen, "Connected to %s - in the game", peer[0] ? peer : SaveSync_GetTargetIp());
+        ChannelIndicators();
+        break;
+    }
+}
+
+// Host/Connect while idle; Stop hosting / Disconnect during a session.
+static void SessionButtons(std::string& hostIp)
+{
+    SessionState st = SaveSync_GetState();
+    float spacing = ImGui::GetStyle().ItemSpacing.x;
+    float half = (ImGui::GetContentRegionAvail().x - spacing) * 0.5f;
+
+    if (st == SESSION_IDLE) {
+        if (ImGui::Button("Host", ImVec2(half, 0)))
+            SaveSync_StartHost();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(hostIp.empty());
+        if (ImGui::Button("Connect", ImVec2(half, 0)))
+            SaveSync_StartClient(hostIp.c_str());
+        ImGui::EndDisabled();
+
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Host IP:");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-1);
+        ImGui::InputText("##hostIp", &hostIp);
+        return;
+    }
+
+    bool host = SaveSync_IsHostRole();
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.2f, 0.2f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.25f, 0.25f, 1.0f));
+    if (ImGui::Button(host ? "Stop hosting" : "Disconnect", ImVec2(-1, 0)))
+        SaveSync_RequestDisconnect();
+    ImGui::PopStyleColor(2);
+    ImGui::TextColored(kGrey, host ? "Hosting - Connect is unavailable until you stop."
+                                   : "In a session - Host is unavailable until you disconnect.");
 }
 
 void MainMenu::Draw()
@@ -30,86 +156,33 @@ void MainMenu::Draw()
         hostIpInitialized = true;
     }
 
-    ImGui::SetNextWindowSize(ImVec2(420, 480), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(440, 480), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("RepublicMP"))
     {
-        // --- top row: Disconnect / Hide menu / Debug ---
-        bool busy = SaveSync_IsBusy();
+        StatusPanel();
 
-        hb2.BeginLayout();
-        // "End Hosting"/"Close" while a host is listening with nobody connected;
-        // always enabled because it also closes the build/road sync connections.
-        bool hostAwaitingClient = busy && SaveSync_IsHostRole() && SaveSync_IsHostAwaitingClient();
-        const char* disconnectLabel = hostAwaitingClient ? "End Hosting" : "Disconnect";
-        if (ImGui::Button(disconnectLabel, { hb2.GetSize(), 0 }))
-            SaveSync_RequestDisconnect();
-        hb2.AddSize(0 * ImGui::GetStyle().ItemSpacing.x, ImRad::HBox::Stretch(1.0f));
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
 
-        ImGui::SameLine(0, 1 * ImGui::GetStyle().ItemSpacing.x);
-        if (ImGui::Button("Hide menu", { hb2.GetSize(), 0 }))
+        SessionButtons(hostIp);
+
+        ImGui::Spacing();
+        float spacing = ImGui::GetStyle().ItemSpacing.x;
+        float half = (ImGui::GetContentRegionAvail().x - spacing) * 0.5f;
+        if (ImGui::Button("Hide menu (INSERT)", ImVec2(half, 0)))
             g_imguiVisible = false; // INSERT brings it back (hooks/imgui_hook.cpp)
-        hb2.AddSize(1 * ImGui::GetStyle().ItemSpacing.x, ImRad::HBox::Stretch(1.0f));
-
-        ImGui::SameLine(0, 1 * ImGui::GetStyle().ItemSpacing.x);
-        if (ImGui::Button("Debug", { hb2.GetSize(), 0 }))
+        ImGui::SameLine();
+        if (ImGui::Button("Debug", ImVec2(half, 0)))
             g_debugui.Open();
-        hb2.AddSize(1 * ImGui::GetStyle().ItemSpacing.x, ImRad::HBox::Stretch(1.0f));
 
-        ImRad::Spacing(2);
-        ImRad::SeparatorEx(ImRad::SeparatorFlags_Horizontal);
+        ImGui::TextColored(kGrey, "RepublicMP %s  build %08X", SaveSync_GetLocalVersion(), SaveSync_GetLocalDllCrc());
 
-        // --- Host / Connect row (save sync); the active role is tinted green ---
-        bool isHost = SaveSync_IsHostRole();
-        ImGui::BeginDisabled(busy);
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
 
-        hb4.BeginLayout();
-        ImRad::Spacing(2);
-        bool tintHost = busy && isHost;
-        if (tintHost) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.55f, 0.2f, 1.0f));
-        if (ImGui::Button("Host", { hb4.GetSize(), 0 }))
-            SaveSync_StartHost();
-        if (tintHost) ImGui::PopStyleColor();
-        hb4.AddSize(0 * ImGui::GetStyle().ItemSpacing.x, ImRad::HBox::Stretch(1.0f));
-
-        ImGui::SameLine(0, 1 * ImGui::GetStyle().ItemSpacing.x);
-        bool tintClient = busy && !isHost;
-        if (tintClient) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.55f, 0.2f, 1.0f));
-        if (ImGui::Button("Connect", { hb4.GetSize(), 0 }))
-            SaveSync_StartClient(hostIp.c_str());
-        if (tintClient) ImGui::PopStyleColor();
-        hb4.AddSize(1 * ImGui::GetStyle().ItemSpacing.x, ImRad::HBox::Stretch(1.0f));
-
-        ImGui::EndDisabled();
-
-        // --- Host IP row ---
-        hb5.BeginLayout();
-        ImRad::Spacing(1);
-        ImGui::TextUnformatted("Host IP:");
-        hb5.AddSize(0 * ImGui::GetStyle().ItemSpacing.x, ImRad::HBox::ItemSize);
-
-        ImGui::SameLine(0, 1 * ImGui::GetStyle().ItemSpacing.x);
-        ImGui::SetNextItemWidth(hb5.GetSize());
-        ImGui::InputText("##hostIp", &hostIp);
-        hb5.AddSize(1 * ImGui::GetStyle().ItemSpacing.x, ImRad::HBox::Stretch(1.0f));
-
-        // --- Status ---
-        ImRad::Spacing(1);
-        ImGui::TextUnformatted("Status:");
-        ImGui::SameLine(0, 2 * ImGui::GetStyle().ItemSpacing.x);
-        // Once a player is connected the log narrates each stage; this line only
-        // distinguishes "listening, not paused" from "syncing".
-        if (busy && hostAwaitingClient)
-            ImGui::TextColored(ImVec4(0.4f, 0.75f, 0.9f, 1.0f), "Hosting - waiting for a player (game not paused)");
-        else if (busy)
-            ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.2f, 1.0f), isHost ? "Hosting - see log" : "Connecting - see log");
-        else
-            ImGui::TextDisabled("Idle");
-
-        ImRad::Spacing(2);
-        ImRad::SeparatorEx(ImRad::SeparatorFlags_Horizontal);
-
-        // --- Everyday log (save sync); verbose sync logs are in the Debug window ---
-        ImRad::Spacing(2);
+        // --- Everyday log; verbose sync logs are in the Debug window ---
         ImGui::TextUnformatted("Log:");
         ImGui::SameLine();
         if (ImGui::SmallButton("Clear"))

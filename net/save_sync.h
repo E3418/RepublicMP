@@ -1,15 +1,24 @@
-// Save sync: brings a joining player into the host's current game.
+// Multiplayer session: joining a player into the host's running game and
+// keeping track of whether that player is still there.
 //
-// Host flow: Host opens a listening socket and returns immediately - the game
-// keeps running while nobody is connected. When a client connects, the host
-// pauses, saves the current game under a random name, zips it, sends it and
-// stays blocked until the client reports it has loaded; then both unpause.
+// Host: Host starts hosting and returns - the game keeps running while
+// nobody is connected. When a player connects, both games are paused and
+// locked behind the sync screen (ui/sync_block) while the host saves, packs
+// and sends the world and the player unpacks and loads it. Then the live sync
+// channels (build_sync, road_sync, terrain_sync) connect, the screens lift
+// and both games resume together. The host keeps hosting: if the player
+// leaves or the connection drops, it goes back to waiting for a player, until
+// Stop hosting.
 //
-// Client flow: Connect blocks the game, receives and unzips the save, loads
-// it through the game's own load path and signals the host when ready.
+// Client: Connect pauses and locks the game at once and walks the same
+// steps from the other side; the host's steps (saving, packing) are relayed
+// so the sync screen always says what is happening. The session ends when
+// the connection drops or on Disconnect.
 //
-// At the end of both flows build sync and road sync connect automatically.
-// A save-sync run is one blocking flow; "busy" covers it from start to finish.
+// Before anything else both sides exchange version, protocol number and a
+// CRC32 of their RepublicMP.dll (version.h); any difference refuses the join.
+//
+// One session runs at a time: Host/Connect are refused while one is active.
 #pragma once
 
 #include "tesmio_plugin.h"
@@ -17,28 +26,45 @@
 
 #define SAVE_SYNC_PORT 5556
 #define SAVE_SYNC_TEST_HOST_IP REPUBLICMP_HOST_IP
-// Existing save used only if triggering a live save fails.
-#define SAVE_SYNC_TEST_SAVE_NAME "17171 - newsenderv2"
 #define SAVE_SYNC_RECEIVED_SUFFIX "_received"
+
+enum SessionState {
+    SESSION_IDLE = 0,
+    SESSION_HOST_LISTENING,  // hosting, no player yet
+    SESSION_HOST_JOINING,    // a player is joining (both games locked)
+    SESSION_HOST_IN_GAME,    // the player is in the game, live sync running
+    SESSION_CLIENT_JOINING,  // connecting / receiving / loading (locked)
+    SESSION_CLIENT_IN_GAME,  // in the host's game, live sync running
+};
 
 void SaveSync_Bind(const TsmHost* host);
 
 // Writes to tesmioloader.log and the in-game UI log.
 void SaveStatus(const char* fmt, ...);
 
+// Refused (no-op) while a session is active.
 void SaveSync_StartHost();
 void SaveSync_StartClient(const char* hostIp = nullptr); // nullptr = keep last IP
 
-// Stops the running flow and closes the build/road sync connections of this
-// session. Waits (accept, connect, save, load) react within ~200ms; a file
-// transfer already in progress is bounded by its own I/O timeout. Does not
-// leave the game session itself.
+// Ends the session: stops hosting / leaves the host, closes the live sync
+// channels. Waits (accept, connect, save, load) react within ~200ms.
 void SaveSync_RequestDisconnect();
 
-bool SaveSync_IsBusy();
-bool SaveSync_IsHostRole();
+SessionState SaveSync_GetState();
+bool SaveSync_IsBusy();     // any state but SESSION_IDLE
+bool SaveSync_IsHostRole(); // role of the current/last session
 
-// True only for a host that is listening with no client yet (nothing paused).
-bool SaveSync_IsHostAwaitingClient();
+// The other player's IP (host: the connected player, client: the host), or "".
+const char* SaveSync_GetPeerIp();
+
+// Why the last session ended or failed ("" if it ended normally).
+const char* SaveSync_GetLastError();
+
+// This build's identity, as exchanged in the handshake.
+const char* SaveSync_GetLocalVersion();
+unsigned int SaveSync_GetLocalDllCrc();
 
 const char* SaveSync_GetTargetIp();
+
+// Kept for the debug UI; true while hosting with nobody connected.
+bool SaveSync_IsHostAwaitingClient();

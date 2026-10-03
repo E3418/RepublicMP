@@ -2,6 +2,8 @@
 #include "build_sync.h"
 #include "network.h"
 #include "../hooks/detect_spawn.h" // g_origUniversal, DetectSpawn_Begin/EndBuildingPlacement
+#include "terrain_sync.h"            // TerrainSync_Begin/EndForeignReplay, fence
+#include "../hooks/demolish_hook.h" // DemolishHook_CallOriginal
 #include "../ui/debug_log.h"
 #include <vector>
 #include <stdio.h>
@@ -17,6 +19,8 @@
 #define UNIVERSAL_THIS_RVA 0x9D4F10      // placement god-object (thisPtr)
 #define VEC_BUILDINGS_BEGIN_RVA 0x9E6A18 // city buildings vector
 #define VEC_BUILDINGS_END_RVA 0x9E6A20
+#define OBJ_TYPE_OFFSET 0x318            // building type record
+#define TYPE_CATEGORY_OFFSET 0x360       // int category in the type record
 
 // thisPtr placement inputs.
 #define CURSOR_X_OFFSET 0xf6c
@@ -93,6 +97,8 @@ static long long BuildingCount(void* begin, void* end)
 
 static volatile bool g_connected = false;
 static volatile bool g_connecting = false;
+// Set by Reset to abandon a pending accept/connect (polled every ~200ms).
+static volatile bool g_cancelConnect = false;
 static volatile bool g_isHost = false;
 static SOCKET g_sock = INVALID_SOCKET;
 static char g_targetIp[64] = BUILD_SYNC_TEST_HOST_IP;
@@ -120,8 +126,9 @@ static DWORD WINAPI ReceiveLoopThread(LPVOID)
         g_incoming.push_back(msg);
         LeaveCriticalSection(&g_queueLock);
 
-        Logf("republicmp  BUILD_SYNC: received type=[%s] x=%.2f y=%.2f z=%.2f",
-             msg.typeName, msg.x, msg.y, msg.z);
+        Logf("republicmp  BUILD_SYNC: received %s type=[%s] x=%.2f y=%.2f z=%.2f fence=%d",
+             msg.kind == BUILD_SYNC_KIND_DEMOLISH ? "demolish" : "placement",
+             msg.typeName, msg.x, msg.y, msg.z, msg.terrainFence);
     }
     return 0;
 }
@@ -150,7 +157,12 @@ static DWORD WINAPI HostAcceptWorkerThread(LPVOID)
         g_connecting = false;
         return 0;
     }
-    SOCKET sock = NetworkHostAcceptOne(BUILD_SYNC_PORT, 300000, 30000);
+    SOCKET sock = NetworkHostAcceptOne(BUILD_SYNC_PORT, 300000, 30000, &g_cancelConnect);
+    if (sock == INVALID_SOCKET && g_cancelConnect) {
+        BuildSyncStatus("[BUILD_SYNC] stopped waiting for the connection");
+        g_connecting = false;
+        return 0;
+    }
     if (sock == INVALID_SOCKET) {
         BuildSyncStatus("[BUILD_SYNC] no client connected within 5 min, aborting - press Host##bs again to retry");
         g_connecting = false;
@@ -170,7 +182,12 @@ static DWORD WINAPI ClientConnectWorkerThread(LPVOID)
         g_connecting = false;
         return 0;
     }
-    SOCKET sock = NetworkConnect(g_targetIp, BUILD_SYNC_PORT, 15000, 30000);
+    SOCKET sock = NetworkConnect(g_targetIp, BUILD_SYNC_PORT, 15000, 30000, &g_cancelConnect);
+    if (sock == INVALID_SOCKET && g_cancelConnect) {
+        BuildSyncStatus("[BUILD_SYNC] stopped waiting for the connection");
+        g_connecting = false;
+        return 0;
+    }
     if (sock == INVALID_SOCKET) {
         BuildSyncStatus("[BUILD_SYNC] couldn't connect - is the host listening (Host##bs)? Is the IP right? - press Connect##bs again to retry");
         g_connecting = false;
@@ -186,6 +203,7 @@ void BuildSync_StartHost()
 {
     if (g_connected || g_connecting) return;
     g_isHost = true;
+    g_cancelConnect = false;
     g_connecting = true;
     CreateThread(nullptr, 0, HostAcceptWorkerThread, nullptr, 0, nullptr);
 }
@@ -197,12 +215,14 @@ void BuildSync_StartClient(const char* hostIp)
         strncpy_s(g_targetIp, hostIp, _TRUNCATE);
     }
     g_isHost = false;
+    g_cancelConnect = false;
     g_connecting = true;
     CreateThread(nullptr, 0, ClientConnectWorkerThread, nullptr, 0, nullptr);
 }
 
 void BuildSync_Reset()
 {
+    if (g_connecting) g_cancelConnect = true;
     if (g_connected) {
         BuildSyncStatus("[BUILD_SYNC] connection reset by user");
         CloseConnection();
@@ -220,8 +240,24 @@ const char* BuildSync_GetTargetIp() { return g_targetIp; }
 
 static std::vector<BuildSyncMsg> g_outbound; // placements waiting for a connection
 
+static volatile LONG g_applyingRemote = 0;
+
+bool BuildSync_IsApplyingRemote()
+{
+    return g_applyingRemote != 0;
+}
+
 static void SendNow(const BuildSyncMsg& msg)
 {
+    if (msg.kind == BUILD_SYNC_KIND_DEMOLISH) {
+        Logf("republicmp  BUILD_SYNC: sending demolish at (%.2f,%.2f,%.2f) category=%d fence=%d",
+             msg.x, msg.y, msg.z, msg.demolishCategory, msg.terrainFence);
+        if (!NetworkSendExact(g_sock, &msg, sizeof(msg))) {
+            BuildSyncStatus("[BUILD_SYNC] send failed, dropping connection");
+            CloseConnection();
+        }
+        return;
+    }
     Logf("republicmp  BUILD_SYNC: sending type=[%s] obj=(%.2f,%.2f,%.2f) cursor=(%.2f,%.2f,%.2f) cursorRot=%.4f p5=0x%llx",
          msg.typeName, msg.x, msg.y, msg.z, msg.cursorX, msg.cursorY, msg.cursorZ, msg.cursorRot, msg.param5);
     if (!NetworkSendExact(g_sock, &msg, sizeof(msg))) {
@@ -230,14 +266,35 @@ static void SendNow(const BuildSyncMsg& msg)
     }
 }
 
-void BuildSync_SendPlacement(const BuildSyncMsg& msg)
+static void SendOrQueue(const BuildSyncMsg& msg)
 {
     if (!g_connected || !g_outbound.empty()) {
         g_outbound.push_back(msg);
-        Logf("republicmp  BUILD_SYNC: queued type=[%s] (%zu waiting for connection)", msg.typeName, g_outbound.size());
+        Logf("republicmp  BUILD_SYNC: queued %s [%s] (%zu waiting for connection)",
+             msg.kind == BUILD_SYNC_KIND_DEMOLISH ? "demolish" : "placement", msg.typeName, g_outbound.size());
         return;
     }
     SendNow(msg);
+}
+
+void BuildSync_SendPlacement(const BuildSyncMsg& in)
+{
+    BuildSyncMsg msg = in;
+    msg.kind = BUILD_SYNC_KIND_PLACE;
+    msg.terrainFence = TerrainSync_GetFenceSeq();
+    SendOrQueue(msg);
+}
+
+void BuildSync_SendDemolish(const float pos[3], int category, const unsigned long long args[5])
+{
+    BuildSyncMsg msg = {};
+    msg.kind = BUILD_SYNC_KIND_DEMOLISH;
+    msg.terrainFence = TerrainSync_GetFenceSeq();
+    msg.x = pos[0]; msg.y = pos[1]; msg.z = pos[2];
+    strcpy_s(msg.typeName, "<demolish>");
+    msg.demolishCategory = category;
+    for (int k = 0; k < 5; k++) msg.demolishArgs[k] = args[k];
+    SendOrQueue(msg);
 }
 
 static void FlushOutbound()
@@ -319,10 +376,15 @@ static bool ApplyOneRemotePlacement(__int64 thisPtr, const BuildSyncMsg& msg, in
 
             // The original (not the hook), so the placement is not sent back.
             // param_4/param_8 = 1 confirm the placement without a mouse click.
+            // Terrain levelling under the building arrives over terrain sync.
             DetectSpawn_BeginBuildingPlacement();
+            TerrainSync_BeginForeignReplay();
+            InterlockedIncrement(&g_applyingRemote);
             __try {
                 g_origUniversal(thisPtr, typeName, 0, 1, msg.param5, 0xffffffff, 0, 1);
             } __finally {
+                InterlockedDecrement(&g_applyingRemote);
+                TerrainSync_EndForeignReplay();
                 DetectSpawn_EndBuildingPlacement();
             }
 
@@ -361,11 +423,53 @@ static bool ApplyOneRemotePlacement(__int64 thisPtr, const BuildSyncMsg& msg, in
     return placed;
 }
 
-// A received placement waiting to be applied.
+// Replays a remote demolition on the local building at the sender's
+// position. Returns false only if the replay threw; a building that is not
+// there (already gone) counts as done.
+static bool ApplyOneRemoteDemolish(__int64 thisPtr, const BuildSyncMsg& msg)
+{
+    __int64 found = 0;
+    float bestD = 1e30f;
+    __try {
+        __int64* it = *(__int64**)((uintptr_t)g_exeBase + VEC_BUILDINGS_BEGIN_RVA);
+        __int64* end = *(__int64**)((uintptr_t)g_exeBase + VEC_BUILDINGS_END_RVA);
+        for (; it && it < end; ++it) {
+            __int64 b = *it;
+            if (!b) continue;
+            const float* p = (const float*)(b + OBJ_POS_OFFSET);
+            float dx = p[0] - msg.x, dz = p[2] - msg.z;
+            if (fabsf(dx) >= 0.5f || fabsf(dz) >= 0.5f || fabsf(p[1] - msg.y) >= 1.0f) continue;
+            __int64 type = *(__int64*)(b + OBJ_TYPE_OFFSET);
+            int cat = type ? *(int*)(type + TYPE_CATEGORY_OFFSET) : -1;
+            if (msg.demolishCategory >= 0 && cat != msg.demolishCategory) continue;
+            float d = dx * dx + dz * dz;
+            if (d < bestD) { bestD = d; found = b; }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        found = 0;
+    }
+    if (!found) {
+        Logf("republicmp  BUILD_SYNC: demolish at (%.2f,%.2f,%.2f) category=%d - no such building here (already gone), skipped",
+             msg.x, msg.y, msg.z, msg.demolishCategory);
+        return true;
+    }
+
+    TerrainSync_BeginForeignReplay();
+    InterlockedIncrement(&g_applyingRemote);
+    bool ok = DemolishHook_CallOriginal(thisPtr, found, msg.demolishArgs);
+    InterlockedDecrement(&g_applyingRemote);
+    TerrainSync_EndForeignReplay();
+    Logf("republicmp  BUILD_SYNC: demolish at (%.2f,%.2f,%.2f) category=%d %s",
+         msg.x, msg.y, msg.z, msg.demolishCategory, ok ? "applied" : "THREW");
+    return ok;
+}
+
+// A received placement/demolition waiting to be applied.
 struct PendingPlacement {
     BuildSyncMsg msg;
     int attempts;               // failed attempts so far
     unsigned long long notBeforeMs; // GetTickCount64() of the next try
+    unsigned long long fenceWaitStartMs; // 0 = not waiting for the terrain fence yet
 };
 static std::vector<PendingPlacement> g_pending;
 static bool g_warnedWorldNotLoaded = false;
@@ -374,7 +478,7 @@ void BuildSync_Tick()
 {
     EnterCriticalSection(&g_queueLock);
     for (const BuildSyncMsg& msg : g_incoming) {
-        PendingPlacement p = { msg, 0, 0 };
+        PendingPlacement p = { msg, 0, 0, 0 };
         g_pending.push_back(p);
     }
     g_incoming.clear();
@@ -403,6 +507,17 @@ void BuildSync_Tick()
     while (!g_pending.empty()) {
         PendingPlacement& p = g_pending.front();
         if (now < p.notBeforeMs) break;
+        if (!TerrainSync_FenceReached(p.msg.terrainFence)) {
+            if (!p.fenceWaitStartMs) p.fenceWaitStartMs = now;
+            if (now - p.fenceWaitStartMs < BUILD_SYNC_FENCE_TIMEOUT_MS) break;
+            Logf("republicmp  BUILD_SYNC: terrain fence %d not reached after %dms - applying anyway",
+                 p.msg.terrainFence, BUILD_SYNC_FENCE_TIMEOUT_MS);
+        }
+        if (p.msg.kind == BUILD_SYNC_KIND_DEMOLISH) {
+            ApplyOneRemoteDemolish(thisPtr, p.msg);
+            g_pending.erase(g_pending.begin());
+            continue;
+        }
         if (ApplyOneRemotePlacement(thisPtr, p.msg, p.attempts + 1)) {
             g_pending.erase(g_pending.begin());
             continue;

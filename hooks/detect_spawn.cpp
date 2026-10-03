@@ -5,6 +5,7 @@
 #include "window_focus.h"
 #include "../net/build_sync.h"
 #include "../net/road_sync.h"
+#include "demolish_hook.h" // DemolishHook_InDemolish
 #include "../ui/sync_block.h"
 #include <stdio.h>
 #include <string.h>
@@ -247,6 +248,7 @@ DWORD WINAPI DebugSpawnThread(LPVOID)
 static volatile LONG g_buildingPlacementDepth = 0;
 void DetectSpawn_BeginBuildingPlacement() { InterlockedIncrement(&g_buildingPlacementDepth); }
 void DetectSpawn_EndBuildingPlacement()   { InterlockedDecrement(&g_buildingPlacementDepth); }
+bool DetectSpawn_InBuildingPlacement()    { return InterlockedCompareExchange(&g_buildingPlacementDepth, 0, 0) != 0; }
 
 // Captured inside the commit hook, sent from DetectSpawn_Tick. The hook runs
 // inside the game's commit and must not allocate, log or do network I/O.
@@ -449,7 +451,9 @@ void HookedRoadCommit(__int64 manager,
     int category = RoadSync_CategoryForManager(GetPlacementManagerThisPtr(), manager);
     // Tool wrappers always commit with p2 == 0; replays of remote work are
     // never echoed back.
-    if (category >= 0 && p2 == 0 && !RoadSync_IsApplyingSegment()) {
+    // Commits inside a demolition are its own side effects - the demolition
+    // itself is synced (hooks/demolish_hook).
+    if (category >= 0 && p2 == 0 && !RoadSync_IsApplyingSegment() && !DemolishHook_InDemolish()) {
         if (InterlockedCompareExchange(&g_buildingPlacementDepth, 0, 0) != 0) {
             NoteCommitSkip(category, "laid by a building placement (recreated by the building replay)", -1, -1, -1);
         } else {

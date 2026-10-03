@@ -4,8 +4,12 @@
 #include "present_hook.h"
 #include "detect_spawn.h"
 #include "imgui_hook.h"
+#include "terrain_hook.h"
+#include "demolish_hook.h"
+#include "input_block.h"
 #include "../net/build_sync.h"
 #include "../net/road_sync.h"
+#include "../net/terrain_sync.h"
 
 #include <d3d11.h>
 #include <dxgi.h>
@@ -25,6 +29,10 @@ volatile long long g_presentCallCount = 0;
 static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags)
 {
     g_presentCallCount++;
+    InputBlock_Tick();  // keep the game's mouse-button bytes clear while the join screen is up
+    TerrainHook_Tick(); // flush last frame's terrain-edit log, F8 verbose toggle
+    TerrainSync_Tick(); // send this frame's terrain edits, apply received ones (before roads/buildings)
+    DemolishHook_Tick(); // send demolitions captured this frame (after the terrain batch, for its fence)
     BuildSync_Tick(); // apply any building placements received over the network
     RoadSync_Tick(); // apply infrastructure received over the network
     DetectSpawn_Tick(); // drag state, captured commits, F9 debug spawn

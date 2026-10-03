@@ -1,4 +1,4 @@
-// Build sync: network replication of building placements.
+// Build sync: network replication of building placements and demolitions.
 //
 // Sending side: hooks/detect_spawn.cpp's placement hook sends one
 // BuildSyncMsg per building the local player creates. It carries the
@@ -14,6 +14,15 @@
 // tool guard bytes are set (blocking UI, window activation), so placements
 // wait for them to clear and a refused placement is retried a few times.
 //
+// Demolitions (hooks/demolish_hook) travel on the same connection as
+// BUILD_SYNC_KIND_DEMOLISH, so a demolition never overtakes the placement of
+// the building it removes. The receiver finds its building by position and
+// type category and runs the engine's demolish function with the sender's
+// flags; a building that is already gone is skipped.
+//
+// Every message carries a terrain fence (see terrain_sync.h) and is applied
+// only after the terrain edits made before it.
+//
 // Transport: one dedicated TCP connection (BUILD_SYNC_PORT), fixed-size
 // messages, symmetric (either side sends). Placements made while
 // disconnected are queued. Both machines must run the same build.
@@ -25,15 +34,27 @@
 #define BUILD_SYNC_PORT 5557
 #define BUILD_SYNC_TEST_HOST_IP REPUBLICMP_HOST_IP
 
+#define BUILD_SYNC_KIND_PLACE 0
+#define BUILD_SYNC_KIND_DEMOLISH 1
+
 struct BuildSyncMsg {
-    float x, y, z;              // main object position (verification only)
+    int kind;                   // BUILD_SYNC_KIND_*
+    int terrainFence;           // TerrainSync_GetFenceSeq() at send
+    float x, y, z;              // PLACE: main object position (verification only); DEMOLISH: the building (obj+0x350)
     float rotSin, rotCos;       // main object yaw (obj+0x340 / obj+0x348)
     char typeName[64];          // building type, e.g. "residental_brick_1"
     float cursorX, cursorY, cursorZ; // placement cursor of the creating call
     float cursorRot;            // placement yaw input (radians)
     unsigned long long param5;  // the creating call's param_5
     int mirrored;               // building mirrored (thisPtr+0x11db1 after the call)
+    // DEMOLISH only
+    int demolishCategory;       // *(obj+0x318)+0x360, -1 = unknown
+    unsigned long long demolishArgs[5]; // FUN_140168730's p3..p7, raw
 };
+
+// Longest a received message waits for its terrain fence before it is
+// applied anyway.
+#define BUILD_SYNC_FENCE_TIMEOUT_MS 3000
 
 // A remote placement the engine refuses (no new building) is retried on the
 // following frames up to this many times before it is dropped.
@@ -43,6 +64,12 @@ void BuildSync_Bind(const TsmHost* host);
 
 // Sends a local placement, or queues it while disconnected. Game thread only.
 void BuildSync_SendPlacement(const BuildSyncMsg& msg);
+
+// Sends a local demolition (hooks/demolish_hook). Game thread only.
+void BuildSync_SendDemolish(const float pos[3], int category, const unsigned long long args[5]);
+
+// True while a remote placement or demolition is being replayed.
+bool BuildSync_IsApplyingRemote();
 
 // Per-frame (game thread, Present hook): sends queued placements and applies
 // received ones once the world is loaded.

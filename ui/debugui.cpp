@@ -5,6 +5,7 @@
 #include "../hooks/present_hook.h"
 #include "../net/build_sync.h"
 #include "../net/road_sync.h"
+#include "../net/terrain_sync.h"
 #include "../net/save_sync.h"
 #include "debug_log.h"
 #include <vector>
@@ -26,6 +27,8 @@ void Debugui::Draw()
     static bool s_buildSyncIpInit = false;
     static std::string s_roadSyncIp;
     static bool s_roadSyncIpInit = false;
+    static std::string s_terrainSyncIp;
+    static bool s_terrainSyncIpInit = false;
     static bool s_autoScrollDebugLog = true;
     if (!s_buildSyncIpInit) {
         s_buildSyncIp = BuildSync_GetTargetIp();
@@ -34,6 +37,10 @@ void Debugui::Draw()
     if (!s_roadSyncIpInit) {
         s_roadSyncIp = RoadSync_GetTargetIp();
         s_roadSyncIpInit = true;
+    }
+    if (!s_terrainSyncIpInit) {
+        s_terrainSyncIp = TerrainSync_GetTargetIp();
+        s_terrainSyncIpInit = true;
     }
 
     ImGui::SetNextWindowSize(ImVec2(460, 520), ImGuiCond_FirstUseEver);
@@ -45,22 +52,12 @@ void Debugui::Draw()
         ImGui::Separator();
         ImGui::Spacing();
 
-        // --- Building sync ---
+        // --- Building sync (started automatically by the session; these
+        // buttons are for manual reconnects) ---
         ImGui::TextUnformatted("Building sync:");
 
         bool bsBusy = BuildSync_IsConnected() || BuildSync_IsConnecting();
         bool bsIsHost = BuildSync_IsHostRole();
-
-        // Reuses the role/IP of this session's save-sync run.
-        ImGui::BeginDisabled(bsBusy);
-        if (ImGui::Button("Enable building sync (same role/IP as save sync)"))
-        {
-            if (SaveSync_IsHostRole())
-                BuildSync_StartHost();
-            else
-                BuildSync_StartClient(SaveSync_GetTargetIp());
-        }
-        ImGui::EndDisabled();
 
         ImGui::BeginDisabled(bsBusy);
         if (ImGui::Button("Host##bs"))
@@ -122,6 +119,43 @@ void Debugui::Draw()
             ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.3f, 1.0f), rsIsHost ? "Hosting" : "Connected");
         else if (RoadSync_IsConnecting())
             ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.2f, 1.0f), rsIsHost ? "Waiting for client..." : "Connecting...");
+        else
+            ImGui::TextDisabled("Idle");
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // --- Terrain sync (started automatically by the save-sync flow;
+        // these buttons are for manual reconnects) ---
+        ImGui::TextUnformatted("Terrain sync:");
+
+        bool tsBusy = TerrainSync_IsConnected() || TerrainSync_IsConnecting();
+        bool tsIsHost = TerrainSync_IsHostRole();
+
+        ImGui::BeginDisabled(tsBusy);
+        if (ImGui::Button("Host##ts"))
+            TerrainSync_StartHost();
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(150);
+        ImGui::InputText("##tsIp", &s_terrainSyncIp);
+        ImGui::SameLine();
+        if (ImGui::Button("Connect##ts"))
+            TerrainSync_StartClient(s_terrainSyncIp.c_str());
+        ImGui::EndDisabled();
+
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!tsBusy);
+        if (ImGui::Button("Disconnect##ts"))
+            TerrainSync_Reset();
+        ImGui::EndDisabled();
+
+        ImGui::TextUnformatted("Status:");
+        ImGui::SameLine();
+        if (TerrainSync_IsConnected())
+            ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.3f, 1.0f), tsIsHost ? "Hosting" : "Connected");
+        else if (TerrainSync_IsConnecting())
+            ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.2f, 1.0f), tsIsHost ? "Waiting for client..." : "Connecting...");
         else
             ImGui::TextDisabled("Idle");
 

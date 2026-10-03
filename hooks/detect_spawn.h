@@ -54,6 +54,7 @@ void HookedRoadCommit(__int64 manager,
 // made inside it are the building's own auto-connections and are not sent.
 void DetectSpawn_BeginBuildingPlacement();
 void DetectSpawn_EndBuildingPlacement();
+bool DetectSpawn_InBuildingPlacement();
 
 DWORD WINAPI HeartbeatThread(LPVOID);  // logs call counters every 2s
 DWORD WINAPI DebugSpawnThread(LPVOID); // polls F9 for the debug spawn

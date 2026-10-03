@@ -90,7 +90,19 @@
     <ClCompile Include="net\road_sync.cpp">
       <Filter>net</Filter>
     </ClCompile>
+    <ClCompile Include="net\terrain_sync.cpp">
+      <Filter>net</Filter>
+    </ClCompile>
     <ClCompile Include="hooks\imgui_hook.cpp">
+      <Filter>hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\terrain_hook.cpp">
+      <Filter>hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\demolish_hook.cpp">
+      <Filter>hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\input_block.cpp">
       <Filter>hooks</Filter>
     </ClCompile>
     <ClCompile Include="ui\main_menu.cpp">
@@ -133,6 +145,18 @@
   <ItemGroup>
     <ClInclude Include="hooks\detect_spawn.h">
       <Filter>hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\terrain_hook.h">
+      <Filter>hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\demolish_hook.h">
+      <Filter>hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\input_block.h">
+      <Filter>hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="version.h">
+      <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="hooks\present_hook.h">
       <Filter>hooks</Filter>
@@ -177,6 +201,9 @@
       <Filter>net</Filter>
     </ClInclude>
     <ClInclude Include="net\road_sync.h">
+      <Filter>net</Filter>
+    </ClInclude>
+    <ClInclude Include="net\terrain_sync.h">
       <Filter>net</Filter>
     </ClInclude>
     <ClInclude Include="net\host_config.h">

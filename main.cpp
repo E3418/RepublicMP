@@ -5,14 +5,17 @@
 #include "hooks/game_speed.h"
 #include "hooks/save_load.h"
 #include "hooks/imgui_hook.h"
+#include "hooks/terrain_hook.h"
+#include "hooks/demolish_hook.h"
+#include "hooks/input_block.h"
 #include "save/save_zip.h"
 #include "net/network.h"
 #include "net/save_sync.h"
 #include "net/build_sync.h"
 #include "net/road_sync.h"
+#include "net/terrain_sync.h"
 
-// MAJOR.FEATURE.PATCH (see README.md's Versioning section)
-#define REPUBLICMP_VERSION "0.2.0"
+#include "version.h"
 
 extern "C" __declspec(dllexport) unsigned TsmPluginApiVersion(void)
 {
@@ -33,6 +36,10 @@ extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPlugi
     BuildSync_Bind(host);
     RoadSync_Bind(host);
     ImGuiHook_Bind(host);
+    TerrainHook_Bind(host);
+    TerrainSync_Bind(host);
+    DemolishHook_Bind(host);
+    InputBlock_Bind(host);
     info->name    = "republicmp";
     info->version = REPUBLICMP_VERSION;
     return 0;
@@ -53,6 +60,16 @@ extern "C" __declspec(dllexport) int TsmPluginStart(void)
                                            sizeof(kRoadCommitExpect), "republicmp road commit");
     Logf("republicmp  road commit hook: %d%s", okRoadCommit,
          okRoadCommit ? "" : " - infrastructure will NOT be synced");
+
+    // The sync screen relies on these to actually stop the game's input.
+    bool okInput = InstallInputBlockHooks();
+    Logf("republicmp  input block hooks: %d%s", okInput, okInput ? "" : " - the join screen will NOT fully lock input");
+
+    bool okDemolish = InstallDemolishHook();
+    Logf("republicmp  demolish hook: %d%s", okDemolish, okDemolish ? "" : " - demolitions will NOT be synced");
+
+    bool okTerrain = InstallTerrainHooks();
+    Logf("republicmp  terrain hooks: %d%s", okTerrain, okTerrain ? "" : " - terrain will NOT be fully synced");
 
     HANDLE presentHook = CreateThread(nullptr, 0, PresentHookThread, nullptr, 0, nullptr);
     Logf("republicmp  present hook thread started: %d", presentHook != nullptr);
