@@ -7,6 +7,7 @@
 #include "../net/road_sync.h"
 #include "../net/terrain_sync.h"
 #include "../net/save_sync.h"
+#include "../hooks/determinism.h"
 #include "debug_log.h"
 #include <vector>
 #include <string>
@@ -158,6 +159,27 @@ void Debugui::Draw()
             ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.2f, 1.0f), tsIsHost ? "Waiting for client..." : "Connecting...");
         else
             ImGui::TextDisabled("Idle");
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // --- Determinism probe (hooks/determinism) ---
+        ImGui::TextUnformatted("Determinism probe:");
+        static int s_probeLength = 1;
+        static const int kProbeSteps[] = { 600, 1800, 3600, 10800 };
+        static const char* const kProbeLabels[] = { "600 steps (~20 s)", "1800 steps (~1 min)",
+                                                    "3600 steps (~2 min)", "10800 steps (~6 min)" };
+        ImGui::BeginDisabled(Probe_IsRunning() || SaveSync_IsBusy());
+        ImGui::SetNextItemWidth(170);
+        ImGui::Combo("##probeLength", &s_probeLength, kProbeLabels, IM_ARRAYSIZE(kProbeLabels));
+        ImGui::SameLine();
+        if (ImGui::Button("Run probe"))
+            Probe_Start(kProbeSteps[s_probeLength], 30);
+        ImGui::EndDisabled();
+        ImGui::TextWrapped("Saves the game as 'mp_probe', then loads and simulates it twice and compares the "
+                           "state. Don't touch the game while it runs. Not during a multiplayer session.");
+        ImGui::TextWrapped("Result: %s", Probe_Status());
 
         ImGui::Spacing();
         ImGui::Separator();

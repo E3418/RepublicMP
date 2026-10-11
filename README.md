@@ -48,6 +48,11 @@ Not synced yet: factory connections, money (each side pays from its own
 pool), and simulation state (vehicles, citizens, production) - both games
 simulate on their own.
 
+The Debug window has a **determinism probe**: it saves the game, loads and
+simulates it twice under a fixed time step, call-site random numbers and
+pinned math, and reports whether both runs stay identical - the groundwork
+for simulating both games in lockstep.
+
 ## How it works
 
 The mod hooks the game's own functions instead of simulating input:
