@@ -41,6 +41,12 @@
 #define TOOL_GUARD1_OFFSET 0xfbc         // any nonzero -> placement function returns at once
 #define TOOL_GUARD2_OFFSET 0xfbe
 #define TOOL_GUARD3_OFFSET 0xfc3
+// Pointer to the menu entry the local player has selected (name string
+// first, e.g. "road_onelane"; +0x2b5 a flag, +0x48 the type record), 0 when
+// nothing is selected. FUN_1403c4850 (the road routing a building's access
+// road goes through) reads +0x2b5 without a null check.
+#define SELECTED_ENTRY_OFFSET 0xd428
+#define REPLAY_ENTRY_SIZE 0x1000         // covers every field read off an entry
 
 #define RETRY_DELAY_MS 500
 
@@ -58,6 +64,7 @@
 // ---------------------------------------------------------------------------
 
 static CRITICAL_SECTION g_queueLock;
+static char g_replayEntry[REPLAY_ENTRY_SIZE]; // stand-in selected menu entry (game thread only)
 
 void BuildSync_Bind(const TsmHost* host)
 {
@@ -477,9 +484,19 @@ static bool ApplyOneRemotePlacement(__int64 thisPtr, const BuildSyncMsg& msg, in
             InterlockedIncrement(&g_applyingRemote);
             // Built the way the sender chose; the local choice goes back after.
             BuildMode_Write(msg.mode);
+            // The local player's selected menu entry must not leak into the
+            // replay - and the access-road routing reads it unchecked, so a
+            // player with nothing selected crashed it. A neutral entry named
+            // after the building stands in while the replay runs.
+            __int64* selected = (__int64*)(thisPtr + SELECTED_ENTRY_OFFSET);
+            __int64 savedSelected = *selected;
+            memset(g_replayEntry, 0, sizeof(g_replayEntry));
+            strncpy_s(g_replayEntry, typeName, _TRUNCATE);
+            *selected = (__int64)g_replayEntry;
             __try {
                 g_origUniversal(thisPtr, typeName, 0, 1, msg.param5, 0xffffffff, 0, 1);
             } __finally {
+                *selected = savedSelected;
                 BuildMode_Write(mine);
                 InterlockedDecrement(&g_applyingRemote);
                 TerrainSync_EndForeignReplay();
