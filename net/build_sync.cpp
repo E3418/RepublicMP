@@ -5,6 +5,7 @@
 #include "terrain_sync.h"            // TerrainSync_Begin/EndForeignReplay, fence
 #include "../hooks/demolish_hook.h" // DemolishHook_CallOriginal
 #include "../hooks/game_speed.h"    // GameSpeed_OnRemote
+#include "save_sync.h"               // SaveSync_OnResyncAnnounced
 #include "../ui/debug_log.h"
 #include "../ui/sync_block.h"
 #include <vector>
@@ -134,6 +135,14 @@ static DWORD WINAPI ReceiveLoopThread(LPVOID)
             break;
         }
         msg.typeName[sizeof(msg.typeName) - 1] = 0;
+
+        // Noted right here, before this thread can see the connection close
+        // that follows it, so the session never mistakes it for a drop.
+        if (msg.kind == BUILD_SYNC_KIND_RESYNC) {
+            Logf("republicmp  BUILD_SYNC: the host announced a re-sync");
+            SaveSync_OnResyncAnnounced();
+            continue;
+        }
 
         BuildWireItem item;
         item.msg = msg;
@@ -291,7 +300,8 @@ static void SendNow(const BuildWireItem& item)
         return;
     }
     if (msg.kind == BUILD_SYNC_KIND_SPEED_SET || msg.kind == BUILD_SYNC_KIND_SPEED_REQUEST ||
-        msg.kind == BUILD_SYNC_KIND_SPEED_BOOST || msg.kind == BUILD_SYNC_KIND_TIME) {
+        msg.kind == BUILD_SYNC_KIND_SPEED_BOOST || msg.kind == BUILD_SYNC_KIND_TIME ||
+        msg.kind == BUILD_SYNC_KIND_RESYNC) {
         if (!NetworkSendExact(g_sock, &msg, sizeof(msg))) {
             BuildSyncStatus("[BUILD_SYNC] send failed, dropping connection");
             CloseConnection();
@@ -362,6 +372,15 @@ void BuildSync_SendTime(int day, int year, float progress)
     msg.speed = day;
     msg.speedSaved = year;
     msg.timeProgress = progress;
+    SendOrQueue(msg);
+}
+
+void BuildSync_SendResync()
+{
+    if (!g_connected) return;
+    BuildSyncMsg msg = {};
+    msg.kind = BUILD_SYNC_KIND_RESYNC;
+    strcpy_s(msg.typeName, "<resync>");
     SendOrQueue(msg);
 }
 
