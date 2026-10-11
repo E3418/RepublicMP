@@ -291,7 +291,8 @@ static void SendNow(const BuildWireItem& item)
         return;
     }
     if (msg.kind == BUILD_SYNC_KIND_SPEED_SET || msg.kind == BUILD_SYNC_KIND_SPEED_REQUEST ||
-        msg.kind == BUILD_SYNC_KIND_SPEED_BOOST || msg.kind == BUILD_SYNC_KIND_TIME) {
+        msg.kind == BUILD_SYNC_KIND_SPEED_BOOST || msg.kind == BUILD_SYNC_KIND_TIME ||
+        msg.kind == BUILD_SYNC_KIND_WEATHER) {
         if (!NetworkSendExact(g_sock, &msg, sizeof(msg))) {
             BuildSyncStatus("[BUILD_SYNC] send failed, dropping connection");
             CloseConnection();
@@ -362,6 +363,16 @@ void BuildSync_SendTime(int day, int year, float progress)
     msg.speed = day;
     msg.speedSaved = year;
     msg.timeProgress = progress;
+    SendOrQueue(msg);
+}
+
+void BuildSync_SendWeather(const WeatherWire& w)
+{
+    if (!g_connected) return;
+    BuildSyncMsg msg = {};
+    msg.kind = BUILD_SYNC_KIND_WEATHER;
+    strcpy_s(msg.typeName, "<weather>");
+    msg.weather = w;
     SendOrQueue(msg);
 }
 
@@ -731,7 +742,8 @@ void BuildSync_Tick()
         // Speed is not world state - applied at once, never behind a
         // placement waiting for its terrain or a retry.
         if (msg.kind == BUILD_SYNC_KIND_SPEED_SET || msg.kind == BUILD_SYNC_KIND_SPEED_REQUEST ||
-            msg.kind == BUILD_SYNC_KIND_SPEED_BOOST || msg.kind == BUILD_SYNC_KIND_TIME) {
+            msg.kind == BUILD_SYNC_KIND_SPEED_BOOST || msg.kind == BUILD_SYNC_KIND_TIME ||
+            msg.kind == BUILD_SYNC_KIND_WEATHER) {
             speedMsgs.push_back(msg);
             continue;
         }
@@ -743,6 +755,7 @@ void BuildSync_Tick()
 
     for (const BuildSyncMsg& m : speedMsgs) {
         if (m.kind == BUILD_SYNC_KIND_TIME) GameSpeed_OnRemoteTime(m.speed, m.speedSaved, m.timeProgress);
+        else if (m.kind == BUILD_SYNC_KIND_WEATHER) Weather_OnRemote(m.weather);
         else GameSpeed_OnRemote(m.kind, m.speed, m.speedSaved, m.speedTurbo);
     }
 

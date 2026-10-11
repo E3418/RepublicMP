@@ -179,6 +179,7 @@
     <ClCompile Include="hooks\detect_spawn.cpp" />
     <ClCompile Include="hooks\present_hook.cpp" />
     <ClCompile Include="hooks\game_speed.cpp" />
+    <ClCompile Include="hooks\weather.cpp" />
     <ClCompile Include="hooks\state_hash.cpp" />
     <ClCompile Include="hooks\determinism.cpp" />
     <ClCompile Include="hooks\imgui_hook.cpp" />
@@ -216,6 +217,7 @@
     <ClInclude Include="hooks\detect_spawn.h" />
     <ClInclude Include="hooks\present_hook.h" />
     <ClInclude Include="hooks\game_speed.h" />
+    <ClInclude Include="hooks\weather.h" />
     <ClInclude Include="hooks\state_hash.h" />
     <ClInclude Include="hooks\determinism.h" />
     <ClInclude Include="hooks\window_focus.h" />

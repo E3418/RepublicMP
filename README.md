@@ -44,6 +44,10 @@ both machines.
    is mirrored, and the host's clock is sent regularly so both cities stay on
    the same day and hour.
 
+9. **Weather** - The host owns it: temperature (heating demand), wind (wind
+   turbines), snowfall (road snow) and rain are sent every second. The game
+   does not save the weather, so not even joining again aligned it.
+
 Not synced yet: factory connections, money (each side pays from its own
 pool), and simulation state (vehicles, citizens, production) - both games
 simulate on their own.
