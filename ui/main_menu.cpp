@@ -69,6 +69,33 @@ static void JoinStepLine()
     }
 }
 
+// Host with a player in the game: re-sync now, and the automatic interval.
+static void ResyncControls()
+{
+    static const int kMinutes[] = { 0, 5, 10, 15, 30, 60 };
+    static const char* const kLabels[] = { "Off", "every 5 min", "every 10 min", "every 15 min",
+                                           "every 30 min", "every 60 min" };
+    int current = 0;
+    for (int i = 0; i < IM_ARRAYSIZE(kMinutes); i++)
+        if (kMinutes[i] == SaveSync_GetAutoResyncMinutes()) current = i;
+
+    if (ImGui::Button("Re-sync now"))
+        SaveSync_RequestResync();
+    ImGui::SameLine();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Auto:");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(130);
+    if (ImGui::Combo("##autoResync", &current, kLabels, IM_ARRAYSIZE(kLabels)))
+        SaveSync_SetAutoResyncMinutes(kMinutes[current]);
+    ULONGLONG left = SaveSync_GetMsUntilAutoResync();
+    if (left) {
+        ImGui::SameLine();
+        ImGui::TextColored(kGrey, "next in %llu:%02llu", left / 60000, (left / 1000) % 60);
+    }
+    ImGui::TextColored(kGrey, "Re-sync sends your world to the player again (vehicles, citizens, production).");
+}
+
 static void StatusPanel()
 {
     SessionState st = SaveSync_GetState();
@@ -83,6 +110,11 @@ static void StatusPanel()
         break;
 
     case SESSION_HOST_LISTENING:
+        if (SaveSync_IsResyncing()) {
+            StatusDot(kYellow);
+            ImGui::TextColored(kYellow, "Re-syncing - waiting for %s to reconnect", peer[0] ? peer : "the player");
+            break;
+        }
         StatusDot(kBlue);
         ImGui::TextColored(kBlue, "Hosting - waiting for a player");
         ImGui::TextColored(kGrey, "Your game keeps running. Players connect to your IP (port %d).", SAVE_SYNC_PORT);
@@ -91,7 +123,8 @@ static void StatusPanel()
 
     case SESSION_HOST_JOINING:
         StatusDot(kYellow);
-        ImGui::TextColored(kYellow, "Hosting - %s is joining", peer[0] ? peer : "a player");
+        ImGui::TextColored(kYellow, SaveSync_IsResyncing() ? "Re-syncing - sending the world to %s"
+                                                           : "Hosting - %s is joining", peer[0] ? peer : "a player");
         JoinStepLine();
         break;
 
@@ -99,11 +132,13 @@ static void StatusPanel()
         StatusDot(kGreen);
         ImGui::TextColored(kGreen, "Hosting - %s is in the game", peer[0] ? peer : "a player");
         ChannelIndicators();
+        ResyncControls();
         break;
 
     case SESSION_CLIENT_JOINING:
         StatusDot(kYellow);
-        ImGui::TextColored(kYellow, "Joining %s", peer[0] ? peer : SaveSync_GetTargetIp());
+        ImGui::TextColored(kYellow, SaveSync_IsResyncing() ? "Re-syncing with %s" : "Joining %s",
+                           peer[0] ? peer : SaveSync_GetTargetIp());
         JoinStepLine();
         break;
 

@@ -10,6 +10,7 @@
 #include "../net/build_sync.h"
 #include "../net/road_sync.h"
 #include "../net/terrain_sync.h"
+#include "../net/save_sync.h"
 #include "game_speed.h"
 
 #include <d3d11.h>
@@ -36,6 +37,7 @@ static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain* pSwapChain, UINT 
     DemolishHook_Tick(); // send demolitions captured this frame (after the terrain batch, for its fence)
     BuildSync_Tick(); // apply any building placements received over the network
     GameSpeed_SyncTick(); // send local speed changes (host decides, see game_speed.h)
+    SaveSync_Tick(); // host: send a requested re-sync announcement
     RoadSync_Tick(); // apply infrastructure received over the network
     DetectSpawn_Tick(); // drag state, captured commits, F9 debug spawn
 

@@ -44,9 +44,14 @@ both machines.
    is mirrored, and the host's clock is sent regularly so both cities stay on
    the same day and hour.
 
-Not synced yet: factory connections, money (each side pays from its own
-pool), and simulation state (vehicles, citizens, production) - both games
-simulate on their own.
+9. **Re-sync** - Both games simulate on their own, so vehicles, citizens and
+   production drift apart. The host can send its world to the player again
+   with **Re-sync now**, or automatically every 5-60 minutes. Both games
+   pause for it like on the first join; the player reconnects by itself.
+
+Not synced yet: factory connections and money (each side pays from its own
+pool). Simulation state (vehicles, citizens, production) is only brought
+back in line by a re-sync.
 
 The Debug window has a **determinism probe**: it saves the game, loads and
 simulates it twice under a fixed time step, call-site random numbers and
