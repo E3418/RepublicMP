@@ -60,6 +60,9 @@
     <ClCompile Include="hooks\game_speed.cpp">
       <Filter>hooks</Filter>
     </ClCompile>
+    <ClCompile Include="net\settings_sync.cpp">
+      <Filter>net</Filter>
+    </ClCompile>
     <ClCompile Include="save\save_zip.cpp">
       <Filter>save</Filter>
     </ClCompile>
@@ -163,6 +166,9 @@
     </ClInclude>
     <ClInclude Include="hooks\game_speed.h">
       <Filter>hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="net\settings_sync.h">
+      <Filter>net</Filter>
     </ClInclude>
     <ClInclude Include="hooks\window_focus.h">
       <Filter>hooks</Filter>

@@ -14,6 +14,7 @@
 #include "net/build_sync.h"
 #include "net/road_sync.h"
 #include "net/terrain_sync.h"
+#include "net/settings_sync.h"
 
 #include "version.h"
 
@@ -40,6 +41,7 @@ extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPlugi
     TerrainSync_Bind(host);
     DemolishHook_Bind(host);
     InputBlock_Bind(host);
+    SettingsSync_Bind(host);
     info->name    = "republicmp";
     info->version = REPUBLICMP_VERSION;
     return 0;

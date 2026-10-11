@@ -44,6 +44,12 @@ both machines.
    is mirrored, and the host's clock is sent regularly so both cities stay on
    the same day and hour.
 
+9. **Building settings** - What players set in a building's window travels
+   to the other side: import/export mode and amount of power connections and
+   pipelines, worker and visitor limits, priority, auto purchase, storage
+   limits, and the gameplay checkboxes (the personal "notify me" ones stay
+   local).
+
 Not synced yet: factory connections, money (each side pays from its own
 pool), and simulation state (vehicles, citizens, production) - both games
 simulate on their own.
