@@ -42,7 +42,7 @@ void TriggerLoadSave(const char* saveName)
     *GetLoadTriggerPtr() = 1;
 }
 
-bool WaitForLoadToFinish(DWORD timeoutMs, volatile bool* cancelFlag)
+bool WaitForLoadToFinish(DWORD timeoutMs, volatile bool* cancelFlag, bool (*abortCheck)(void*), void* abortCtx)
 {
     volatile char* trigger = GetLoadTriggerPtr();
     const DWORD stepMs = 100;
@@ -55,6 +55,10 @@ bool WaitForLoadToFinish(DWORD timeoutMs, volatile bool* cancelFlag)
                 Logf("republicmp  SAVE_LOAD: WaitForLoadToFinish cancelled");
                 return false;
             }
+            if (abortCheck && abortCheck(abortCtx)) {
+                Logf("republicmp  SAVE_LOAD: WaitForLoadToFinish aborted");
+                return false;
+            }
             Sleep(stepMs);
         }
     }
@@ -63,6 +67,10 @@ bool WaitForLoadToFinish(DWORD timeoutMs, volatile bool* cancelFlag)
         if (*trigger == 0) return true;
         if (cancelFlag && *cancelFlag) {
             Logf("republicmp  SAVE_LOAD: WaitForLoadToFinish cancelled");
+            return false;
+        }
+        if (abortCheck && abortCheck(abortCtx)) {
+            Logf("republicmp  SAVE_LOAD: WaitForLoadToFinish aborted");
             return false;
         }
         Sleep(stepMs);

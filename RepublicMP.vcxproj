@@ -224,6 +224,7 @@
     <ClInclude Include="net\build_sync.h" />
     <ClInclude Include="net\road_sync.h" />
     <ClInclude Include="net\terrain_sync.h" />
+    <ClInclude Include="net\build_mode.h" />
     <ClInclude Include="net\host_config.h" />
     <ClInclude Include="save\save_zip.h" />
     <ClInclude Include="net\network.h" />

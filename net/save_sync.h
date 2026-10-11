@@ -53,6 +53,11 @@ void SaveSync_RequestDisconnect();
 SessionState SaveSync_GetState();
 bool SaveSync_IsBusy();     // any state but SESSION_IDLE
 bool SaveSync_IsHostRole(); // role of the current/last session
+// Milliseconds since Host / Connect started the current session (0 when idle).
+// The UI keeps its stop buttons disabled for a moment after a start, so a
+// double click on Connect does not land on Disconnect.
+ULONGLONG SaveSync_GetSessionAgeMs();
+#define SAVE_SYNC_STOP_BUTTON_DELAY_MS 2000
 
 // The other player's IP (host: the connected player, client: the host), or "".
 const char* SaveSync_GetPeerIp();

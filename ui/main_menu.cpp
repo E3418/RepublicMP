@@ -142,8 +142,10 @@ static void SessionButtons(std::string& hostIp)
     bool host = SaveSync_IsHostRole();
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.2f, 0.2f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.25f, 0.25f, 1.0f));
+    ImGui::BeginDisabled(SaveSync_GetSessionAgeMs() < SAVE_SYNC_STOP_BUTTON_DELAY_MS);
     if (ImGui::Button(host ? "Stop hosting" : "Disconnect", ImVec2(-1, 0)))
         SaveSync_RequestDisconnect();
+    ImGui::EndDisabled();
     ImGui::PopStyleColor(2);
     ImGui::TextColored(kGrey, host ? "Hosting - Connect is unavailable until you stop."
                                    : "In a session - Host is unavailable until you disconnect.");

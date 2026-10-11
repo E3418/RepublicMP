@@ -48,6 +48,7 @@
 
 #include "tesmio_plugin.h"
 #include "host_config.h"
+#include "build_mode.h"
 
 #define ROAD_SYNC_PORT 5558
 #define ROAD_SYNC_TEST_HOST_IP REPUBLICMP_HOST_IP
@@ -124,6 +125,7 @@ struct RoadSyncSegment {
 struct RoadSyncMsg {
     int seq; // sender-assigned, echoed by the ack
     int terrainFence; // TerrainSync_GetFenceSeq() at send - applied only after that terrain batch
+    BuildMode mode;   // sender's rubles/dollars/realistic choice (build_mode.h), replayed with it
     RoadSyncSegment seg;
 };
 
@@ -145,12 +147,44 @@ struct RoadSyncUpgradePiece {
 struct RoadSyncUpgradeMsg {
     int seq;
     int terrainFence; // as RoadSyncMsg::terrainFence
+    BuildMode mode;   // as RoadSyncMsg::mode
     int category;
     int newType;    // manager+0x528
     int newVariant; // manager+0x52c
     int flag5c4;    // manager+0x5c4
     int pieceCount;
     RoadSyncUpgradePiece pieces[ROAD_SYNC_MAX_UPGRADE_PIECES];
+};
+
+// Demolition with the terrain_demolish tool. The tool, every frame, calls
+// fcaf0(manager, &cursor, 0x65, 0, 0...) - the engine finds the piece of
+// path under the cursor and arms the commit (manager+0x390) - and, while the
+// button is held, commits with FUN_140518a80(manager, 0, 0, 0). The receiver
+// repeats that with the sender's cursor, so its own engine finds the segment
+// and arms the commit. The piece the sender's engine cut (manager+0x388 ..
+// +0x38c on segment +0x380) also travels, as the positions of its two ends;
+// if the receiver's engine picked a different range, it is replaced with the
+// sender's before the commit (route buffer and end nodes included, as the
+// upgrade replay does).
+//
+// Commits on a hovered node (the cursor on a road end, e.g. right after a cut
+// or while the button is held) leave no readable range; for those the sender
+// compares the segments before and after the commit and sends each removed
+// piece as its own message (cursor inside the piece, range = its ends). The
+// receiver arms short pieces, which its cursor pick skips, through the node
+// of the piece, as the tool does.
+struct RoadSyncDemolishMsg {
+    int seq;
+    int terrainFence;
+    int category;
+    float cursor[3];  // thisPtr+0xf6c at the sender's commit
+    int hasRange;     // 0 = only the cursor is known
+    float rangeA[3];  // start of the cut piece (point rs, or node 0 when rs = -1)
+    float rangeB[3];  // end of the cut piece (point re, or node 1 when re = count)
+    // Multi-segment demolish (manager+0x3d0 set): whole segments, each
+    // demolished on its own at the receiver.
+    int pieceCount;
+    RoadSyncUpgradePiece pieces[8];
 };
 
 // Acknowledgement for a segment or upgrade. success = the receiving engine
@@ -166,6 +200,7 @@ struct RoadSyncAckMsg {
 #define ROAD_SYNC_WIRE_SEGMENT 1 // RoadSyncMsg
 #define ROAD_SYNC_WIRE_ACK 2     // RoadSyncAckMsg
 #define ROAD_SYNC_WIRE_UPGRADE 3 // RoadSyncUpgradeMsg
+#define ROAD_SYNC_WIRE_DEMOLISH 4 // RoadSyncDemolishMsg
 
 // Longest a received item waits for its terrain fence before it is applied
 // anyway (lost/reset terrain stream).
@@ -180,6 +215,13 @@ void RoadSync_Bind(const TsmHost* host);
 // Game thread only. Returns the assigned seq, 0 if queued, -1 if refused.
 int RoadSync_SendSegment(const RoadSyncSegment& seg);
 int RoadSync_SendUpgrade(const RoadSyncUpgradeMsg& msg);
+int RoadSync_SendDemolish(int category, const float cursor[3], const float* rangeA, const float* rangeB,
+                          const RoadSyncUpgradePiece* pieces = nullptr, int pieceCount = 0);
+
+// Builds a path that a building laid as its own access road (sent on the
+// build_sync connection right after the building). Returns true if the
+// engine accepted it or an identical one already exists. Game thread only.
+bool RoadSync_ApplySegmentForBuild(const RoadSyncSegment& seg);
 
 // Per-frame (game thread, Present hook): logs incoming acks and applies
 // received segments/upgrades once the world is loaded and the local player

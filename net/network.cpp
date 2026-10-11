@@ -1,6 +1,7 @@
 // See network.h.
 #include "network.h"
 #include <cstdio>
+#include <mstcpip.h> // SIO_KEEPALIVE_VALS
 #include <algorithm> // std::min - NOMINMAX is defined project-wide, so windows.h's min/max macros are gone
 
 #pragma comment(lib, "ws2_32.lib")
@@ -39,6 +40,21 @@ static bool NetworkSetSocketTimeouts(SOCKET sock, DWORD timeoutMs)
         return false;
     }
     return true;
+}
+
+// TCP keepalive: the join connection sits in a blocking recv for minutes with
+// nothing to read (host saving, client loading), so a silently dead link (VPN
+// drop, crashed peer machine) would never be noticed. Probes after 5s idle,
+// every 1s; Windows gives up after 10 unanswered ones -> ~15s to an error.
+static void NetworkEnableKeepalive(SOCKET sock)
+{
+    tcp_keepalive ka = {};
+    ka.onoff = 1;
+    ka.keepalivetime = 5000;
+    ka.keepaliveinterval = 1000;
+    DWORD returned = 0;
+    if (WSAIoctl(sock, SIO_KEEPALIVE_VALS, &ka, sizeof(ka), nullptr, 0, &returned, nullptr, nullptr) == SOCKET_ERROR)
+        Logf("republicmp  NETWORK: SIO_KEEPALIVE_VALS failed, WSAGetLastError=%d", WSAGetLastError());
 }
 
 SOCKET NetworkHostAcceptOne(unsigned short port, DWORD acceptTimeoutMs, DWORD ioTimeoutMs, volatile bool* cancelFlag)
@@ -127,6 +143,7 @@ SOCKET NetworkHostAcceptOne(unsigned short port, DWORD acceptTimeoutMs, DWORD io
     Logf("republicmp  NETWORK: client connected, %s:%u", clientIp, ntohs(clientAddr.sin_port));
 
     NetworkSetSocketTimeouts(clientSock, ioTimeoutMs);
+    NetworkEnableKeepalive(clientSock);
     return clientSock;
 }
 
@@ -229,6 +246,7 @@ SOCKET NetworkConnect(const char* hostIp, unsigned short port, DWORD connectTime
 
     Logf("republicmp  NETWORK: connected to %s:%u", hostIp, port);
     NetworkSetSocketTimeouts(sock, ioTimeoutMs);
+    NetworkEnableKeepalive(sock);
     return sock;
 }
 
@@ -356,6 +374,26 @@ bool NetworkReceiveFile(SOCKET sock, const char* outFilePath, NetworkProgressFn 
 
     fclose(f);
     Logf("republicmp  NETWORK: finished receiving [%s], %llu bytes", outFilePath, receivedTotal);
+    return true;
+}
+
+bool NetworkPeerGone(SOCKET sock)
+{
+    if (sock == INVALID_SOCKET) return true;
+    fd_set readSet;
+    FD_ZERO(&readSet);
+    FD_SET(sock, &readSet);
+    timeval zero = { 0, 0 };
+    int r = select(0, &readSet, nullptr, nullptr, &zero);
+    if (r == SOCKET_ERROR) return true;
+    if (r == 0) return false; // nothing pending - still up
+    // Readable: data (peer alive), or EOF / reset / keepalive failure. The
+    // socket is readable, so this peek does not block.
+    char b;
+    int n = recv(sock, &b, 1, MSG_PEEK);
+    if (n > 0) return false;
+    if (n == 0) Logf("republicmp  NETWORK: the peer closed the connection");
+    else Logf("republicmp  NETWORK: connection lost, WSAGetLastError=%d", WSAGetLastError());
     return true;
 }
 

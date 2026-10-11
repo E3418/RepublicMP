@@ -27,6 +27,9 @@
 #define FCAF0_RVA 0x4FCAF0                // drag tick
 #define COMMIT_RVA 0x518A80               // commit
 #define VEC_ASSIGN_RVA 0x21D2B0           // std::vector<24-byte record>::operator=
+#define MANAGER_RESET_RVA 0x542A30        // FUN_140542a30(manager, manager+0x408): clears the tool's preview state
+#define MANAGER_RESET_STATE_OFFSET 0x408
+#define ROAD_DEMOLISH_TYPE 0x65           // fcaf0 type argument of the demolish tool
 
 #define LMB_HELD_RVA 0xA54E90             // byte: left mouse button held
 #define LMB_JUST_PRESSED_RVA 0xA54E91     // byte: left mouse button pressed this frame
@@ -35,6 +38,7 @@
 // Hover state the tools read from the local mouse.
 static const unsigned int kHoverPtrRvas[] = { 0x9E45E8, 0x9E4560, 0x9E4558, 0x9E45E0, 0x9E45D8 };
 #define HOVER_FLAG_RVA 0x9E45F8
+#define HOVER_NODE_RVA 0x9E4560  // thisPtr+0xf650: hovered path node (fcaf0 DAT_1409e4560)
 #define HOVER_PORT_BUILDING_RVA 0x9E45B0  // building whose connection port is hovered
 #define HOVER_PORT_INDEX_RVA 0x9E45B8     // that port's index
 
@@ -97,6 +101,7 @@ typedef void (*Fcaf0Fn)(__int64 manager, const float* cursor, int typeId, unsign
                         unsigned char p5, unsigned char p6, unsigned char p7,
                         __int64 routeVector, unsigned char p9, unsigned char p10);
 typedef __int64* (*VecAssignFn)(__int64* dst, const void* srcVectorHeader);
+typedef void (*ManagerResetFn)(__int64 manager, __int64 state);
 
 // ---------------------------------------------------------------------------
 // Categories
@@ -304,12 +309,15 @@ struct RawVectorHeader {
 // Segment replay
 // ---------------------------------------------------------------------------
 
-// True if the category already has a segment joining nodes at `a` and `b`
-// (either orientation). A second segment between the same two nodes is never
-// intended and corrupts connected buildings.
-static bool SegmentBetweenNodesExists(int category, const float a[3], const float b[3])
+// True if the same path is already built: a segment between the same two
+// nodes with the same number of interior points and the same middle point
+// (either direction). Two different routes between the same nodes are both
+// kept.
+static bool SegmentBetweenNodesExists(const RoadSyncSegment& want)
 {
-    const RoadSyncCategoryInfo* info = RoadSync_GetCategoryInfo(category);
+    const float* a = want.startNode;
+    const float* b = want.endNode;
+    const RoadSyncCategoryInfo* info = RoadSync_GetCategoryInfo(want.category);
     if (!info) return false;
     __try {
         __int64 manager = *(__int64*)(GetWorldThisPtr() + info->managerOffset);
@@ -322,8 +330,18 @@ static bool SegmentBetweenNodesExists(int category, const float a[3], const floa
             __int64 n0 = *(__int64*)(seg + SEG_NODE0_OFFSET);
             __int64 n1 = *(__int64*)(seg + SEG_NODE1_OFFSET);
             if (!n0 || !n1) continue;
-            if ((NodeNear(n0, a) && NodeNear(n1, b)) || (NodeNear(n0, b) && NodeNear(n1, a)))
-                return true;
+            bool forward = NodeNear(n0, a) && NodeNear(n1, b);
+            bool backward = NodeNear(n0, b) && NodeNear(n1, a);
+            if (!forward && !backward) continue;
+            const RoadSyncPoint* pts = *(const RoadSyncPoint**)(seg + SEG_POINTS_BEGIN_OFFSET);
+            const RoadSyncPoint* pend = *(const RoadSyncPoint**)(seg + SEG_POINTS_END_OFFSET);
+            int count = (pts && pend > pts) ? (int)(pend - pts) : 0;
+            if (count != want.pointCount) continue;
+            if (count == 0) return true;
+            int mid = count / 2;
+            const float* q = pts[forward ? mid : count - 1 - mid].pos;
+            const float* w = want.points[mid].pos;
+            if (fabsf(q[0] - w[0]) < 0.5f && fabsf(q[2] - w[2]) < 0.5f) return true;
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
@@ -574,9 +592,11 @@ static bool ApplyUpgradePiece(int category, const RoadSyncUpgradeMsg& msg, const
         *(int*)(manager + MGR_VARIANT_OFFSET) = msg.newVariant;
         *(int*)(manager + MGR_FLAG_5C4_OFFSET) = msg.flag5c4;
 
-        Logf("republicmp  ROAD_SYNC: upgrade %s%s range=(%d,%d)/%d type %d/%d -> %d/%d dir=%d",
+        Logf("republicmp  ROAD_SYNC: %s %s%s range=(%d,%d)/%d type %d/%d -> %d/%d type394=%d dir=%d",
+             piece.oldType == 0x65 ? "DEMOLISH" : "upgrade",
              info->name, reversed ? " (reversed)" : "", rs, re, count,
-             *(int*)(seg + SEG_TYPE_OFFSET), *(int*)(seg + SEG_VARIANT_OFFSET), msg.newType, msg.newVariant, dir);
+             *(int*)(seg + SEG_TYPE_OFFSET), *(int*)(seg + SEG_VARIANT_OFFSET), msg.newType, msg.newVariant,
+             piece.oldType, dir);
 
         RoadCommitFn commit = g_origRoadCommit ? g_origRoadCommit : (RoadCommitFn)((uintptr_t)g_exe + COMMIT_RVA);
         commit(manager, 0, 0, 0, 0, 0, 0);
@@ -610,15 +630,286 @@ static int ApplyUpgrade(const RoadSyncUpgradeMsg& msg)
 }
 
 // ---------------------------------------------------------------------------
+// Demolition (terrain_demolish tool)
+// ---------------------------------------------------------------------------
+
+// Where `pos` lies on segment `seg`: -1 = its start node, count = its end
+// node, an interior point index, or -2 if it is none of them.
+static int IndexOnSegment(__int64 seg, const float pos[3])
+{
+    const RoadSyncPoint* pts = *(const RoadSyncPoint**)(seg + SEG_POINTS_BEGIN_OFFSET);
+    const RoadSyncPoint* end = *(const RoadSyncPoint**)(seg + SEG_POINTS_END_OFFSET);
+    int count = (pts && end > pts) ? (int)(end - pts) : 0;
+    __int64 n0 = *(__int64*)(seg + SEG_NODE0_OFFSET);
+    __int64 n1 = *(__int64*)(seg + SEG_NODE1_OFFSET);
+    if (n0 && NodeNear(n0, pos)) return -1;
+    if (n1 && NodeNear(n1, pos)) return count;
+    for (int i = 0; i < count; i++) {
+        const float* q = pts[i].pos;
+        if (fabsf(q[0] - pos[0]) < 0.05f && fabsf(q[2] - pos[2]) < 0.05f && fabsf(q[1] - pos[1]) < 0.5f)
+            return i;
+    }
+    return -2;
+}
+
+// A segment of the manager that has both `a` and `b` on it (nodes or
+// interior points), or 0.
+static __int64 FindSegmentWithRange(__int64 manager, const float a[3], const float b[3])
+{
+    __int64* it = *(__int64**)(manager + MGR_SEGMENTS_BEGIN_OFFSET);
+    __int64* end = *(__int64**)(manager + MGR_SEGMENTS_END_OFFSET);
+    for (; it && it < end; ++it) {
+        __int64 seg = *it;
+        if (!seg || !*(__int64*)(seg + SEG_NODE0_OFFSET) || !*(__int64*)(seg + SEG_NODE1_OFFSET)) continue;
+        int ia = IndexOnSegment(seg, a);
+        if (ia == -2) continue;
+        int ib = IndexOnSegment(seg, b);
+        if (ib != -2 && ib != ia) return seg;
+    }
+    return 0;
+}
+
+// After fcaf0 armed a demolish on segment +0x380: if its range is not the
+// sender's, cut the sender's range instead - indices, the route buffer of
+// the points strictly inside, and the two end nodes on the range ends (the
+// same state the upgrade replay builds). If the range is on another segment
+// of the same type, that segment is cut instead. Returns false if the
+// sender's range was not found (nothing is changed then).
+static bool AdoptSenderRange(__int64 manager, const RoadSyncDemolishMsg& m, int* engineRs, int* engineRe,
+                             int* rsOut, int* reOut)
+{
+    __int64 seg = *(__int64*)(manager + MGR_UPG_SEGMENT_OFFSET);
+    *engineRs = *(int*)(manager + MGR_UPG_RANGE_START_OFFSET);
+    *engineRe = *(int*)(manager + MGR_UPG_RANGE_END_OFFSET);
+    *rsOut = *engineRs;
+    *reOut = *engineRe;
+    if (!seg || !m.hasRange || *(unsigned char*)(manager + MGR_UPG_MULTI_OFFSET) != 0) return false;
+
+    int a = IndexOnSegment(seg, m.rangeA);
+    int b = IndexOnSegment(seg, m.rangeB);
+    bool switched = false;
+    if (a == -2 || b == -2 || a == b) {
+        // The engine picked another segment (e.g. the first one of a hovered
+        // junction node): move to the sender's if it is of the same kind.
+        __int64 other = FindSegmentWithRange(manager, m.rangeA, m.rangeB);
+        if (!other || *(int*)(other + SEG_TYPE_OFFSET) != *(int*)(seg + SEG_TYPE_OFFSET) ||
+            *(int*)(other + SEG_VARIANT_OFFSET) != *(int*)(seg + SEG_VARIANT_OFFSET))
+            return false;
+        seg = other;
+        a = IndexOnSegment(seg, m.rangeA);
+        b = IndexOnSegment(seg, m.rangeB);
+        switched = true; // written to +0x380 only once the range is accepted
+    }
+    int rs = a < b ? a : b, re = a < b ? b : a;
+    const RoadSyncPoint* pts = *(const RoadSyncPoint**)(seg + SEG_POINTS_BEGIN_OFFSET);
+    int count = (int)(*(const RoadSyncPoint**)(seg + SEG_POINTS_END_OFFSET) - pts);
+    if (!switched && rs == *engineRs && re == *engineRe) return true; // same piece - nothing to change
+    // A cut at the first/last interior point would leave a stub between it
+    // and the node with no points at all; the game's frame code reads the
+    // first point of every segment on a node (SOVIET64+0x526605) and crashes
+    // on it. The engine snaps such ends to the node - do the same (the sender
+    // may have had more points on its copy of the segment).
+    if (rs == 0) rs = -1;
+    if (re == count - 1) re = count;
+    if (rs >= re) return false;
+    *rsOut = rs;
+    *reOut = re;
+    if (!switched && rs == *engineRs && re == *engineRe) return true;
+
+    const float* pa = (rs < 0) ? (const float*)(*(__int64*)(seg + SEG_NODE0_OFFSET) + NODE_POS_OFFSET) : pts[rs].pos;
+    const float* pb = (re >= count) ? (const float*)(*(__int64*)(seg + SEG_NODE1_OFFSET) + NODE_POS_OFFSET) : pts[re].pos;
+    float splitStart[3] = { pa[0], pa[1], pa[2] };
+    float splitEnd[3] = { pb[0], pb[1], pb[2] };
+
+    int first = rs + 1, n = re - first;
+    RawVectorHeader route = { pts + first, pts + first + (n > 0 ? n : 0), pts + first + (n > 0 ? n : 0) };
+    ((VecAssignFn)((uintptr_t)g_exe + VEC_ASSIGN_RVA))((__int64*)(manager + MGR_ROUTE_BEGIN_OFFSET), &route);
+    *(__int64*)(manager + MGR_UPG_SEGMENT_OFFSET) = seg;
+    *(int*)(manager + MGR_UPG_RANGE_START_OFFSET) = rs;
+    *(int*)(manager + MGR_UPG_RANGE_END_OFFSET) = re;
+    SetNodePos(*(__int64*)(manager + MGR_START_NODE_OFFSET), splitStart);
+    SetNodePos(*(__int64*)(manager + MGR_END_NODE_OFFSET), splitEnd);
+    return true;
+}
+
+// Repeats one frame of the demolish tool at the sender's cursor: reset the
+// manager's preview state (as the tool does every frame), let fcaf0 pick the
+// piece under the cursor, and commit if it found one. outRemoved = the engine
+// armed and ran the commit.
+static bool ApplyDemolish(const RoadSyncDemolishMsg& m, bool* outRemoved)
+{
+    *outRemoved = false;
+    int engineRs = 0, engineRe = 0, rs = 0, re = 0;
+    bool adopted = false, viaNode = false;
+    const RoadSyncCategoryInfo* info = RoadSync_GetCategoryInfo(m.category);
+    if (!info || !info->enabled) {
+        Logf("republicmp  ROAD_SYNC: refusing demolish category=%d", m.category);
+        return false;
+    }
+    __int64 thisPtr = GetWorldThisPtr();
+    if (ToolWrapperGuardBusy(thisPtr)) return false;
+
+    unsigned char* lmbHeld = (unsigned char*)((uintptr_t)g_exe + LMB_HELD_RVA);
+    unsigned char* lmbJustPressed = (unsigned char*)((uintptr_t)g_exe + LMB_JUST_PRESSED_RVA);
+    ManagerResetFn reset = (ManagerResetFn)((uintptr_t)g_exe + MANAGER_RESET_RVA);
+    Fcaf0Fn fcaf0 = (Fcaf0Fn)((uintptr_t)g_exe + FCAF0_RVA);
+    RoadCommitFn commit = g_origRoadCommit ? g_origRoadCommit : (RoadCommitFn)((uintptr_t)g_exe + COMMIT_RVA);
+
+    bool threw = false;
+    InterlockedIncrement(&g_applyingSegment);
+    TerrainSync_BeginForeignReplay();
+    __try {
+        __int64 manager = *(__int64*)(thisPtr + info->managerOffset);
+        if (manager) {
+            unsigned char savedHeld = *lmbHeld, savedPressed = *lmbJustPressed;
+            float* cursor = (float*)(thisPtr + CURSOR_X_OFFSET);
+            float savedCursor[3] = { cursor[0], cursor[1], cursor[2] };
+            __try {
+                HoverGlobals_Clear();
+                *lmbHeld = 0;
+                *lmbJustPressed = 0;
+                cursor[0] = m.cursor[0]; cursor[1] = m.cursor[1]; cursor[2] = m.cursor[2];
+                reset(manager, manager + MANAGER_RESET_STATE_OFFSET);
+                float c[3] = { m.cursor[0], m.cursor[1], m.cursor[2] };
+                fcaf0(manager, c, ROAD_DEMOLISH_TYPE, 0, 0, 0, 0, 0, 0, 0);
+                if (*(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) == 0 && m.hasRange) {
+                    // Picking by cursor skips short segments; the tool removes
+                    // those through the hovered node (FUN_1403abc90 ~290-320,
+                    // fcaf0 ~1833 / ~2032). Do the same: hover the local node
+                    // at an end of the sender's piece and run the frame again.
+                    __int64 seg = FindSegmentWithRange(manager, m.rangeA, m.rangeB);
+                    if (seg) {
+                        int ia = IndexOnSegment(seg, m.rangeA), ib = IndexOnSegment(seg, m.rangeB);
+                        int lo = ia < ib ? ia : ib, hi = ia < ib ? ib : ia;
+                        const RoadSyncPoint* pb = *(const RoadSyncPoint**)(seg + SEG_POINTS_BEGIN_OFFSET);
+                        const RoadSyncPoint* pe = *(const RoadSyncPoint**)(seg + SEG_POINTS_END_OFFSET);
+                        int count = (pb && pe > pb) ? (int)(pe - pb) : 0;
+                        // The node the piece touches (node 0 for an interior piece).
+                        __int64 node = *(__int64*)(seg + (lo < 0 || hi < count ? SEG_NODE0_OFFSET : SEG_NODE1_OFFSET));
+                        *(__int64*)((uintptr_t)g_exe + HOVER_NODE_RVA) = node;
+                        reset(manager, manager + MANAGER_RESET_STATE_OFFSET);
+                        fcaf0(manager, c, ROAD_DEMOLISH_TYPE, 0, 0, 0, 0, 0, 0, 0);
+                        viaNode = *(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) != 0;
+                    }
+                }
+                if (*(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) != 0) {
+                    adopted = AdoptSenderRange(manager, m, &engineRs, &engineRe, &rs, &re);
+                    // Through the node the engine's own pick is only a stand-in
+                    // for the sender's piece - never cut it on its own.
+                    if (adopted || !viaNode) {
+                        commit(manager, 0, 0, 0, 0, 0, 0);
+                        *outRemoved = true;
+                    }
+                }
+                reset(manager, manager + MANAGER_RESET_STATE_OFFSET);
+            } __finally {
+                HoverGlobals_Clear(); // the hovered node may be gone now
+                *lmbHeld = savedHeld;
+                *lmbJustPressed = savedPressed;
+                cursor[0] = savedCursor[0]; cursor[1] = savedCursor[1]; cursor[2] = savedCursor[2];
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        threw = true;
+    }
+    TerrainSync_EndForeignReplay();
+    InterlockedDecrement(&g_applyingSegment);
+    if (threw) Logf("republicmp  ROAD_SYNC: <exception applying demolish>");
+    else if (*outRemoved) {
+        if (viaNode)
+            Logf("republicmp  ROAD_SYNC:   nothing picked at the cursor - armed through the piece's node");
+        if (!m.hasRange)
+            Logf("republicmp  ROAD_SYNC:   range (%d,%d) chosen here (sender sent no range)", engineRs, engineRe);
+        else if (!adopted)
+            Logf("republicmp  ROAD_SYNC:   sender's range is not on the segment here - kept this engine's (%d,%d)",
+                 engineRs, engineRe);
+        else if (rs != engineRs || re != engineRe)
+            Logf("republicmp  ROAD_SYNC:   range (%d,%d) -> sender's (%d,%d)", engineRs, engineRe, rs, re);
+        else
+            Logf("republicmp  ROAD_SYNC:   range (%d,%d) = sender's", rs, re);
+    }
+    return !threw;
+}
+
+static void SendAck(int seq, int category, bool success, int attempts);
+
+// Multi-segment demolish: each whole segment found here by its nodes is
+// demolished on its own - cursor on its middle, range node to node.
+static bool ApplyDemolishPieces(const RoadSyncDemolishMsg& m, bool* outRemoved)
+{
+    *outRemoved = false;
+    const RoadSyncCategoryInfo* info = RoadSync_GetCategoryInfo(m.category);
+    if (!info || !info->enabled) return false;
+    bool ok = true;
+    for (int i = 0; i < m.pieceCount && i < 8; i++) {
+        RoadSyncDemolishMsg one = {};
+        one.seq = m.seq;
+        one.category = m.category;
+        bool found = false;
+        __try {
+            __int64 manager = *(__int64*)(GetWorldThisPtr() + info->managerOffset);
+            bool reversed = false;
+            __int64 seg = manager ? FindLocalSegment(manager, m.pieces[i], &reversed) : 0;
+            if (seg) {
+                const RoadSyncPoint* pts = *(const RoadSyncPoint**)(seg + SEG_POINTS_BEGIN_OFFSET);
+                const RoadSyncPoint* pend = *(const RoadSyncPoint**)(seg + SEG_POINTS_END_OFFSET);
+                int count = (pts && pend > pts) ? (int)(pend - pts) : 0;
+                const float* n0 = (const float*)(*(__int64*)(seg + SEG_NODE0_OFFSET) + NODE_POS_OFFSET);
+                const float* n1 = (const float*)(*(__int64*)(seg + SEG_NODE1_OFFSET) + NODE_POS_OFFSET);
+                if (count > 0) memcpy(one.cursor, pts[count / 2].pos, 12);
+                else for (int k = 0; k < 3; k++) one.cursor[k] = (n0[k] + n1[k]) * 0.5f;
+                memcpy(one.rangeA, n0, 12);
+                memcpy(one.rangeB, n1, 12);
+                one.hasRange = 1;
+                found = true;
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+        if (!found) {
+            Logf("republicmp  ROAD_SYNC:   demolish piece %d: no local segment (start=(%.2f,%.2f,%.2f) end=(%.2f,%.2f,%.2f) points=%d)",
+                 i, m.pieces[i].segStart[0], m.pieces[i].segStart[1], m.pieces[i].segStart[2],
+                 m.pieces[i].segEnd[0], m.pieces[i].segEnd[1], m.pieces[i].segEnd[2], m.pieces[i].segPointCount);
+            continue;
+        }
+        bool removed = false;
+        if (!ApplyDemolish(one, &removed)) ok = false;
+        if (removed) *outRemoved = true;
+    }
+    return ok;
+}
+
+static void ApplyDemolishAndAck(const RoadSyncDemolishMsg& m)
+{
+    bool removed = false;
+    bool ok = m.pieceCount > 0 ? ApplyDemolishPieces(m, &removed) : ApplyDemolish(m, &removed);
+    Logf("republicmp  ROAD_SYNC: demolish seq=%d %s at (%.2f,%.2f,%.2f) - %s", m.seq, CategoryName(m.category),
+         m.cursor[0], m.cursor[1], m.cursor[2],
+         !ok ? "FAILED" : removed ? "removed" : "nothing under the cursor here (already gone?)");
+    SendAck(m.seq, m.category, ok && removed, 1);
+}
+
+bool RoadSync_ApplySegmentForBuild(const RoadSyncSegment& seg)
+{
+    if (SegmentBetweenNodesExists(seg)) {
+        Logf("republicmp  ROAD_SYNC: access road %s already exists here - skipped", CategoryName(seg.category));
+        return true;
+    }
+    bool accepted = false;
+    ApplySegment(seg, &accepted);
+    return accepted;
+}
+
+// ---------------------------------------------------------------------------
 // Connection
 // ---------------------------------------------------------------------------
 
 // One queued/received unit of work; segments and upgrades share one ordered
 // stream so an upgrade never overtakes the segment it re-types.
 struct RoadSyncItem {
-    int tag; // ROAD_SYNC_WIRE_SEGMENT or ROAD_SYNC_WIRE_UPGRADE
+    int tag; // ROAD_SYNC_WIRE_SEGMENT, _UPGRADE or _DEMOLISH
     RoadSyncMsg seg;
     RoadSyncUpgradeMsg up;
+    RoadSyncDemolishMsg dem;
 };
 
 static volatile bool g_connected = false;
@@ -695,6 +986,21 @@ static DWORD WINAPI ReceiveLoopThread(LPVOID)
                      item->up.seq, CategoryName(item->up.category), item->up.newType, item->up.newVariant, item->up.pieceCount);
             }
 
+            EnterCriticalSection(&g_queueLock);
+            g_incoming.push_back(*item);
+            LeaveCriticalSection(&g_queueLock);
+            delete item;
+        } else if (tag == ROAD_SYNC_WIRE_DEMOLISH) {
+            RoadSyncItem* item = new RoadSyncItem();
+            item->tag = tag;
+            if (!NetworkRecvExact(g_sock, &item->dem, sizeof(item->dem))) {
+                delete item;
+                RoadSyncStatus("[ROAD_SYNC] connection lost");
+                CloseConnection();
+                break;
+            }
+            Logf("republicmp  ROAD_SYNC: received demolish seq=%d %s at (%.2f,%.2f,%.2f)", item->dem.seq,
+                 CategoryName(item->dem.category), item->dem.cursor[0], item->dem.cursor[1], item->dem.cursor[2]);
             EnterCriticalSection(&g_queueLock);
             g_incoming.push_back(*item);
             LeaveCriticalSection(&g_queueLock);
@@ -832,17 +1138,27 @@ static void SendItemNow(RoadSyncItem& item)
 {
     int seq = ++g_nextSeq;
     bool sent;
-    if (item.tag == ROAD_SYNC_WIRE_UPGRADE) {
+    if (item.tag == ROAD_SYNC_WIRE_DEMOLISH) {
+        RoadSyncDemolishMsg& dem = item.dem;
+        dem.seq = seq;
+        Logf("republicmp  ROAD_SYNC: sending demolish seq=%d %s at (%.2f,%.2f,%.2f)",
+             seq, CategoryName(dem.category), dem.cursor[0], dem.cursor[1], dem.cursor[2]);
+        sent = SendEnvelope(ROAD_SYNC_WIRE_DEMOLISH, &dem, sizeof(dem));
+    } else if (item.tag == ROAD_SYNC_WIRE_UPGRADE) {
         RoadSyncUpgradeMsg& up = item.up;
         up.seq = seq;
-        Logf("republicmp  ROAD_SYNC: sending upgrade seq=%d %s type=%d variant=%d pieces=%d",
-             seq, CategoryName(up.category), up.newType, up.newVariant, up.pieceCount);
+        char mode[64];
+        Logf("republicmp  ROAD_SYNC: sending upgrade seq=%d %s type=%d variant=%d pieces=%d pay=%s",
+             seq, CategoryName(up.category), up.newType, up.newVariant, up.pieceCount,
+             BuildMode_Describe(up.mode, mode, sizeof(mode)));
         sent = SendEnvelope(ROAD_SYNC_WIRE_UPGRADE, &up, sizeof(up));
     } else {
         RoadSyncMsg& msg = item.seg;
         msg.seq = seq;
-        Logf("republicmp  ROAD_SYNC: sending seq=%d %s type=%d variant=%d points=%d",
-             seq, CategoryName(msg.seg.category), msg.seg.typeId, msg.seg.variant, msg.seg.pointCount);
+        char mode[64];
+        Logf("republicmp  ROAD_SYNC: sending seq=%d %s type=%d variant=%d points=%d pay=%s",
+             seq, CategoryName(msg.seg.category), msg.seg.typeId, msg.seg.variant, msg.seg.pointCount,
+             BuildMode_Describe(msg.mode, mode, sizeof(mode)));
         LogSegmentPoints("send", seq, msg.seg);
         sent = SendEnvelope(ROAD_SYNC_WIRE_SEGMENT, &msg, sizeof(msg));
     }
@@ -887,6 +1203,31 @@ int RoadSync_SendSegment(const RoadSyncSegment& seg)
     s_item.tag = ROAD_SYNC_WIRE_SEGMENT;
     s_item.seg.seg = seg;
     s_item.seg.terrainFence = TerrainSync_GetFenceSeq();
+    s_item.seg.mode = BuildMode_Read();
+    return SendOrQueue(s_item);
+}
+
+int RoadSync_SendDemolish(int category, const float cursor[3], const float* rangeA, const float* rangeB,
+                          const RoadSyncUpgradePiece* pieces, int pieceCount)
+{
+    static RoadSyncItem s_item; // large - game thread only
+    memset(&s_item, 0, sizeof(s_item));
+    s_item.tag = ROAD_SYNC_WIRE_DEMOLISH;
+    s_item.dem.category = category;
+    s_item.dem.cursor[0] = cursor[0];
+    s_item.dem.cursor[1] = cursor[1];
+    s_item.dem.cursor[2] = cursor[2];
+    s_item.dem.terrainFence = TerrainSync_GetFenceSeq();
+    if (rangeA && rangeB) {
+        s_item.dem.hasRange = 1;
+        memcpy(s_item.dem.rangeA, rangeA, sizeof(s_item.dem.rangeA));
+        memcpy(s_item.dem.rangeB, rangeB, sizeof(s_item.dem.rangeB));
+    }
+    if (pieces && pieceCount > 0) {
+        int n = pieceCount < 8 ? pieceCount : 8;
+        memcpy(s_item.dem.pieces, pieces, n * sizeof(RoadSyncUpgradePiece));
+        s_item.dem.pieceCount = n;
+    }
     return SendOrQueue(s_item);
 }
 
@@ -901,6 +1242,7 @@ int RoadSync_SendUpgrade(const RoadSyncUpgradeMsg& up)
     s_item.tag = ROAD_SYNC_WIRE_UPGRADE;
     s_item.up = up;
     s_item.up.terrainFence = TerrainSync_GetFenceSeq();
+    s_item.up.mode = BuildMode_Read();
     return SendOrQueue(s_item);
 }
 
@@ -916,7 +1258,9 @@ static ULONGLONG g_fenceWaitStartMs = 0; // when the head item started waiting f
 // has waited ROAD_SYNC_FENCE_TIMEOUT_MS for it.
 static bool TerrainFenceAllows(const RoadSyncItem& item)
 {
-    int fence = item.tag == ROAD_SYNC_WIRE_UPGRADE ? item.up.terrainFence : item.seg.terrainFence;
+    int fence = item.tag == ROAD_SYNC_WIRE_UPGRADE ? item.up.terrainFence
+              : item.tag == ROAD_SYNC_WIRE_DEMOLISH ? item.dem.terrainFence
+              : item.seg.terrainFence;
     if (TerrainSync_FenceReached(fence)) {
         if (g_fenceWaitStartMs)
             Logf("republicmp  ROAD_SYNC: terrain fence %d reached after %llums", fence, GetTickCount64() - g_fenceWaitStartMs);
@@ -950,13 +1294,17 @@ static void SendAck(int seq, int category, bool success, int attempts)
 static void ApplySegmentAndAck(const RoadSyncMsg& msg)
 {
     const RoadSyncSegment& seg = msg.seg;
-    if (SegmentBetweenNodesExists(seg.category, seg.startNode, seg.endNode)) {
+    if (SegmentBetweenNodesExists(seg)) {
         Logf("republicmp  ROAD_SYNC: seq=%d %s already exists between these nodes - skipped",
              msg.seq, CategoryName(seg.category));
         SendAck(msg.seq, seg.category, true, 0);
         return;
     }
 
+    // Built the way the sender chose (rubles / dollars / realistic); the
+    // local player's own choice is put back right after.
+    BuildMode mine = BuildMode_Read();
+    BuildMode_Write(msg.mode);
     bool ok = false;
     bool engineAccepted = false;
     int attempt = 1;
@@ -964,18 +1312,26 @@ static void ApplySegmentAndAck(const RoadSyncMsg& msg)
         ok = ApplySegment(seg, &engineAccepted);
         if (ok) break;
     }
+    BuildMode_Write(mine);
     if (!ok) attempt = ROAD_SYNC_MAX_APPLY_ATTEMPTS;
 
-    Logf("republicmp  ROAD_SYNC: seq=%d %s after %d attempt(s)", msg.seq,
-         !ok ? "GAVE UP" : engineAccepted ? "applied" : "REJECTED by the engine", attempt);
+    char theirs[64], local[64];
+    Logf("republicmp  ROAD_SYNC: seq=%d %s after %d attempt(s), pay=%s (mine: %s)", msg.seq,
+         !ok ? "GAVE UP" : engineAccepted ? "applied" : "REJECTED by the engine", attempt,
+         BuildMode_Describe(msg.mode, theirs, sizeof(theirs)), BuildMode_Describe(mine, local, sizeof(local)));
     SendAck(msg.seq, seg.category, ok && engineAccepted, attempt);
 }
 
 static void ApplyUpgradeAndAck(const RoadSyncUpgradeMsg& up)
 {
+    BuildMode mine = BuildMode_Read();
+    BuildMode_Write(up.mode);
     int applied = ApplyUpgrade(up);
-    Logf("republicmp  ROAD_SYNC: upgrade seq=%d %s applied %d/%d piece(s)",
-         up.seq, CategoryName(up.category), applied, up.pieceCount);
+    BuildMode_Write(mine);
+    char theirs[64], local[64];
+    Logf("republicmp  ROAD_SYNC: upgrade seq=%d %s applied %d/%d piece(s), pay=%s (mine: %s)",
+         up.seq, CategoryName(up.category), applied, up.pieceCount,
+         BuildMode_Describe(up.mode, theirs, sizeof(theirs)), BuildMode_Describe(mine, local, sizeof(local)));
     SendAck(up.seq, up.category, applied == up.pieceCount, 1);
 }
 
@@ -1029,6 +1385,8 @@ void RoadSync_Tick()
         }
         if (toApply[i].tag == ROAD_SYNC_WIRE_UPGRADE)
             ApplyUpgradeAndAck(toApply[i].up);
+        else if (toApply[i].tag == ROAD_SYNC_WIRE_DEMOLISH)
+            ApplyDemolishAndAck(toApply[i].dem);
         else
             ApplySegmentAndAck(toApply[i].seg);
     }

@@ -41,4 +41,7 @@ bool TriggerSaveGame(const char* saveName);
 // (0 = no timeout). Returns false on timeout or when *cancelFlag becomes true
 // (checked every ~100ms).
 bool WaitForSaveToFinish(DWORD timeoutMs, volatile bool* cancelFlag = nullptr);
-bool WaitForLoadToFinish(DWORD timeoutMs, volatile bool* cancelFlag = nullptr);
+// abortCheck(abortCtx), polled with the cancel flag, ends the wait early too
+// (e.g. the join connection died). The load itself is not stopped.
+bool WaitForLoadToFinish(DWORD timeoutMs, volatile bool* cancelFlag = nullptr,
+                         bool (*abortCheck)(void*) = nullptr, void* abortCtx = nullptr);

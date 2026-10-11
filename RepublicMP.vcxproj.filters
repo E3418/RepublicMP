@@ -206,6 +206,9 @@
     <ClInclude Include="net\terrain_sync.h">
       <Filter>net</Filter>
     </ClInclude>
+    <ClInclude Include="net\build_mode.h">
+      <Filter>net</Filter>
+    </ClInclude>
     <ClInclude Include="net\host_config.h">
       <Filter>net</Filter>
     </ClInclude>

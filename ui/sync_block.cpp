@@ -1,6 +1,7 @@
 // See sync_block.h.
 #include "sync_block.h"
 #include "../hooks/game_speed.h" // EnsureGamePaused() re-assert, see SyncBlock_Draw
+#include "../net/save_sync.h"    // the Cancel button
 #include "imgui.h"
 #include <windows.h>
 #include <mutex>
@@ -133,6 +134,28 @@ void SyncBlock_Draw()
 
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor();
+
+    // A way out that does not need the other side: a join stuck on a dead
+    // connection would otherwise only end by killing the game. Its own small
+    // window, drawn after the dimmer, so it takes clicks. Shown a moment
+    // after the start and low on the screen, away from where Connect was
+    // clicked.
+    if (SaveSync_IsBusy() && SaveSync_GetSessionAgeMs() >= SAVE_SYNC_STOP_BUTTON_DELAY_MS) {
+        float lineH = ImGui::GetTextLineHeight();
+        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.8f),
+                                ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+        ImGuiWindowFlags btnFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoBackground;
+        if (ImGui::Begin("##syncblockcancel", nullptr, btnFlags)) {
+            bool host = SaveSync_IsHostRole();
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.2f, 0.2f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.25f, 0.25f, 1.0f));
+            if (ImGui::Button(host ? "Stop hosting" : "Cancel joining", ImVec2(lineH * 12.0f, lineH * 2.0f)))
+                SaveSync_RequestDisconnect();
+            ImGui::PopStyleColor(2);
+        }
+        ImGui::End();
+    }
 
     // NoInputs is intentional: this window only dims the screen; input is
     // blocked in HookedWndProc and hooks/input_block.

@@ -25,6 +25,9 @@
 // How long the live sync channels get to connect after the world is loaded.
 #define CHANNELS_CONNECT_TIMEOUT_MS 30000
 #define CHANNELS_RETRY_MS 1000
+// A single dropped channel (network hiccup, Debug window Disconnect) gets
+// this long to reconnect before the session is given up.
+#define CHANNEL_RECONNECT_TIMEOUT_MS 20000
 
 #define JOIN_STEPS 7
 
@@ -48,6 +51,9 @@ static volatile bool g_disconnectRequested = false;
 
 // The join connection in use, so Disconnect can break a blocking recv.
 static volatile SOCKET g_activeSock = INVALID_SOCKET;
+
+// GetTickCount64 when the current session was started (Host / Connect).
+static volatile ULONGLONG g_sessionStartTick = 0;
 
 static void SetState(SessionState s) { g_state = s; }
 
@@ -247,14 +253,69 @@ static bool WaitForChannels(bool client)
     return false;
 }
 
-// Blocks while the session is live. Returns why it ended.
-static const char* MonitorLiveSession()
+// Names of the channels that are down, e.g. "roads, terrain".
+static void DownChannels(char* out, size_t outSize)
 {
+    out[0] = 0;
+    if (!BuildSync_IsConnected()) strcat_s(out, outSize, "buildings ");
+    if (!RoadSync_IsConnected()) strcat_s(out, outSize, "roads ");
+    if (!TerrainSync_IsConnected()) strcat_s(out, outSize, "terrain ");
+    size_t n = strlen(out);
+    if (n) out[n - 1] = 0;
+}
+
+// Blocks while the session is live. Returns why it ended (nullptr = the
+// local player stopped it).
+//
+// All three channels gone at once = the other game closed the session (or
+// is gone). Only some gone = a hiccup or a Debug-window Disconnect: those
+// channels are reconnected (host listens again, client retries) and the
+// session ends only if they are not back within CHANNEL_RECONNECT_TIMEOUT_MS.
+// Messages that were in flight on a dropped channel are lost.
+static const char* MonitorLiveSession(bool client)
+{
+    static char s_why[160];
+    ULONGLONG downSince = 0;
+    ULONGLONG lastTry = 0;
     for (;;) {
         if (g_disconnectRequested) return nullptr;
-        if (!BuildSync_IsConnected()) return "building sync connection lost";
-        if (!RoadSync_IsConnected()) return "road sync connection lost";
-        if (!TerrainSync_IsConnected()) return "terrain sync connection lost";
+
+        bool b = BuildSync_IsConnected(), r = RoadSync_IsConnected(), t = TerrainSync_IsConnected();
+        if (b && r && t) {
+            if (downSince) {
+                SaveStatus("live sync restored after %llus", (GetTickCount64() - downSince) / 1000);
+                downSince = 0;
+            }
+            Sleep(200);
+            continue;
+        }
+
+        char down[64];
+        DownChannels(down, sizeof(down));
+        if (!b && !r && !t) {
+            // When the peer really leaves, the three drop within ~100 ms of
+            // each other; the reconnect branch below covers that gap.
+            _snprintf_s(s_why, sizeof(s_why), _TRUNCATE, "all live sync connections closed");
+            return s_why;
+        }
+
+        ULONGLONG now = GetTickCount64();
+        if (!downSince) {
+            downSince = now;
+            SaveStatus("live sync channel(s) dropped: %s - reconnecting", down);
+        }
+        if (now - downSince > CHANNEL_RECONNECT_TIMEOUT_MS) {
+            _snprintf_s(s_why, sizeof(s_why), _TRUNCATE, "couldn't reconnect: %s", down);
+            return s_why;
+        }
+        if (client) {
+            if (now - lastTry >= CHANNELS_RETRY_MS) {
+                StartChannelsClient();
+                lastTry = now;
+            }
+        } else {
+            StartChannelsHost(); // no-op for channels already connected or listening
+        }
         Sleep(200);
     }
 }
@@ -492,7 +553,7 @@ static void RunHostSession()
 
         SetState(SESSION_HOST_IN_GAME);
         SaveStatus("[HOST] %s is in the game - live sync running", peer);
-        const char* why = MonitorLiveSession();
+        const char* why = MonitorLiveSession(false);
         ResetChannels();
         if (!why) break; // Stop hosting
         SetSessionError("%s left: %s", peer, why);
@@ -512,6 +573,13 @@ static void ClientStep(int step, const char* text, int percent = -1)
 {
     SyncBlock_SetStep(step, JOIN_STEPS, text, percent);
     SaveStatus("[CLIENT] step %d/%d: %s", step, JOIN_STEPS, text);
+}
+
+// WaitForLoadToFinish abort check: the host sends nothing while the client
+// loads, so anything readable here is the connection closing or failing.
+static bool JoinHostGone(void* sockPtr)
+{
+    return NetworkPeerGone(*(SOCKET*)sockPtr);
 }
 
 // Returns true when the player is in the host's game with all channels up.
@@ -547,6 +615,9 @@ static bool RunClientJoin()
             break;
         }
         g_activeSock = sock;
+        // A Disconnect that came while connecting found no socket to shut
+        // down; without this the whole world would still be downloaded.
+        if (g_disconnectRequested) break;
         SessionHello mine, theirs;
         MakeHello(&mine);
         if (!NetworkSendExact(sock, &mine, sizeof(mine)) || !NetworkRecvExact(sock, &theirs, sizeof(theirs))) {
@@ -611,8 +682,9 @@ static bool RunClientJoin()
         _snprintf_s(receivedSaveName, sizeof(receivedSaveName), _TRUNCATE, "%s%s",
                     SAVE_SYNC_CLIENT_STAGING_NAME, SAVE_SYNC_RECEIVED_SUFFIX);
         TriggerLoadSave(receivedSaveName);
-        if (!WaitForLoadToFinish(0, &g_disconnectRequested)) {
-            SendMsg(sock, MSG_ABORT, 0, -1, "the player cancelled while loading");
+        if (!WaitForLoadToFinish(0, &g_disconnectRequested, JoinHostGone, &sock)) {
+            if (g_disconnectRequested) SendMsg(sock, MSG_ABORT, 0, -1, "the player cancelled while loading");
+            else SetSessionError("the host dropped while the world was loading");
             break;
         }
 
@@ -647,7 +719,7 @@ static void RunClientSession()
 
     SetState(SESSION_CLIENT_IN_GAME);
     SaveStatus("[CLIENT] in the game at %s - live sync running", g_targetIp);
-    const char* why = MonitorLiveSession();
+    const char* why = MonitorLiveSession(true);
     ResetChannels();
     if (why) {
         SetSessionError("disconnected from the host: %s", why);
@@ -681,6 +753,7 @@ void SaveSync_StartHost()
     if (g_state != SESSION_IDLE) return;
     g_disconnectRequested = false;
     g_isHost = true;
+    g_sessionStartTick = GetTickCount64();
     SetSessionError("");
     SetState(SESSION_HOST_LISTENING);
     CreateThread(nullptr, 0, HostSessionThread, nullptr, 0, nullptr);
@@ -694,6 +767,7 @@ void SaveSync_StartClient(const char* hostIp)
         strncpy_s(g_targetIp, hostIp, _TRUNCATE);
     }
     g_isHost = false;
+    g_sessionStartTick = GetTickCount64();
     SetSessionError("");
     SetState(SESSION_CLIENT_JOINING);
     CreateThread(nullptr, 0, ClientSessionThread, nullptr, 0, nullptr);
@@ -717,6 +791,7 @@ void SaveSync_RequestDisconnect()
 SessionState SaveSync_GetState() { return g_state; }
 bool SaveSync_IsBusy()           { return g_state != SESSION_IDLE; }
 bool SaveSync_IsHostRole()       { return g_isHost; }
+ULONGLONG SaveSync_GetSessionAgeMs() { return g_state == SESSION_IDLE ? 0 : GetTickCount64() - g_sessionStartTick; }
 bool SaveSync_IsHostAwaitingClient() { return g_state == SESSION_HOST_LISTENING; }
 const char* SaveSync_GetTargetIp() { return g_targetIp; }
 

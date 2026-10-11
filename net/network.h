@@ -37,4 +37,9 @@ bool NetworkReceiveFile(SOCKET sock, const char* outFilePath,
 bool NetworkSendExact(SOCKET sock, const void* data, size_t size);
 bool NetworkRecvExact(SOCKET sock, void* data, size_t size);
 
+// Non-blocking: true when the connection has been closed or has failed
+// (including a keepalive timeout). Pending data counts as alive and is left
+// unread.
+bool NetworkPeerGone(SOCKET sock);
+
 void NetworkCloseSocket(SOCKET sock);

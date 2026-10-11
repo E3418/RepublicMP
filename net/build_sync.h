@@ -14,6 +14,15 @@
 // tool guard bytes are set (blocking UI, window activation), so placements
 // wait for them to clear and a refused placement is retried a few times.
 //
+// "Finish with rubles / dollars" on an existing construction site: every
+// building has two pay flags (building+0x608 rubles, +0x609 dollars) that the
+// construction-site window and placement-with-money set; FUN_140160550(this,
+// building, rub, usd) writes them and runs FUN_140161440 on the building.
+// The buildings list is scanned every PAY_SCAN_INTERVAL_MS; a flag that
+// switched on is sent (BUILD_SYNC_KIND_PAY) and the receiver calls
+// FUN_140160550 on its building with the same flags. Flags going back to 0
+// (the game clears them when construction ends) are not sent.
+//
 // Demolitions (hooks/demolish_hook) travel on the same connection as
 // BUILD_SYNC_KIND_DEMOLISH, so a demolition never overtakes the placement of
 // the building it removes. The receiver finds its building by position and
@@ -30,16 +39,25 @@
 
 #include "tesmio_plugin.h"
 #include "host_config.h"
+#include "road_sync.h" // RoadSyncSegment (access roads)
+#include "build_mode.h"
 
 #define BUILD_SYNC_PORT 5557
 #define BUILD_SYNC_TEST_HOST_IP REPUBLICMP_HOST_IP
 
 #define BUILD_SYNC_KIND_PLACE 0
 #define BUILD_SYNC_KIND_DEMOLISH 1
+#define BUILD_SYNC_KIND_SPEED_SET 2     // host -> client: game speed (hooks/game_speed)
+#define BUILD_SYNC_KIND_SPEED_REQUEST 3 // client -> host: the client changed the speed
+#define BUILD_SYNC_KIND_SPEED_BOOST 4   // either way: sender's Hyper/Plaid boost (speed field)
+#define BUILD_SYNC_KIND_TIME 5          // host -> client: game clock (speed=day, speedSaved=year, timeProgress)
+#define BUILD_SYNC_KIND_ACCESS_ROAD 6   // a road the previous building laid itself; a RoadSyncSegment follows on the wire
+#define BUILD_SYNC_KIND_PAY 7           // a building was switched to "finish with rubles/dollars" (speed=rub, speedSaved=usd)
 
 struct BuildSyncMsg {
     int kind;                   // BUILD_SYNC_KIND_*
     int terrainFence;           // TerrainSync_GetFenceSeq() at send
+    BuildMode mode;             // PLACE / ACCESS_ROAD: sender's rubles/dollars/realistic choice
     float x, y, z;              // PLACE: main object position (verification only); DEMOLISH: the building (obj+0x350)
     float rotSin, rotCos;       // main object yaw (obj+0x340 / obj+0x348)
     char typeName[64];          // building type, e.g. "residental_brick_1"
@@ -50,6 +68,11 @@ struct BuildSyncMsg {
     // DEMOLISH only
     int demolishCategory;       // *(obj+0x318)+0x360, -1 = unknown
     unsigned long long demolishArgs[5]; // FUN_140168730's p3..p7, raw
+    // SPEED only
+    int speed;                  // thisPtr+0x5a4
+    int speedSaved;             // thisPtr+0x5a8
+    int speedTurbo;             // thisPtr+0x5ac
+    float timeProgress;         // TIME: thisPtr+0x59c
 };
 
 // Longest a received message waits for its terrain fence before it is
@@ -65,8 +88,19 @@ void BuildSync_Bind(const TsmHost* host);
 // Sends a local placement, or queues it while disconnected. Game thread only.
 void BuildSync_SendPlacement(const BuildSyncMsg& msg);
 
+// Sends an access road the last placed building laid itself (always right
+// after that building's placement). Game thread only.
+void BuildSync_SendAccessRoad(const RoadSyncSegment& seg);
+
 // Sends a local demolition (hooks/demolish_hook). Game thread only.
 void BuildSync_SendDemolish(const float pos[3], int category, const unsigned long long args[5]);
+
+// Sends a game-speed message (dropped while not connected - the host
+// re-sends its speed when the sync starts). Game thread only.
+void BuildSync_SendSpeed(int kind, int speed, int speedSaved, int turbo);
+
+// Sends the host's game clock (hooks/game_speed). Game thread only.
+void BuildSync_SendTime(int day, int year, float progress);
 
 // True while a remote placement or demolition is being replayed.
 bool BuildSync_IsApplyingRemote();
