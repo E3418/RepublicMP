@@ -44,9 +44,13 @@ both machines.
    is mirrored, and the host's clock is sent regularly so both cities stay on
    the same day and hour.
 
-Not synced yet: factory connections, money (each side pays from its own
-pool), and simulation state (vehicles, citizens, production) - both games
-simulate on their own.
+9. **Money** - The host owns the rubles and dollars: its balances are sent
+   every second and the client takes them over. The client's purchases are
+   paid on the host when it replays them; whatever the client's own
+   simulation earns or spends is dropped.
+
+Not synced yet: factory connections and simulation state (vehicles,
+citizens, production) - both games simulate on their own.
 
 ## How it works
 
