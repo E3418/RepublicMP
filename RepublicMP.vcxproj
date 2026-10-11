@@ -181,6 +181,7 @@
     <ClCompile Include="hooks\game_speed.cpp" />
     <ClCompile Include="hooks\state_hash.cpp" />
     <ClCompile Include="hooks\determinism.cpp" />
+    <ClCompile Include="net\sync_check.cpp" />
     <ClCompile Include="hooks\imgui_hook.cpp" />
     <ClCompile Include="hooks\terrain_hook.cpp" />
     <ClCompile Include="hooks\demolish_hook.cpp" />
@@ -218,6 +219,7 @@
     <ClInclude Include="hooks\game_speed.h" />
     <ClInclude Include="hooks\state_hash.h" />
     <ClInclude Include="hooks\determinism.h" />
+    <ClInclude Include="net\sync_check.h" />
     <ClInclude Include="hooks\window_focus.h" />
     <ClInclude Include="hooks\save_load.h" />
     <ClInclude Include="hooks\imgui_hook.h" />
