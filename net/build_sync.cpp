@@ -310,7 +310,7 @@ static void SendNow(const BuildWireItem& item)
     if (msg.kind == BUILD_SYNC_KIND_SPEED_SET || msg.kind == BUILD_SYNC_KIND_SPEED_REQUEST ||
         msg.kind == BUILD_SYNC_KIND_SPEED_BOOST || msg.kind == BUILD_SYNC_KIND_TIME ||
         msg.kind == BUILD_SYNC_KIND_MONEY || msg.kind == BUILD_SYNC_KIND_RESYNC ||
-        msg.kind == BUILD_SYNC_KIND_SETTING || msg.kind == BUILD_SYNC_KIND_WEATHER) {{
+        msg.kind == BUILD_SYNC_KIND_SETTING || msg.kind == BUILD_SYNC_KIND_WEATHER) {
         if (!NetworkSendExact(g_sock, &msg, sizeof(msg))) {
             BuildSyncStatus("[BUILD_SYNC] send failed, dropping connection");
             CloseConnection();
