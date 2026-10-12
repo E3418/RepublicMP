@@ -9,7 +9,13 @@
 //                 path tools pay their pieces the same way (FUN_1405258e0)
 //   +0xafc  != 0: the same with dollars (FUN_140160550(.., 0, 1))
 //   both 0:       realistic - a construction site is placed
-//   +0xb00        copied into the new building (building+0x11b8)
+//   +0xb00        auto purchase, copied into the new building (building+0x11b8,
+//                 the window's "auto purchase"; FUN_1401754d0 applies it):
+//                 sign = on (+) / off (-) - the window's checkbox just negates
+//                 it (0x1400806DD); |value| % 100 = the threshold percent;
+//                 |value| / 100 = which of the window's option buttons is
+//                 selected (0, 1, 2 in order, 0x140080A46). 70 = on, 70%,
+//                 option 0; -270 = off, 70%, option 2.
 //   +0xb04        read when a building is created (fill level)
 //
 // A remote placement/path is replayed with the SENDER's mode: written here
@@ -66,10 +72,15 @@ static bool BuildMode_Equal(const BuildMode& a, const BuildMode& b)
     return a.rub == b.rub && a.usd == b.usd && a.b00 == b.b00 && a.b04 == b.b04;
 }
 
-// "rubles", "dollars", "realistic" (+ the two extra settings), for the log.
+// For the log: "rubles, auto purchase on 70% option 1, fill 20".
 static const char* BuildMode_Describe(const BuildMode& m, char* out, size_t outSize)
 {
     const char* pay = (m.rub && m.usd) ? "rubles+dollars?" : m.rub ? "rubles" : m.usd ? "dollars" : "realistic";
-    _snprintf_s(out, outSize, _TRUNCATE, "%s (b00=%d b04=%d)", pay, m.b00, m.b04);
+    int a = m.b00 < 0 ? -m.b00 : m.b00;
+    if (m.b00 == 0)
+        _snprintf_s(out, outSize, _TRUNCATE, "%s, auto purchase off, fill %d", pay, m.b04);
+    else
+        _snprintf_s(out, outSize, _TRUNCATE, "%s, auto purchase %s %d%% option %d, fill %d", pay,
+                    m.b00 > 0 ? "on" : "off", a % 100, a / 100, m.b04);
     return out;
 }
