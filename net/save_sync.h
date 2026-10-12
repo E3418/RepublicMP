@@ -19,6 +19,13 @@
 // CRC32 of their RepublicMP.dll (version.h); any difference refuses the join.
 //
 // One session runs at a time: Host/Connect are refused while one is active.
+//
+// Re-sync: both games simulate on their own, so vehicles, citizens,
+// production and storage drift apart. The host can replace the player's world
+// with its own again, by hand or every few minutes: it announces the re-sync
+// on the build_sync channel, closes the live channels and listens again; the
+// player, seeing the announcement instead of a drop, connects straight back
+// and the normal join runs (both games pause, save, send, load).
 #pragma once
 
 #include "tesmio_plugin.h"
@@ -49,6 +56,27 @@ void SaveSync_StartClient(const char* hostIp = nullptr); // nullptr = keep last 
 // Ends the session: stops hosting / leaves the host, closes the live sync
 // channels. Waits (accept, connect, save, load) react within ~200ms.
 void SaveSync_RequestDisconnect();
+
+// Host, player in the game: re-sync now (no-op otherwise).
+void SaveSync_RequestResync();
+
+// Host: re-sync automatically every `minutes` minutes of live play (0 = off).
+void SaveSync_SetAutoResyncMinutes(int minutes);
+int SaveSync_GetAutoResyncMinutes();
+
+// Host, player in the game: ms until the next automatic re-sync (0 = off).
+ULONGLONG SaveSync_GetMsUntilAutoResync();
+
+// True while a re-sync is under way (from the announcement to the player
+// being back in the game).
+bool SaveSync_IsResyncing();
+
+// Client: the host announced a re-sync (build_sync receive thread).
+void SaveSync_OnResyncAnnounced();
+
+// Per-frame (game thread, Present hook): sends a requested announcement -
+// build_sync only sends from the game thread.
+void SaveSync_Tick();
 
 SessionState SaveSync_GetState();
 bool SaveSync_IsBusy();     // any state but SESSION_IDLE

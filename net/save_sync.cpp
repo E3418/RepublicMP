@@ -16,6 +16,8 @@
 #include <stdlib.h>
 #include <time.h>
 #include <vector>
+#include <filesystem>
+#include <system_error>
 
 #pragma comment(lib, "User32.lib")
 
@@ -54,6 +56,20 @@ static volatile SOCKET g_activeSock = INVALID_SOCKET;
 
 // GetTickCount64 when the current session was started (Host / Connect).
 static volatile ULONGLONG g_sessionStartTick = 0;
+
+// Re-sync (see save_sync.h).
+#define RESYNC_ANNOUNCE_TIMEOUT_MS 3000 // host: the game thread sends the announcement within this
+#define RESYNC_ANNOUNCE_FLUSH_MS 500    // host: lets the announcement leave before the channels close
+#define RESYNC_REJOIN_TIMEOUT_MS 30000  // host: how long the player has to come back; client: how long it retries
+#define RESYNC_RETRY_MS 500
+static volatile bool g_resyncRequested = false; // host: button or timer
+static volatile bool g_resyncSendNow = false;   // host: the game thread sends the announcement
+static volatile bool g_resyncSent = false;
+static volatile bool g_resyncAnnounced = false; // client: the host announced one
+static volatile bool g_resyncing = false;
+static volatile int g_autoResyncMinutes = 0;
+static volatile ULONGLONG g_lastWorldSentTick = 0; // host: when the player last got the world
+static const char* const kResyncReason = "re-sync";
 
 static void SetState(SessionState s) { g_state = s; }
 
@@ -264,8 +280,36 @@ static void DownChannels(char* out, size_t outSize)
     if (n) out[n - 1] = 0;
 }
 
+static bool ResyncDue()
+{
+    if (g_resyncRequested) return true;
+    int minutes = g_autoResyncMinutes;
+    return minutes > 0 && GetTickCount64() - g_lastWorldSentTick >= (ULONGLONG)minutes * 60000;
+}
+
+// Host: has the game thread send the announcement and waits until it is out.
+// False (re-sync dropped) if it could not be sent.
+static bool AnnounceResync()
+{
+    g_resyncRequested = false;
+    g_resyncSent = false;
+    g_resyncSendNow = true;
+    ULONGLONG start = GetTickCount64();
+    while (!g_resyncSent && !g_disconnectRequested && GetTickCount64() - start < RESYNC_ANNOUNCE_TIMEOUT_MS)
+        Sleep(50);
+    g_resyncSendNow = false;
+    if (!g_resyncSent) {
+        SaveStatus("[HOST] couldn't announce the re-sync - skipped");
+        g_lastWorldSentTick = GetTickCount64(); // the timer tries again a full interval later
+        return false;
+    }
+    Sleep(RESYNC_ANNOUNCE_FLUSH_MS);
+    g_resyncing = true;
+    return true;
+}
+
 // Blocks while the session is live. Returns why it ended (nullptr = the
-// local player stopped it).
+// local player stopped it, kResyncReason = a re-sync).
 //
 // All three channels gone at once = the other game closed the session (or
 // is gone). Only some gone = a hiccup or a Debug-window Disconnect: those
@@ -279,6 +323,7 @@ static const char* MonitorLiveSession(bool client)
     ULONGLONG lastTry = 0;
     for (;;) {
         if (g_disconnectRequested) return nullptr;
+        if (client && g_resyncAnnounced) return kResyncReason;
 
         bool b = BuildSync_IsConnected(), r = RoadSync_IsConnected(), t = TerrainSync_IsConnected();
         if (b && r && t) {
@@ -286,9 +331,13 @@ static const char* MonitorLiveSession(bool client)
                 SaveStatus("live sync restored after %llus", (GetTickCount64() - downSince) / 1000);
                 downSince = 0;
             }
+            if (!client && ResyncDue() && AnnounceResync()) return kResyncReason;
             Sleep(200);
             continue;
         }
+
+        // The announcement is noted before its connection is seen closing.
+        if (client && g_resyncAnnounced) return kResyncReason;
 
         char down[64];
         DownChannels(down, sizeof(down));
@@ -381,6 +430,21 @@ static void GenerateRandomSaveName(char* out, size_t outSize)
     _snprintf_s(out, outSize, _TRUNCATE, "mp_syncsave_%08x", tag);
 }
 
+// The host's newest join save. Each join (and so each re-sync) writes a new
+// one; the one before it is deleted, so they do not pile up.
+static char g_prevHostSaveDir[MAX_PATH] = "";
+
+static void KeepOnlyNewestHostSave(const char* newSaveDir)
+{
+    if (g_prevHostSaveDir[0] && _stricmp(g_prevHostSaveDir, newSaveDir) != 0) {
+        std::error_code ec;
+        std::filesystem::remove_all(g_prevHostSaveDir, ec);
+        if (ec) Logf("republicmp  SESSION: couldn't delete the old join save [%s]: %s", g_prevHostSaveDir, ec.message().c_str());
+        else Logf("republicmp  SESSION: deleted the old join save [%s]", g_prevHostSaveDir);
+    }
+    strncpy_s(g_prevHostSaveDir, newSaveDir, _TRUNCATE);
+}
+
 static void PeerIpOf(SOCKET sock, char* out, size_t outSize)
 {
     sockaddr_in addr = {};
@@ -407,9 +471,11 @@ static void HostStep(SOCKET sock, int step, const char* text, int percent = -1)
 static bool RunHostJoin(SOCKET sock)
 {
     g_activeSock = sock;
-    SyncBlock_SetActive(true, "A player is connecting");
+    SyncBlock_SetActive(true, g_resyncing ? "Re-syncing the world" : "A player is connecting");
     EnsureGamePaused();
     bool joined = false;
+    char madeSaveDir[MAX_PATH] = {}; // cleaned up below
+    char madeZip[MAX_PATH] = {};
 
     do {
         // 1. Versions.
@@ -445,6 +511,7 @@ static bool RunHostJoin(SOCKET sock)
             SendMsg(sock, MSG_ABORT, 0, -1, "host couldn't save the world");
             break;
         }
+        strncpy_s(madeSaveDir, saveDir, _TRUNCATE);
         TriggerSaveGame(liveSaveName);
         if (!WaitForSaveToFinish(0, &g_disconnectRequested)) {
             SendMsg(sock, MSG_ABORT, 0, -1, "host stopped hosting");
@@ -457,6 +524,7 @@ static bool RunHostJoin(SOCKET sock)
         HostStep(sock, 3, "Packing the save", 0);
         SendMsg(sock, MSG_STEP, 3, 0, "packing the save");
         ProgressCtx packCtx = { sock, 3, "packing the save", -100 };
+        strncpy_s(madeZip, zipPath, _TRUNCATE);
         if (!ZipSaveDirectory(saveDir, zipPath, ZipProgressCb, &packCtx)) {
             SetSessionError("packing the save failed");
             SendMsg(sock, MSG_ABORT, 0, -1, "host couldn't pack the save");
@@ -504,12 +572,16 @@ static bool RunHostJoin(SOCKET sock)
         HostStep(sock, 7, "Starting live sync");
         StartChannelsHost();
         if (!WaitForChannels(false)) {
-            if (!g_disconnectRequested) SetSessionError("the live sync channels didn't connect");
+            if (!g_disconnectRequested) SetSessionError("the live sync channels didn't connect - TCP ports %d-%d must reach the host too (forward them like port %d)", BUILD_SYNC_PORT, TERRAIN_SYNC_PORT, SAVE_SYNC_PORT);
             ResetChannels();
             break;
         }
         joined = true;
     } while (false);
+
+    // The zip only existed to be sent.
+    if (madeZip[0]) DeleteFileA(madeZip);
+    if (madeSaveDir[0]) KeepOnlyNewestHostSave(madeSaveDir);
 
     g_activeSock = INVALID_SOCKET;
     NetworkCloseSocket(sock);
@@ -525,16 +597,29 @@ static void RunHostSession()
         return;
     }
 
+    bool rejoin = false; // a re-sync: the player is expected back right away
     while (!g_disconnectRequested) {
         SetState(SESSION_HOST_LISTENING);
-        SetPeerIp("");
-        SaveStatus("[HOST] hosting on port %d - waiting for a player (the game keeps running)", SAVE_SYNC_PORT);
+        if (!rejoin) {
+            SetPeerIp("");
+            SaveStatus("[HOST] hosting on port %d - waiting for a player (the game keeps running)", SAVE_SYNC_PORT);
+        }
 
-        // No accept timeout (cancellable); no I/O timeout - the player may
-        // take a while to unpack and load.
-        SOCKET sock = NetworkHostAcceptOne(SAVE_SYNC_PORT, 0, 0, &g_disconnectRequested);
+        // No accept timeout (cancellable) unless the player is coming back
+        // from a re-sync; no I/O timeout - the player may take a while to
+        // unpack and load.
+        SOCKET sock = NetworkHostAcceptOne(SAVE_SYNC_PORT, rejoin ? RESYNC_REJOIN_TIMEOUT_MS : 0, 0,
+                                           &g_disconnectRequested);
         if (sock == INVALID_SOCKET) {
-            if (!g_disconnectRequested) SetSessionError("couldn't listen on port %d (already in use?)", SAVE_SYNC_PORT);
+            if (g_disconnectRequested) break;
+            if (rejoin) {
+                rejoin = false;
+                g_resyncing = false;
+                SetSessionError("the player didn't come back for the re-sync");
+                SaveStatus("[HOST] the player didn't come back for the re-sync - waiting for a player again");
+                continue;
+            }
+            SetSessionError("couldn't listen on port %d (already in use?)", SAVE_SYNC_PORT);
             break;
         }
 
@@ -543,19 +628,30 @@ static void RunHostSession()
         SetPeerIp(peer);
         SetState(SESSION_HOST_JOINING);
         SetSessionError("");
-        SaveStatus("[HOST] %s is joining - both games are paused until it is loaded", peer);
+        SaveStatus(rejoin ? "[HOST] %s is back - re-syncing, both games are paused until it is loaded"
+                          : "[HOST] %s is joining - both games are paused until it is loaded", peer);
 
-        if (!RunHostJoin(sock)) {
+        bool joined = RunHostJoin(sock);
+        rejoin = false;
+        g_resyncing = false;
+        if (!joined) {
             if (g_disconnectRequested) break;
             SaveStatus("[HOST] the join failed (%s) - waiting for a player again", SaveSync_GetLastError());
             continue;
         }
+        g_lastWorldSentTick = GetTickCount64();
+        g_resyncRequested = false; // one asked for during the join is already done
 
         SetState(SESSION_HOST_IN_GAME);
         SaveStatus("[HOST] %s is in the game - live sync running", peer);
         const char* why = MonitorLiveSession(false);
         ResetChannels();
         if (!why) break; // Stop hosting
+        if (why == kResyncReason) {
+            rejoin = true;
+            SaveStatus("[HOST] re-syncing - waiting for %s to reconnect", peer);
+            continue;
+        }
         SetSessionError("%s left: %s", peer, why);
         SaveStatus("[HOST] %s left (%s) - waiting for a player again", peer, why);
     }
@@ -583,9 +679,12 @@ static bool JoinHostGone(void* sockPtr)
 }
 
 // Returns true when the player is in the host's game with all channels up.
-static bool RunClientJoin()
+// rejoin: coming back for a re-sync - the host may need a moment to listen
+// again, so refused connects are retried.
+static bool RunClientJoin(bool rejoin)
 {
-    SyncBlock_SetActive(true, "Connecting to the host");
+    g_resyncAnnounced = false;
+    SyncBlock_SetActive(true, rejoin ? "Re-syncing with the host" : "Connecting to the host");
     EnsureGamePaused();
 
     SOCKET sock = INVALID_SOCKET;
@@ -608,7 +707,13 @@ static bool RunClientJoin()
             SetSessionError("network init failed");
             break;
         }
-        sock = NetworkConnect(g_targetIp, SAVE_SYNC_PORT, 15000, 0, &g_disconnectRequested);
+        ULONGLONG connectStart = GetTickCount64();
+        for (;;) {
+            sock = NetworkConnect(g_targetIp, SAVE_SYNC_PORT, 15000, 0, &g_disconnectRequested);
+            if (sock != INVALID_SOCKET || !rejoin || g_disconnectRequested) break;
+            if (GetTickCount64() - connectStart > RESYNC_REJOIN_TIMEOUT_MS) break;
+            Sleep(RESYNC_RETRY_MS);
+        }
         if (sock == INVALID_SOCKET) {
             if (!g_disconnectRequested)
                 SetSessionError("couldn't reach %s:%d - is the host hosting (and not already playing with someone)? is the IP right?", g_targetIp, SAVE_SYNC_PORT);
@@ -692,7 +797,7 @@ static bool RunClientJoin()
         ClientStep(7, "Starting live sync");
         SendMsg(sock, MSG_READY, 7, -1, "");
         if (!WaitForChannels(true)) {
-            if (!g_disconnectRequested) SetSessionError("the live sync channels didn't connect");
+            if (!g_disconnectRequested) SetSessionError("the live sync channels didn't connect - TCP ports %d-%d of the host are not reachable (only port %d is forwarded?)", BUILD_SYNC_PORT, TERRAIN_SYNC_PORT, SAVE_SYNC_PORT);
             ResetChannels();
             break;
         }
@@ -709,23 +814,34 @@ static bool RunClientJoin()
 static void RunClientSession()
 {
     SetPeerIp(g_targetIp);
-    SetState(SESSION_CLIENT_JOINING);
-    if (!RunClientJoin()) {
-        ResetChannels();
-        if (g_disconnectRequested) SaveStatus("[CLIENT] cancelled");
-        else SaveStatus("[CLIENT] couldn't join: %s", SaveSync_GetLastError());
-        return;
-    }
+    bool rejoin = false;
+    for (;;) {
+        SetState(SESSION_CLIENT_JOINING);
+        bool joined = RunClientJoin(rejoin);
+        g_resyncing = false;
+        if (!joined) {
+            ResetChannels();
+            if (g_disconnectRequested) SaveStatus("[CLIENT] cancelled");
+            else SaveStatus("[CLIENT] couldn't join: %s", SaveSync_GetLastError());
+            return;
+        }
 
-    SetState(SESSION_CLIENT_IN_GAME);
-    SaveStatus("[CLIENT] in the game at %s - live sync running", g_targetIp);
-    const char* why = MonitorLiveSession(true);
-    ResetChannels();
-    if (why) {
-        SetSessionError("disconnected from the host: %s", why);
-        SaveStatus("[CLIENT] disconnected from the host (%s)", why);
-    } else {
-        SaveStatus("[CLIENT] left the session");
+        SetState(SESSION_CLIENT_IN_GAME);
+        SaveStatus("[CLIENT] in the game at %s - live sync running", g_targetIp);
+        const char* why = MonitorLiveSession(true);
+        ResetChannels();
+        if (why == kResyncReason) {
+            rejoin = true;
+            SaveStatus("[CLIENT] the host is re-syncing the world - reconnecting");
+            continue;
+        }
+        if (why) {
+            SetSessionError("disconnected from the host: %s", why);
+            SaveStatus("[CLIENT] disconnected from the host (%s)", why);
+        } else {
+            SaveStatus("[CLIENT] left the session");
+        }
+        return;
     }
 }
 
@@ -753,6 +869,8 @@ void SaveSync_StartHost()
     if (g_state != SESSION_IDLE) return;
     g_disconnectRequested = false;
     g_isHost = true;
+    g_resyncRequested = false;
+    g_resyncing = false;
     g_sessionStartTick = GetTickCount64();
     SetSessionError("");
     SetState(SESSION_HOST_LISTENING);
@@ -767,6 +885,7 @@ void SaveSync_StartClient(const char* hostIp)
         strncpy_s(g_targetIp, hostIp, _TRUNCATE);
     }
     g_isHost = false;
+    g_resyncing = false;
     g_sessionStartTick = GetTickCount64();
     SetSessionError("");
     SetState(SESSION_CLIENT_JOINING);
@@ -786,6 +905,43 @@ void SaveSync_RequestDisconnect()
     SOCKET s = g_activeSock;
     if (s != INVALID_SOCKET) shutdown(s, SD_BOTH);
     ResetChannels();
+}
+
+void SaveSync_RequestResync()
+{
+    if (g_isHost && g_state == SESSION_HOST_IN_GAME) g_resyncRequested = true;
+}
+
+void SaveSync_SetAutoResyncMinutes(int minutes)
+{
+    g_autoResyncMinutes = minutes > 0 ? minutes : 0;
+}
+
+int SaveSync_GetAutoResyncMinutes() { return g_autoResyncMinutes; }
+
+ULONGLONG SaveSync_GetMsUntilAutoResync()
+{
+    int minutes = g_autoResyncMinutes;
+    if (!g_isHost || g_state != SESSION_HOST_IN_GAME || minutes <= 0) return 0;
+    ULONGLONG interval = (ULONGLONG)minutes * 60000;
+    ULONGLONG elapsed = GetTickCount64() - g_lastWorldSentTick;
+    return elapsed >= interval ? 1 : interval - elapsed;
+}
+
+bool SaveSync_IsResyncing() { return g_resyncing; }
+
+void SaveSync_OnResyncAnnounced()
+{
+    g_resyncing = true;
+    g_resyncAnnounced = true;
+}
+
+void SaveSync_Tick()
+{
+    if (!g_resyncSendNow || g_resyncSent) return;
+    if (!BuildSync_IsConnected()) return; // AnnounceResync gives up after its timeout
+    BuildSync_SendResync();
+    if (BuildSync_IsConnected()) g_resyncSent = true;
 }
 
 SessionState SaveSync_GetState() { return g_state; }

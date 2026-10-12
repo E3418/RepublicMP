@@ -5,6 +5,8 @@
 #include "terrain_sync.h"            // TerrainSync_Begin/EndForeignReplay, fence
 #include "../hooks/demolish_hook.h" // DemolishHook_CallOriginal
 #include "../hooks/game_speed.h"    // GameSpeed_OnRemote
+#include "save_sync.h"               // SaveSync_OnResyncAnnounced
+#include "../hooks/money.h"         // Money_OnRemote
 #include "../ui/debug_log.h"
 #include "../ui/sync_block.h"
 #include <vector>
@@ -41,6 +43,12 @@
 #define TOOL_GUARD1_OFFSET 0xfbc         // any nonzero -> placement function returns at once
 #define TOOL_GUARD2_OFFSET 0xfbe
 #define TOOL_GUARD3_OFFSET 0xfc3
+// Pointer to the menu entry the local player has selected (name string
+// first, e.g. "road_onelane"; +0x2b5 a flag, +0x48 the type record), 0 when
+// nothing is selected. FUN_1403c4850 (the road routing a building's access
+// road goes through) reads +0x2b5 without a null check.
+#define SELECTED_ENTRY_OFFSET 0xd428
+#define REPLAY_ENTRY_SIZE 0x1000         // covers every field read off an entry
 
 #define RETRY_DELAY_MS 500
 
@@ -58,6 +66,7 @@
 // ---------------------------------------------------------------------------
 
 static CRITICAL_SECTION g_queueLock;
+static char g_replayEntry[REPLAY_ENTRY_SIZE]; // stand-in selected menu entry (game thread only)
 
 void BuildSync_Bind(const TsmHost* host)
 {
@@ -134,6 +143,14 @@ static DWORD WINAPI ReceiveLoopThread(LPVOID)
             break;
         }
         msg.typeName[sizeof(msg.typeName) - 1] = 0;
+
+        // Noted right here, before this thread can see the connection close
+        // that follows it, so the session never mistakes it for a drop.
+        if (msg.kind == BUILD_SYNC_KIND_RESYNC) {
+            Logf("republicmp  BUILD_SYNC: the host announced a re-sync");
+            SaveSync_OnResyncAnnounced();
+            continue;
+        }
 
         BuildWireItem item;
         item.msg = msg;
@@ -292,7 +309,8 @@ static void SendNow(const BuildWireItem& item)
     }
     if (msg.kind == BUILD_SYNC_KIND_SPEED_SET || msg.kind == BUILD_SYNC_KIND_SPEED_REQUEST ||
         msg.kind == BUILD_SYNC_KIND_SPEED_BOOST || msg.kind == BUILD_SYNC_KIND_TIME ||
-        msg.kind == BUILD_SYNC_KIND_WEATHER) {
+        msg.kind == BUILD_SYNC_KIND_MONEY || msg.kind == BUILD_SYNC_KIND_RESYNC ||
+        msg.kind == BUILD_SYNC_KIND_SETTING || msg.kind == BUILD_SYNC_KIND_WEATHER) {{
         if (!NetworkSendExact(g_sock, &msg, sizeof(msg))) {
             BuildSyncStatus("[BUILD_SYNC] send failed, dropping connection");
             CloseConnection();
@@ -365,7 +383,7 @@ void BuildSync_SendTime(int day, int year, float progress)
     msg.timeProgress = progress;
     SendOrQueue(msg);
 }
-
+  
 void BuildSync_SendWeather(const WeatherWire& w)
 {
     if (!g_connected) return;
@@ -373,6 +391,36 @@ void BuildSync_SendWeather(const WeatherWire& w)
     msg.kind = BUILD_SYNC_KIND_WEATHER;
     strcpy_s(msg.typeName, "<weather>");
     msg.weather = w;
+    SendOrQueue(msg);
+}
+  
+void BuildSync_SendMoney(double rub, double usd)
+{
+    if (!g_connected) return;
+    BuildSyncMsg msg = {};
+    msg.kind = BUILD_SYNC_KIND_MONEY;
+    strcpy_s(msg.typeName, "<money>");
+    msg.moneyRub = rub;
+    msg.moneyUsd = usd;
+    SendOrQueue(msg);
+}
+
+void BuildSync_SendResync()
+{
+    if (!g_connected) return;
+    BuildSyncMsg msg = {};
+    msg.kind = BUILD_SYNC_KIND_RESYNC;
+    strcpy_s(msg.typeName, "<resync>");
+    SendOrQueue(msg);
+}
+
+void BuildSync_SendSetting(const SettingWire& w)
+{
+    if (!g_connected) return;
+    BuildSyncMsg msg = {};
+    msg.kind = BUILD_SYNC_KIND_SETTING;
+    strcpy_s(msg.typeName, "<setting>");
+    msg.setting = w;
     SendOrQueue(msg);
 }
 
@@ -488,9 +536,21 @@ static bool ApplyOneRemotePlacement(__int64 thisPtr, const BuildSyncMsg& msg, in
             InterlockedIncrement(&g_applyingRemote);
             // Built the way the sender chose; the local choice goes back after.
             BuildMode_Write(msg.mode);
+            // The local player's selected menu entry must not leak into the
+            // replay - and the access-road routing reads it unchecked, so a
+            // player with nothing selected crashed it. A neutral entry named
+            // after the building stands in while the replay runs.
+            __int64* selected = (__int64*)(thisPtr + SELECTED_ENTRY_OFFSET);
+            __int64 savedSelected = *selected;
+            // Not strncpy_s: the debug CRT fills the rest of the buffer with
+            // 0xFE, and the game follows +0x48 as a pointer when it is nonzero.
+            memset(g_replayEntry, 0, sizeof(g_replayEntry));
+            memcpy(g_replayEntry, typeName, strnlen(typeName, 63));
+            *selected = (__int64)g_replayEntry;
             __try {
                 g_origUniversal(thisPtr, typeName, 0, 1, msg.param5, 0xffffffff, 0, 1);
             } __finally {
+                *selected = savedSelected;
                 BuildMode_Write(mine);
                 InterlockedDecrement(&g_applyingRemote);
                 TerrainSync_EndForeignReplay();
@@ -743,6 +803,7 @@ void BuildSync_Tick()
         // placement waiting for its terrain or a retry.
         if (msg.kind == BUILD_SYNC_KIND_SPEED_SET || msg.kind == BUILD_SYNC_KIND_SPEED_REQUEST ||
             msg.kind == BUILD_SYNC_KIND_SPEED_BOOST || msg.kind == BUILD_SYNC_KIND_TIME ||
+            msg.kind == BUILD_SYNC_KIND_MONEY || msg.kind == BUILD_SYNC_KIND_SETTING ||
             msg.kind == BUILD_SYNC_KIND_WEATHER) {
             speedMsgs.push_back(msg);
             continue;
@@ -756,6 +817,8 @@ void BuildSync_Tick()
     for (const BuildSyncMsg& m : speedMsgs) {
         if (m.kind == BUILD_SYNC_KIND_TIME) GameSpeed_OnRemoteTime(m.speed, m.speedSaved, m.timeProgress);
         else if (m.kind == BUILD_SYNC_KIND_WEATHER) Weather_OnRemote(m.weather);
+        else if (m.kind == BUILD_SYNC_KIND_MONEY) Money_OnRemote(m.moneyRub, m.moneyUsd);
+        else if (m.kind == BUILD_SYNC_KIND_SETTING) SettingsSync_OnRemote(m.setting);
         else GameSpeed_OnRemote(m.kind, m.speed, m.speedSaved, m.speedTurbo);
     }
 

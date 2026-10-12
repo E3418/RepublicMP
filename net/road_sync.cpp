@@ -4,7 +4,9 @@
 #include "../ui/debug_log.h"
 #include "../hooks/detect_spawn.h" // DetectSpawn_IsToolDragActive, g_origRoadCommit
 #include "terrain_sync.h"            // TerrainSync_Begin/EndForeignReplay
+#include "../ui/sync_block.h"
 #include <vector>
+#include <unordered_map>
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
@@ -108,9 +110,12 @@ typedef void (*ManagerResetFn)(__int64 manager, __int64 state);
 // ---------------------------------------------------------------------------
 
 // Manager offsets and wrapper RVAs come from each wrapper's decompile; tool
-// names from the strcmp chain in FUN_14030d1a0. FACTORYCONN is disabled: its
-// wrapper (FUN_1403d6e70) runs extra building logic (FUN_140546db0) that a
-// replay through the primitives does not reproduce.
+// names from the strcmp chain in FUN_14030d1a0. FACTORYCONN: drawing
+// ("factoryconnection", wrapper mode = type id 0) and its demolish mode (100)
+// drive the primitives exactly like the footpath wrapper. Only the
+// factoryconnection_oneway mode (0x32) differs - it hit-tests existing
+// connections (FUN_140546db0) and changes their direction without a commit;
+// that travels as RoadSyncDirectionMsg.
 static RoadSyncCategoryInfo g_categories[ROAD_SYNC_CATEGORY_COUNT] = {
     { "ROAD",        0xf7a0, true  },
     { "PIPE",        0xf858, true  },
@@ -124,7 +129,7 @@ static RoadSyncCategoryInfo g_categories[ROAD_SYNC_CATEGORY_COUNT] = {
     { "CONVEYOR",    0xf800, true  },
     { "CABLEWAY",    0xfa40, true  },
     { "AIRROAD",     0xfa30, true  },
-    { "FACTORYCONN", 0xf9c0, false },
+    { "FACTORYCONN", 0xf9c0, true  },
 };
 
 static const unsigned int g_categoryWrapperRva[ROAD_SYNC_CATEGORY_COUNT] = {
@@ -906,10 +911,11 @@ bool RoadSync_ApplySegmentForBuild(const RoadSyncSegment& seg)
 // One queued/received unit of work; segments and upgrades share one ordered
 // stream so an upgrade never overtakes the segment it re-types.
 struct RoadSyncItem {
-    int tag; // ROAD_SYNC_WIRE_SEGMENT, _UPGRADE or _DEMOLISH
+    int tag; // ROAD_SYNC_WIRE_SEGMENT, _UPGRADE, _DEMOLISH or _DIRECTION
     RoadSyncMsg seg;
     RoadSyncUpgradeMsg up;
     RoadSyncDemolishMsg dem;
+    RoadSyncDirectionMsg dir;
 };
 
 static volatile bool g_connected = false;
@@ -1001,6 +1007,21 @@ static DWORD WINAPI ReceiveLoopThread(LPVOID)
             }
             Logf("republicmp  ROAD_SYNC: received demolish seq=%d %s at (%.2f,%.2f,%.2f)", item->dem.seq,
                  CategoryName(item->dem.category), item->dem.cursor[0], item->dem.cursor[1], item->dem.cursor[2]);
+            EnterCriticalSection(&g_queueLock);
+            g_incoming.push_back(*item);
+            LeaveCriticalSection(&g_queueLock);
+            delete item;
+        } else if (tag == ROAD_SYNC_WIRE_DIRECTION) {
+            RoadSyncItem* item = new RoadSyncItem();
+            item->tag = tag;
+            if (!NetworkRecvExact(g_sock, &item->dir, sizeof(item->dir))) {
+                delete item;
+                RoadSyncStatus("[ROAD_SYNC] connection lost");
+                CloseConnection();
+                break;
+            }
+            Logf("republicmp  ROAD_SYNC: received direction seq=%d %s -> %d", item->dir.seq,
+                 CategoryName(item->dir.category), item->dir.direction);
             EnterCriticalSection(&g_queueLock);
             g_incoming.push_back(*item);
             LeaveCriticalSection(&g_queueLock);
@@ -1138,7 +1159,14 @@ static void SendItemNow(RoadSyncItem& item)
 {
     int seq = ++g_nextSeq;
     bool sent;
-    if (item.tag == ROAD_SYNC_WIRE_DEMOLISH) {
+    if (item.tag == ROAD_SYNC_WIRE_DIRECTION) {
+        RoadSyncDirectionMsg& dir = item.dir;
+        dir.seq = seq;
+        Logf("republicmp  ROAD_SYNC: sending direction seq=%d %s (%.2f,%.2f,%.2f)-(%.2f,%.2f,%.2f) -> %d",
+             seq, CategoryName(dir.category), dir.piece.segStart[0], dir.piece.segStart[1], dir.piece.segStart[2],
+             dir.piece.segEnd[0], dir.piece.segEnd[1], dir.piece.segEnd[2], dir.direction);
+        sent = SendEnvelope(ROAD_SYNC_WIRE_DIRECTION, &dir, sizeof(dir));
+    } else if (item.tag == ROAD_SYNC_WIRE_DEMOLISH) {
         RoadSyncDemolishMsg& dem = item.dem;
         dem.seq = seq;
         Logf("republicmp  ROAD_SYNC: sending demolish seq=%d %s at (%.2f,%.2f,%.2f)",
@@ -1185,7 +1213,8 @@ static int SendOrQueue(RoadSyncItem& item)
     if (!g_connected || !g_outboundQueue.empty()) {
         g_outboundQueue.push_back(item);
         Logf("republicmp  ROAD_SYNC: queued %s (%zu waiting for connection)",
-             item.tag == ROAD_SYNC_WIRE_UPGRADE ? "upgrade" : "segment", g_outboundQueue.size());
+             item.tag == ROAD_SYNC_WIRE_UPGRADE ? "upgrade" : item.tag == ROAD_SYNC_WIRE_DIRECTION ? "direction" : "segment",
+             g_outboundQueue.size());
         return 0;
     }
     SendItemNow(item);
@@ -1258,6 +1287,7 @@ static ULONGLONG g_fenceWaitStartMs = 0; // when the head item started waiting f
 // has waited ROAD_SYNC_FENCE_TIMEOUT_MS for it.
 static bool TerrainFenceAllows(const RoadSyncItem& item)
 {
+    if (item.tag == ROAD_SYNC_WIRE_DIRECTION) return true; // no terrain involved
     int fence = item.tag == ROAD_SYNC_WIRE_UPGRADE ? item.up.terrainFence
               : item.tag == ROAD_SYNC_WIRE_DEMOLISH ? item.dem.terrainFence
               : item.seg.terrainFence;
@@ -1335,9 +1365,139 @@ static void ApplyUpgradeAndAck(const RoadSyncUpgradeMsg& up)
     SendAck(up.seq, up.category, applied == up.pieceCount, 1);
 }
 
+// ---------------------------------------------------------------------------
+// Factory connection direction (game thread only, see RoadSyncDirectionMsg)
+// ---------------------------------------------------------------------------
+
+#define SEG_DIRECTION_OFFSET 0x1bc       // int: 0 both ways, 1 / 2 one way (node 0 / node 1 relative)
+#define NODE_BUILDINGS_BEGIN_OFFSET 0x70 // node: buildings attached to it
+#define NODE_BUILDINGS_END_OFFSET 0x78
+#define REFRESH_BUILDING_RVA 0x191950    // FUN_140191950(thisPtr, building)
+#define DIR_SCAN_INTERVAL_MS 250
+#define DIR_SCAN_MAX 4096
+
+typedef void (*RefreshBuildingFn)(__int64 thisPtr, __int64 building);
+
+// Last direction seen per local connection segment.
+static std::unordered_map<__int64, int> g_knownDirections;
+static ULONGLONG g_lastDirScanMs = 0;
+
+struct DirSnapshot {
+    __int64 seg;
+    int direction;
+    RoadSyncUpgradePiece piece;
+};
+static DirSnapshot g_dirSnapshot[DIR_SCAN_MAX];
+
+// Copies every factory connection's direction and identity; -1 on a fault.
+static int ReadFactoryDirections()
+{
+    int n = 0;
+    __try {
+        __int64 manager = *(__int64*)(GetWorldThisPtr() + g_categories[ROAD_SYNC_CATEGORY_FACTORYCONN].managerOffset);
+        if (!manager) return 0;
+        __int64* it = *(__int64**)(manager + MGR_SEGMENTS_BEGIN_OFFSET);
+        __int64* end = *(__int64**)(manager + MGR_SEGMENTS_END_OFFSET);
+        for (; it && it < end && n < DIR_SCAN_MAX; ++it) {
+            __int64 seg = *it;
+            if (!seg) continue;
+            __int64 n0 = *(__int64*)(seg + SEG_NODE0_OFFSET);
+            __int64 n1 = *(__int64*)(seg + SEG_NODE1_OFFSET);
+            if (!n0 || !n1) continue;
+            DirSnapshot& s = g_dirSnapshot[n++];
+            memset(&s, 0, sizeof(s));
+            s.seg = seg;
+            s.direction = *(int*)(seg + SEG_DIRECTION_OFFSET);
+            memcpy(s.piece.segStart, (const float*)(n0 + NODE_POS_OFFSET), sizeof(s.piece.segStart));
+            memcpy(s.piece.segEnd, (const float*)(n1 + NODE_POS_OFFSET), sizeof(s.piece.segEnd));
+            s.piece.segPointCount =
+                (int)((*(__int64*)(seg + SEG_POINTS_END_OFFSET) - *(__int64*)(seg + SEG_POINTS_BEGIN_OFFSET)) / 0x18);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return -1;
+    }
+    return n;
+}
+
+// Sends every connection whose direction changed since the last scan. New
+// connections are only recorded - they start out the same on both sides.
+static void ScanFactoryDirections()
+{
+    int n = ReadFactoryDirections();
+    if (n < 0) return;
+    std::unordered_map<__int64, int> seen;
+    seen.reserve(n);
+    for (int i = 0; i < n; i++) {
+        const DirSnapshot& s = g_dirSnapshot[i];
+        seen[s.seg] = s.direction;
+        auto known = g_knownDirections.find(s.seg);
+        if (known == g_knownDirections.end() || known->second == s.direction) continue;
+        static RoadSyncItem s_item; // large - game thread only
+        memset(&s_item, 0, sizeof(s_item));
+        s_item.tag = ROAD_SYNC_WIRE_DIRECTION;
+        s_item.dir.category = ROAD_SYNC_CATEGORY_FACTORYCONN;
+        s_item.dir.piece = s.piece;
+        s_item.dir.direction = s.direction;
+        SendOrQueue(s_item);
+    }
+    g_knownDirections.swap(seen);
+}
+
+// Writes the direction into the local segment and refreshes its buildings.
+// Returns the segment (0 = not found or faulted).
+static __int64 ApplyDirection(const RoadSyncDirectionMsg& m, int* outLocalDirection)
+{
+    const RoadSyncCategoryInfo* info = RoadSync_GetCategoryInfo(m.category);
+    if (!info || m.direction < 0 || m.direction > 2) return 0;
+    __int64 thisPtr = GetWorldThisPtr();
+    RefreshBuildingFn refresh = (RefreshBuildingFn)((uintptr_t)g_exe + REFRESH_BUILDING_RVA);
+    __try {
+        __int64 manager = *(__int64*)(thisPtr + info->managerOffset);
+        bool reversed = false;
+        __int64 seg = manager ? FindLocalSegment(manager, m.piece, &reversed) : 0;
+        if (!seg) return 0;
+        int dir = (reversed && m.direction) ? 3 - m.direction : m.direction;
+        *(int*)(seg + SEG_DIRECTION_OFFSET) = dir;
+        __int64 nodes[2] = { *(__int64*)(seg + SEG_NODE0_OFFSET), *(__int64*)(seg + SEG_NODE1_OFFSET) };
+        for (__int64 node : nodes) {
+            if (!node) continue;
+            __int64* first = *(__int64**)(node + NODE_BUILDINGS_BEGIN_OFFSET);
+            __int64* last = *(__int64**)(node + NODE_BUILDINGS_END_OFFSET);
+            if (first && first < last && *first) refresh(thisPtr, *first);
+        }
+        *outLocalDirection = dir;
+        return seg;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+static void ApplyDirectionAndAck(const RoadSyncDirectionMsg& m)
+{
+    int localDirection = 0;
+    __int64 seg = ApplyDirection(m, &localDirection);
+    // Recorded as seen, so the next scan does not send it back.
+    if (seg) g_knownDirections[seg] = localDirection;
+    Logf("republicmp  ROAD_SYNC: direction seq=%d %s -> %d %s", m.seq, CategoryName(m.category), m.direction,
+         seg ? "applied" : "NOT APPLIED - connection not found");
+    SendAck(m.seq, m.category, seg != 0, 1);
+}
+
 void RoadSync_Tick()
 {
     FlushOutboundQueue();
+
+    // Factory connection directions: only while connected and in the world
+    // (the join screen and a fresh load would otherwise look like changes).
+    if (g_connected && !SyncBlock_IsActive() && IsWorldLoaded()) {
+        ULONGLONG nowMs = GetTickCount64();
+        if (nowMs - g_lastDirScanMs >= DIR_SCAN_INTERVAL_MS) {
+            g_lastDirScanMs = nowMs;
+            ScanFactoryDirections();
+        }
+    } else {
+        g_knownDirections.clear();
+    }
 
     std::vector<RoadSyncAckMsg> acks;
     EnterCriticalSection(&g_queueLock);
@@ -1383,7 +1543,9 @@ void RoadSync_Tick()
             g_pending.insert(g_pending.begin(), toApply.begin() + i, toApply.end());
             break;
         }
-        if (toApply[i].tag == ROAD_SYNC_WIRE_UPGRADE)
+        if (toApply[i].tag == ROAD_SYNC_WIRE_DIRECTION)
+            ApplyDirectionAndAck(toApply[i].dir);
+        else if (toApply[i].tag == ROAD_SYNC_WIRE_UPGRADE)
             ApplyUpgradeAndAck(toApply[i].up);
         else if (toApply[i].tag == ROAD_SYNC_WIRE_DEMOLISH)
             ApplyDemolishAndAck(toApply[i].dem);

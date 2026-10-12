@@ -63,6 +63,12 @@
     <ClCompile Include="hooks\weather.cpp">
       <Filter>hooks</Filter>
     </ClCompile>
+    <ClCompile Include="hooks\money.cpp">
+      <Filter>hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="net\settings_sync.cpp">
+      <Filter>net</Filter>
+    </ClCompile>
     <ClCompile Include="hooks\state_hash.cpp">
       <Filter>hooks</Filter>
     </ClCompile>
@@ -181,6 +187,12 @@
     </ClInclude>
     <ClInclude Include="hooks\determinism.h">
       <Filter>hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\money.h">
+      <Filter>hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="net\settings_sync.h">
+      <Filter>net</Filter>
     </ClInclude>
     <ClInclude Include="hooks\window_focus.h">
       <Filter>hooks</Filter>
