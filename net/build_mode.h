@@ -14,8 +14,9 @@
 //
 // A remote placement/path is replayed with the SENDER's mode: written here
 // just before the replay and the local player's own restored right after,
-// so the window keeps showing what the local player chose. Money is not
-// synced yet - each side pays its own pool.
+// so the window keeps showing what the local player chose. Both sides pay
+// for a replay; the client's balances are then overwritten by the host's
+// (hooks/money).
 #pragma once
 
 #include "tesmio_plugin.h"

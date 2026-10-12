@@ -87,6 +87,19 @@ bool ZipSaveDirectory(const char* srcDir, const char* outZipPath, ZipProgressFn 
     return true;
 }
 
+// The archive comes from the other player: an entry that is absolute
+// ("C:\...", "\...") or climbs out with ".." would be written outside destDir.
+static bool IsSafeEntryName(const char* name)
+{
+    if (!name || !*name) return false;
+    fs::path p(name);
+    if (p.has_root_name() || p.has_root_directory()) return false;
+    for (const fs::path& part : p) {
+        if (part == "..") return false;
+    }
+    return true;
+}
+
 bool UnzipToDirectory(const char* zipPath, const char* destDir, ZipProgressFn onProgress, void* userData)
 {
     mz_zip_archive zip;
@@ -110,6 +123,13 @@ bool UnzipToDirectory(const char* zipPath, const char* destDir, ZipProgressFn on
         if (!mz_zip_reader_file_stat(&zip, i, &stat)) {
             Logf("republicmp  SAVE_ZIP: mz_zip_reader_file_stat failed for index %u", i);
             continue;
+        }
+
+        // A real save never contains such a name - refuse the whole archive.
+        if (!IsSafeEntryName(stat.m_filename)) {
+            Logf("republicmp  SAVE_ZIP: refusing unsafe entry [%s] in [%s]", stat.m_filename, zipPath);
+            mz_zip_reader_end(&zip);
+            return false;
         }
 
         fs::path outPath = fs::path(destDir) / stat.m_filename;
