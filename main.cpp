@@ -3,6 +3,7 @@
 #include "hooks/detect_spawn.h"
 #include "hooks/present_hook.h"
 #include "hooks/game_speed.h"
+#include "hooks/money.h"
 #include "hooks/save_load.h"
 #include "hooks/imgui_hook.h"
 #include "hooks/terrain_hook.h"
@@ -17,6 +18,9 @@
 #include "net/road_sync.h"
 #include "net/terrain_sync.h"
 #include "net/sync_check.h"
+#include "net/settings_sync.h"
+#include "hooks/weather.h"
+
 
 #include "version.h"
 
@@ -32,6 +36,7 @@ extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPlugi
     DetectSpawn_Bind(host);
     PresentHook_Bind(host);
     GameSpeed_Bind(host);
+    Money_Bind(host);
     SaveLoad_Bind(host);
     SaveZip_Bind(host);
     Network_Bind(host);
@@ -46,6 +51,8 @@ extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPlugi
     StateHash_Bind(host);
     Determinism_Bind(host);
     SyncCheck_Bind(host);
+    Weather_Bind(host);
+    SettingsSync_Bind(host);
     info->name    = "republicmp";
     info->version = REPUBLICMP_VERSION;
     return 0;
@@ -81,6 +88,7 @@ extern "C" __declspec(dllexport) int TsmPluginStart(void)
     bool okDeterminism = Determinism_Install();
     Logf("republicmp  determinism layer: %d%s", okDeterminism, okDeterminism ? "" : " - the determinism probe is unavailable");
     SyncCheck_Install();
+    Weather_Install();
 
     HANDLE presentHook = CreateThread(nullptr, 0, PresentHookThread, nullptr, 0, nullptr);
     Logf("republicmp  present hook thread started: %d", presentHook != nullptr);

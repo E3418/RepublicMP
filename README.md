@@ -26,8 +26,9 @@ both machines.
 
 4. **Infrastructure** - Roads (incl. one-way, bridges, tunnels), rails,
    footpaths, pipes, water and heating pipes, power lines, fences, conveyors,
-   cableways and air roads are rebuilt exactly as drawn and joined to existing
-   nodes and building connections.
+   cableways, air roads and factory connections (incl. their direction) are
+   rebuilt exactly as drawn and joined to existing nodes and building
+   connections.
 
 5. **Upgrades** - Re-typing an existing path (e.g. gravel road to panels) is
    synced.
@@ -44,18 +45,32 @@ both machines.
    is mirrored, and the host's clock is sent regularly so both cities stay on
    the same day and hour.
 
-9. **Re-sync** - Both games simulate on their own, so vehicles, citizens and
-   production drift apart. The host can send its world to the player again
-   with **Re-sync now**, or automatically every 5-60 minutes. Both games
-   pause for it like on the first join; the player reconnects by itself.
+9. **Money** - The host owns the republic's rubles and dollars: its balances
+   are sent every second and the player's game takes them over. A purchase
+   made by the player is paid on the host's side, where the placement is
+   replayed with the player's construction mode.
 
-10. **Drift check** - Every game hour both games compare citizens, vehicles,
+10. **Re-sync** - Both games simulate on their own, so vehicles, citizens and
+    production drift apart. The host can send its world to the player again
+    with **Re-sync now**, or automatically every 5-60 minutes. Both games
+    pause for it like on the first join; the player reconnects by itself.
+
+11. **Building settings** - What players set in a building's window travels
+    to the other side: import/export mode and amount of power connections
+    and pipelines, worker and visitor limits, priority, auto purchase,
+    storage limits, and the gameplay checkboxes (the personal "notify me"
+    ones stay local).
+
+12. **Weather** - The host owns it: temperature (heating demand), wind (wind
+    turbines), snowfall (road snow) and rain are sent every second. The game
+    does not save the weather, so not even joining again aligned it.
+
+13. **Drift check** - Every game hour both games compare citizens, vehicles,
     storage and production; the host window shows the difference and can
     re-sync automatically above a chosen limit.
 
-Not synced yet: factory connections and money (each side pays from its own
-pool). Simulation state (vehicles, citizens, production) is only brought
-back in line by a re-sync.
+Not synced yet: simulation state (vehicles, citizens, production) is only
+brought back in line by a re-sync.
 
 The Debug window has a **determinism probe**: it saves the game, loads and
 simulates it twice under a fixed time step, call-site random numbers and
@@ -131,6 +146,25 @@ Firewalls must allow TCP ports 5556, 5557, 5558 and 5559 on the host.
 The **Debug** button in the main window opens manual reconnect controls and
 the detailed sync log. A full log is written to `tesmioloader.log`; when
 reporting a problem, attach the logs of both players.
+
+## Changelog
+
+### 0.3.9
+
+- **Money sync** - the host's balances apply to both players (#8).
+- **Factory connections** are synced, including their direction (#10).
+- Fixed: a remote building was not placed when the receiving player had no
+  construction tool selected (#6, issue #3), and some buildings (grain silo,
+  cement plant, ...) still failed in debug builds.
+- Fixed: crash at startup with the Steam overlay (#5, issue #2).
+- Fixed: a debug-build assertion when several buildings were placed quickly
+  and a terrain batch ended with a height edit.
+- The received save is refused if it contains unsafe file names (#4).
+- When the live sync channels fail to connect, the error names the ports to
+  forward (#7).
+
+Thanks to veryinsanee for the pull requests and TucKnock for the detailed
+bug reports.
 
 ## Versioning
 

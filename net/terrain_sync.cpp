@@ -292,11 +292,14 @@ static bool DecodeEdit(const std::vector<unsigned char>& p, size_t* off, int* me
 
     memset(a, 0, sizeof(*a));
     a->b = p[*off + 1];
+    // p.data() + o, not &p[o]: a height edit has no ints, so at the end of
+    // the payload o == p.size(), which the debug STL asserts on.
+    const unsigned char* d = p.data();
     size_t o = *off + 2;
-    memcpy(a->pos, &p[o], 12); o += 12;
-    if (l.hasPos2) { memcpy(a->pos2, &p[o], 12); o += 12; }
-    memcpy(a->f, &p[o], l.nf * 4); o += l.nf * 4;
-    memcpy(a->i, &p[o], l.ni * 4); o += l.ni * 4;
+    memcpy(a->pos, d + o, 12); o += 12;
+    if (l.hasPos2) { memcpy(a->pos2, d + o, 12); o += 12; }
+    memcpy(a->f, d + o, l.nf * 4); o += l.nf * 4;
+    memcpy(a->i, d + o, l.ni * 4); o += l.ni * 4;
     *off = o;
     return true;
 }

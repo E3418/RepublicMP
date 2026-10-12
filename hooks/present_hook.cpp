@@ -12,10 +12,15 @@
 #include "../net/terrain_sync.h"
 #include "../net/save_sync.h"
 #include "../net/sync_check.h"
+#include "../net/settings_sync.h"
 #include "game_speed.h"
+#include "weather.h"
+#include "money.h"
+
 
 #include <d3d11.h>
 #include <dxgi.h>
+#include <dxgi1_2.h> // IDXGISwapChain1::Present1 (re-entry fallback)
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
 
@@ -29,7 +34,46 @@ typedef HRESULT(STDMETHODCALLTYPE* PresentFn)(IDXGISwapChain* pSwapChain, UINT S
 static PresentFn g_origPresent = nullptr;
 volatile long long g_presentCallCount = 0;
 
+// Depth of HookedPresent on this thread. An overlay that hooks the same
+// Present after us (the Steam overlay does) may keep HookedPresent as its own
+// "original": g_origPresent then runs the overlay, which calls HookedPresent
+// again, which calls g_origPresent again - without a guard the stack runs out
+// within a frame and the game crashes.
+static thread_local int t_presentDepth = 0;
+static volatile bool g_reentryLogged = false;
+
+// Presents the frame without g_origPresent (which leads back into the
+// overlay): through IDXGISwapChain1::Present1, which this module never hooks.
+static HRESULT PresentBypassingChain(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags)
+{
+    IDXGISwapChain1* sc1 = nullptr;
+    if (FAILED(pSwapChain->QueryInterface(__uuidof(IDXGISwapChain1), (void**)&sc1)) || !sc1)
+        return S_OK; // nothing better possible - the frame is dropped instead of the game
+    DXGI_PRESENT_PARAMETERS params = {};
+    HRESULT hr = sc1->Present1(SyncInterval, Flags, &params);
+    sc1->Release();
+    return hr;
+}
+
+static HRESULT PresentFrame(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags);
+
 static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags)
+{
+    if (t_presentDepth > 0) {
+        if (!g_reentryLogged) {
+            g_reentryLogged = true;
+            Logf("republicmp  PRESENT: re-entered through another overlay's Present hook (Steam overlay?) - "
+                 "presenting through Present1 to break the loop");
+        }
+        return PresentBypassingChain(pSwapChain, SyncInterval, Flags);
+    }
+    t_presentDepth++;
+    HRESULT hr = PresentFrame(pSwapChain, SyncInterval, Flags);
+    t_presentDepth--;
+    return hr;
+}
+
+static HRESULT PresentFrame(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags)
 {
     g_presentCallCount++;
     InputBlock_Tick();  // keep the game's mouse-button bytes clear while the join screen is up
@@ -38,8 +82,11 @@ static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain* pSwapChain, UINT 
     DemolishHook_Tick(); // send demolitions captured this frame (after the terrain batch, for its fence)
     BuildSync_Tick(); // apply any building placements received over the network
     GameSpeed_SyncTick(); // send local speed changes (host decides, see game_speed.h)
+    Weather_SyncTick(); // host: send the weather (see weather.h)
     SaveSync_Tick(); // host: send a requested re-sync announcement
     SyncCheck_Tick(); // player: send the hourly state summary
+    Money_SyncTick(); // host: send the money balances (see money.h)
+    SettingsSync_Tick(); // building window settings: send local changes, apply received ones
     RoadSync_Tick(); // apply infrastructure received over the network
     DetectSpawn_Tick(); // drag state, captured commits, F9 debug spawn
 
