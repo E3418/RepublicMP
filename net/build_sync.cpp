@@ -503,8 +503,10 @@ static bool ApplyOneRemotePlacement(__int64 thisPtr, const BuildSyncMsg& msg, in
             // after the building stands in while the replay runs.
             __int64* selected = (__int64*)(thisPtr + SELECTED_ENTRY_OFFSET);
             __int64 savedSelected = *selected;
+            // Not strncpy_s: the debug CRT fills the rest of the buffer with
+            // 0xFE, and the game follows +0x48 as a pointer when it is nonzero.
             memset(g_replayEntry, 0, sizeof(g_replayEntry));
-            strncpy_s(g_replayEntry, typeName, _TRUNCATE);
+            memcpy(g_replayEntry, typeName, strnlen(typeName, 63));
             *selected = (__int64)g_replayEntry;
             __try {
                 g_origUniversal(thisPtr, typeName, 0, 1, msg.param5, 0xffffffff, 0, 1);

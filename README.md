@@ -45,8 +45,13 @@ both machines.
    is mirrored, and the host's clock is sent regularly so both cities stay on
    the same day and hour.
 
-Not synced yet: money (each side pays from its own pool), and simulation
-state (vehicles, citizens, production) - both games simulate on their own.
+9. **Money** - The host owns the republic's rubles and dollars: its balances
+   are sent every second and the player's game takes them over. A purchase
+   made by the player is paid on the host's side, where the placement is
+   replayed with the player's construction mode.
+
+Not synced yet: simulation state (vehicles, citizens, production) - both
+games simulate on their own.
 
 ## How it works
 
@@ -117,6 +122,25 @@ Firewalls must allow TCP ports 5556, 5557, 5558 and 5559 on the host.
 The **Debug** button in the main window opens manual reconnect controls and
 the detailed sync log. A full log is written to `tesmioloader.log`; when
 reporting a problem, attach the logs of both players.
+
+## Changelog
+
+### 0.3.9
+
+- **Money sync** - the host's balances apply to both players (#8).
+- **Factory connections** are synced, including their direction (#10).
+- Fixed: a remote building was not placed when the receiving player had no
+  construction tool selected (#6, issue #3), and some buildings (grain silo,
+  cement plant, ...) still failed in debug builds.
+- Fixed: crash at startup with the Steam overlay (#5, issue #2).
+- Fixed: a debug-build assertion when several buildings were placed quickly
+  and a terrain batch ended with a height edit.
+- The received save is refused if it contains unsafe file names (#4).
+- When the live sync channels fail to connect, the error names the ports to
+  forward (#7).
+
+Thanks to veryinsanee for the pull requests and TucKnock for the detailed
+bug reports.
 
 ## Versioning
 
