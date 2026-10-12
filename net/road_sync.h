@@ -49,6 +49,7 @@
 #include "tesmio_plugin.h"
 #include "host_config.h"
 #include "build_mode.h"
+#include <stddef.h> // offsetof
 
 #define ROAD_SYNC_PORT 5558
 #define ROAD_SYNC_TEST_HOST_IP REPUBLICMP_HOST_IP
@@ -128,6 +129,26 @@ struct RoadSyncMsg {
     BuildMode mode;   // sender's rubles/dollars/realistic choice (build_mode.h), replayed with it
     RoadSyncSegment seg;
 };
+
+// Wire form of a segment (also inside RoadSyncMsg and after an access-road
+// BuildSyncMsg): everything up to `points`, then only the pointCount points
+// actually used - points[] is the last member of both structs. A 5-point
+// path is ~200 bytes instead of the whole 2048-point array (~48 KB). The
+// receiver reads the header, checks pointCount, then reads exactly that
+// many points; a bad pointCount means the stream is out of step and the
+// connection is dropped.
+#define ROAD_SYNC_SEGMENT_HEADER_BYTES offsetof(RoadSyncSegment, points)
+#define ROAD_SYNC_MSG_HEADER_BYTES (offsetof(RoadSyncMsg, seg) + ROAD_SYNC_SEGMENT_HEADER_BYTES)
+
+inline bool RoadSync_PointCountValid(int pointCount)
+{
+    return pointCount >= 0 && pointCount <= ROAD_SYNC_MAX_POINTS;
+}
+
+inline size_t RoadSync_PointBytes(int pointCount)
+{
+    return RoadSync_PointCountValid(pointCount) ? (size_t)pointCount * sizeof(RoadSyncPoint) : 0;
+}
 
 // Upgrade of existing segments (FUN_140518a80's manager+0x390 branch). A
 // single-segment drag re-types segment +0x380 over the point range
