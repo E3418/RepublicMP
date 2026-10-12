@@ -53,3 +53,12 @@ void SettingsSync_Tick();
 
 // A received setting (game thread, from BuildSync_Tick).
 void SettingsSync_OnRemote(const SettingWire& w);
+
+// True if the local player clicked (or held the left button) within
+// SETTINGS_CLICK_WINDOW_MS - a change seen now was most likely made by them.
+bool SettingsSync_ClickedRecently();
+
+// Debug: log which bytes of a building a click changes ("FIELD_DIFF"), to
+// find window settings that are not synced yet. Works without a session.
+void SettingsSync_SetFieldDiff(bool on);
+bool SettingsSync_GetFieldDiff();
