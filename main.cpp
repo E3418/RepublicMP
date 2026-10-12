@@ -9,6 +9,8 @@
 #include "hooks/terrain_hook.h"
 #include "hooks/demolish_hook.h"
 #include "hooks/input_block.h"
+#include "hooks/state_hash.h"
+#include "hooks/determinism.h"
 #include "save/save_zip.h"
 #include "net/network.h"
 #include "net/save_sync.h"
@@ -43,6 +45,8 @@ extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPlugi
     TerrainSync_Bind(host);
     DemolishHook_Bind(host);
     InputBlock_Bind(host);
+    StateHash_Bind(host);
+    Determinism_Bind(host);
     SettingsSync_Bind(host);
     info->name    = "republicmp";
     info->version = REPUBLICMP_VERSION;
@@ -74,6 +78,10 @@ extern "C" __declspec(dllexport) int TsmPluginStart(void)
 
     bool okTerrain = InstallTerrainHooks();
     Logf("republicmp  terrain hooks: %d%s", okTerrain, okTerrain ? "" : " - terrain will NOT be fully synced");
+
+    // Fixed timer, call-site random numbers, pinned math - inactive until used.
+    bool okDeterminism = Determinism_Install();
+    Logf("republicmp  determinism layer: %d%s", okDeterminism, okDeterminism ? "" : " - the determinism probe is unavailable");
 
     HANDLE presentHook = CreateThread(nullptr, 0, PresentHookThread, nullptr, 0, nullptr);
     Logf("republicmp  present hook thread started: %d", presentHook != nullptr);

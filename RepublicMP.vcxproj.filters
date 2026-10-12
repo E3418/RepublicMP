@@ -66,6 +66,12 @@
     <ClCompile Include="net\settings_sync.cpp">
       <Filter>net</Filter>
     </ClCompile>
+    <ClCompile Include="hooks\state_hash.cpp">
+      <Filter>hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\determinism.cpp">
+      <Filter>hooks</Filter>
+    </ClCompile>
     <ClCompile Include="save\save_zip.cpp">
       <Filter>save</Filter>
     </ClCompile>
@@ -168,6 +174,12 @@
       <Filter>hooks</Filter>
     </ClInclude>
     <ClInclude Include="hooks\game_speed.h">
+      <Filter>hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\state_hash.h">
+      <Filter>hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\determinism.h">
       <Filter>hooks</Filter>
     </ClInclude>
     <ClInclude Include="hooks\money.h">
