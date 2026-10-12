@@ -928,6 +928,12 @@ ULONGLONG SaveSync_GetMsUntilAutoResync()
     return elapsed >= interval ? 1 : interval - elapsed;
 }
 
+ULONGLONG SaveSync_GetMsSinceWorldSent()
+{
+    if (!g_isHost || g_state != SESSION_HOST_IN_GAME) return 0;
+    return GetTickCount64() - g_lastWorldSentTick;
+}
+
 bool SaveSync_IsResyncing() { return g_resyncing; }
 
 void SaveSync_OnResyncAnnounced()

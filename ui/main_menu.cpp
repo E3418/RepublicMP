@@ -118,6 +118,15 @@ static void ResyncControls()
     ImGui::SetNextItemWidth(110);
     if (ImGui::Combo("##driftResync", &limit, kLimitLabels, IM_ARRAYSIZE(kLimitLabels)))
         SyncCheck_SetAutoResyncPercent(kLimits[limit]);
+    // Why an automatic re-sync has not happened yet (see net/sync_check.h).
+    if (kLimits[limit] > 0 && d.valid && d.overLimitChecks > 0) {
+        ImGui::SameLine();
+        unsigned long long wait = SyncCheck_GetResyncCooldownMs();
+        if (d.overLimitChecks < SYNC_CHECK_CONFIRM_CHECKS)
+            ImGui::TextColored(kYellow, "above for %d/%d hours", d.overLimitChecks, SYNC_CHECK_CONFIRM_CHECKS);
+        else if (wait)
+            ImGui::TextColored(kYellow, "waiting %llu:%02llu after the last re-sync", wait / 60000, (wait / 1000) % 60);
+    }
 }
 
 static void StatusPanel()

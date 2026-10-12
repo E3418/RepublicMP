@@ -67,6 +67,10 @@ int SaveSync_GetAutoResyncMinutes();
 // Host, player in the game: ms until the next automatic re-sync (0 = off).
 ULONGLONG SaveSync_GetMsUntilAutoResync();
 
+// Host, player in the game: ms since the player last received the world (join
+// or re-sync); 0 = no player in the game.
+ULONGLONG SaveSync_GetMsSinceWorldSent();
+
 // True while a re-sync is under way (from the announcement to the player
 // being back in the game).
 bool SaveSync_IsResyncing();
