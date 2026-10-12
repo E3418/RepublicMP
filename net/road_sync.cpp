@@ -997,11 +997,28 @@ static DWORD WINAPI ReceiveLoopThread(LPVOID)
         }
 
         if (tag == ROAD_SYNC_WIRE_SEGMENT || tag == ROAD_SYNC_WIRE_UPGRADE) {
-            RoadSyncItem* item = new RoadSyncItem(); // ~15KB, keep it off the thread stack
+            RoadSyncItem* item = new RoadSyncItem(); // ~50KB, keep it off the thread stack
             item->tag = tag;
-            bool ok = (tag == ROAD_SYNC_WIRE_SEGMENT)
-                ? NetworkRecvExact(g_sock, &item->seg, sizeof(item->seg))
-                : NetworkRecvExact(g_sock, &item->up, sizeof(item->up));
+            bool ok, badCount = false;
+            if (tag == ROAD_SYNC_WIRE_SEGMENT) {
+                // Header, then exactly pointCount points (see road_sync.h).
+                ok = NetworkRecvExact(g_sock, &item->seg, ROAD_SYNC_MSG_HEADER_BYTES);
+                if (ok && !RoadSync_PointCountValid(item->seg.seg.pointCount)) badCount = true;
+                else if (ok && item->seg.seg.pointCount > 0)
+                    ok = NetworkRecvExact(g_sock, item->seg.seg.points, RoadSync_PointBytes(item->seg.seg.pointCount));
+            } else {
+                ok = NetworkRecvExact(g_sock, &item->up, sizeof(item->up));
+            }
+            if (badCount) {
+                // The next message starts after the points - with a bad count
+                // there is no telling where, so the stream cannot go on.
+                Logf("republicmp  ROAD_SYNC: received segment with bad pointCount=%d - dropping the connection",
+                     item->seg.seg.pointCount);
+                delete item;
+                RoadSyncStatus("[ROAD_SYNC] bad segment on the wire, dropping connection");
+                CloseConnection();
+                break;
+            }
             if (!ok) {
                 delete item;
                 RoadSyncStatus("[ROAD_SYNC] connection lost");
@@ -1011,11 +1028,6 @@ static DWORD WINAPI ReceiveLoopThread(LPVOID)
 
             if (tag == ROAD_SYNC_WIRE_SEGMENT) {
                 const RoadSyncSegment& seg = item->seg.seg;
-                if (seg.pointCount < 0 || seg.pointCount > ROAD_SYNC_MAX_POINTS) {
-                    Logf("republicmp  ROAD_SYNC: received segment with bad pointCount=%d, dropping", seg.pointCount);
-                    delete item;
-                    continue;
-                }
                 Logf("republicmp  ROAD_SYNC: received seq=%d %s type=%d variant=%d points=%d",
                      item->seg.seq, CategoryName(seg.category), seg.typeId, seg.variant, seg.pointCount);
                 LogSegmentPoints("recv", item->seg.seq, seg);
@@ -1207,7 +1219,7 @@ static void SendItemNow(RoadSyncItem& item)
     } else if (item.tag == ROAD_SYNC_WIRE_UPGRADE) {
         RoadSyncUpgradeMsg& up = item.up;
         up.seq = seq;
-        char mode[64];
+        char mode[96];
         Logf("republicmp  ROAD_SYNC: sending upgrade seq=%d %s type=%d variant=%d pieces=%d pay=%s",
              seq, CategoryName(up.category), up.newType, up.newVariant, up.pieceCount,
              BuildMode_Describe(up.mode, mode, sizeof(mode)));
@@ -1215,12 +1227,14 @@ static void SendItemNow(RoadSyncItem& item)
     } else {
         RoadSyncMsg& msg = item.seg;
         msg.seq = seq;
-        char mode[64];
+        char mode[96];
         Logf("republicmp  ROAD_SYNC: sending seq=%d %s type=%d variant=%d points=%d pay=%s",
              seq, CategoryName(msg.seg.category), msg.seg.typeId, msg.seg.variant, msg.seg.pointCount,
              BuildMode_Describe(msg.mode, mode, sizeof(mode)));
         LogSegmentPoints("send", seq, msg.seg);
-        sent = SendEnvelope(ROAD_SYNC_WIRE_SEGMENT, &msg, sizeof(msg));
+        sent = RoadSync_PointCountValid(msg.seg.pointCount) &&
+               SendEnvelope(ROAD_SYNC_WIRE_SEGMENT, &msg,
+                            ROAD_SYNC_MSG_HEADER_BYTES + RoadSync_PointBytes(msg.seg.pointCount));
     }
 
     if (!sent) {
@@ -1385,7 +1399,7 @@ static void ApplySegmentAndAck(const RoadSyncMsg& msg)
     BuildMode_Write(mine);
     if (!ok && attempt > ROAD_SYNC_MAX_APPLY_ATTEMPTS) attempt = ROAD_SYNC_MAX_APPLY_ATTEMPTS;
 
-    char theirs[64], local[64];
+    char theirs[96], local[96];
     Logf("republicmp  ROAD_SYNC: seq=%d %s after %d attempt(s), pay=%s (mine: %s)", msg.seq,
          !ok ? "GAVE UP" : engineAccepted ? "applied" : "REJECTED by the engine", attempt,
          BuildMode_Describe(msg.mode, theirs, sizeof(theirs)), BuildMode_Describe(mine, local, sizeof(local)));
@@ -1398,7 +1412,7 @@ static void ApplyUpgradeAndAck(const RoadSyncUpgradeMsg& up)
     BuildMode_Write(up.mode);
     int applied = ApplyUpgrade(up);
     BuildMode_Write(mine);
-    char theirs[64], local[64];
+    char theirs[96], local[96];
     Logf("republicmp  ROAD_SYNC: upgrade seq=%d %s applied %d/%d piece(s), pay=%s (mine: %s)",
          up.seq, CategoryName(up.category), applied, up.pieceCount,
          BuildMode_Describe(up.mode, theirs, sizeof(theirs)), BuildMode_Describe(mine, local, sizeof(local)));
