@@ -72,7 +72,7 @@ enum RoadSyncCategory {
     ROAD_SYNC_CATEGORY_CONVEYOR = 9,     // conveyor
     ROAD_SYNC_CATEGORY_CABLEWAY = 10,    // create_cableway
     ROAD_SYNC_CATEGORY_AIRROAD = 11,     // create_airroad*
-    ROAD_SYNC_CATEGORY_FACTORYCONN = 12, // factoryconnection (disabled)
+    ROAD_SYNC_CATEGORY_FACTORYCONN = 12, // factoryconnection (+ direction, see RoadSyncDirectionMsg)
     ROAD_SYNC_CATEGORY_COUNT
 };
 
@@ -196,11 +196,27 @@ struct RoadSyncAckMsg {
     int attempts;
 };
 
+// Direction of a factory connection. The factoryconnection_oneway tool
+// (FUN_1403d6e70 with mode 0x32) commits nothing: a click on an existing
+// connection cycles segment+0x1bc (0 = both ways, 1 / 2 = one way, relative
+// to the segment's node 0 / node 1) and refreshes the buildings at both ends
+// (FUN_140191950). The sender scans its connections for changed directions;
+// the receiver finds its segment like an upgrade piece, writes the direction
+// (mirrored if its segment runs the other way) and runs the same refresh.
+// Sent on this connection, so it never overtakes the segment it belongs to.
+struct RoadSyncDirectionMsg {
+    int seq;
+    int category;
+    RoadSyncUpgradePiece piece; // segStart / segEnd / segPointCount only
+    int direction;              // segment+0x1bc
+};
+
 // int32 tag sent before every payload on the connection.
 #define ROAD_SYNC_WIRE_SEGMENT 1 // RoadSyncMsg
 #define ROAD_SYNC_WIRE_ACK 2     // RoadSyncAckMsg
 #define ROAD_SYNC_WIRE_UPGRADE 3 // RoadSyncUpgradeMsg
 #define ROAD_SYNC_WIRE_DEMOLISH 4 // RoadSyncDemolishMsg
+#define ROAD_SYNC_WIRE_DIRECTION 5 // RoadSyncDirectionMsg
 
 // Longest a received item waits for its terrain fence before it is applied
 // anyway (lost/reset terrain stream).
