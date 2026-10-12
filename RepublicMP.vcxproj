@@ -181,6 +181,7 @@
     <ClCompile Include="hooks\game_speed.cpp" />
     <ClCompile Include="hooks\state_hash.cpp" />
     <ClCompile Include="hooks\determinism.cpp" />
+    <ClCompile Include="net\sync_check.cpp" />
     <ClCompile Include="hooks\money.cpp" />
     <ClCompile Include="net\settings_sync.cpp" />
     <ClCompile Include="hooks\weather.cpp" />
@@ -221,6 +222,7 @@
     <ClInclude Include="hooks\game_speed.h" />
     <ClInclude Include="hooks\state_hash.h" />
     <ClInclude Include="hooks\determinism.h" />
+    <ClInclude Include="net\sync_check.h" />
     <ClInclude Include="hooks\money.h" />
     <ClInclude Include="net\settings_sync.h" />
     <ClInclude Include="hooks\weather.h" />

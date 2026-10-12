@@ -8,6 +8,7 @@
 #include "../net/build_sync.h"
 #include "../net/road_sync.h"
 #include "../net/terrain_sync.h"
+#include "../net/sync_check.h"
 
 #include "imgui.h"
 #include <misc/cpp/imgui_stdlib.h> // ImGui::InputText(const char*, std::string*)
@@ -94,6 +95,29 @@ static void ResyncControls()
         ImGui::TextColored(kGrey, "next in %llu:%02llu", left / 60000, (left / 1000) % 60);
     }
     ImGui::TextColored(kGrey, "Re-sync sends your world to the player again (vehicles, citizens, production).");
+
+    // Drift measured by the hourly sync check (net/sync_check).
+    SyncDrift d = SyncCheck_GetDrift();
+    if (d.valid) {
+        ImVec4 col = d.total < 2.0f ? kGreen : d.total < 10.0f ? kYellow : kRed;
+        ImGui::TextColored(col, "Drift %.1f%%", d.total);
+        ImGui::SameLine();
+        ImGui::TextColored(kGrey, "(day %d %02d:00 - citizens %d/%d, vehicles %d/%d, storage %.1f%%)", d.day,
+                           d.hour, d.hostCitizens, d.clientCitizens, d.hostVehicles, d.clientVehicles, d.storage);
+    } else {
+        ImGui::TextColored(kGrey, "Drift: measured every game hour");
+    }
+    static const int kLimits[] = { 0, 2, 5, 10, 20 };
+    static const char* const kLimitLabels[] = { "Off", "above 2%", "above 5%", "above 10%", "above 20%" };
+    int limit = 0;
+    for (int i = 0; i < IM_ARRAYSIZE(kLimits); i++)
+        if (kLimits[i] == SyncCheck_GetAutoResyncPercent()) limit = i;
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Re-sync on drift:");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(110);
+    if (ImGui::Combo("##driftResync", &limit, kLimitLabels, IM_ARRAYSIZE(kLimitLabels)))
+        SyncCheck_SetAutoResyncPercent(kLimits[limit]);
 }
 
 static void StatusPanel()

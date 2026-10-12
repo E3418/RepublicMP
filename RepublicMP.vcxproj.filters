@@ -75,6 +75,9 @@
     <ClCompile Include="hooks\determinism.cpp">
       <Filter>hooks</Filter>
     </ClCompile>
+    <ClCompile Include="net\sync_check.cpp">
+      <Filter>net</Filter>
+    </ClCompile>
     <ClCompile Include="save\save_zip.cpp">
       <Filter>save</Filter>
     </ClCompile>
@@ -192,6 +195,9 @@
       <Filter>hooks</Filter>
     </ClInclude>
     <ClInclude Include="net\settings_sync.h">
+      <Filter>net</Filter>
+    </ClInclude>
+    <ClInclude Include="net\sync_check.h">
       <Filter>net</Filter>
     </ClInclude>
     <ClInclude Include="hooks\window_focus.h">

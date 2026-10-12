@@ -11,6 +11,7 @@
 #include "../net/road_sync.h"
 #include "../net/terrain_sync.h"
 #include "../net/save_sync.h"
+#include "../net/sync_check.h"
 #include "../net/settings_sync.h"
 #include "game_speed.h"
 #include "weather.h"
@@ -83,6 +84,7 @@ static HRESULT PresentFrame(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
     GameSpeed_SyncTick(); // send local speed changes (host decides, see game_speed.h)
     Weather_SyncTick(); // host: send the weather (see weather.h)
     SaveSync_Tick(); // host: send a requested re-sync announcement
+    SyncCheck_Tick(); // player: send the hourly state summary
     Money_SyncTick(); // host: send the money balances (see money.h)
     SettingsSync_Tick(); // building window settings: send local changes, apply received ones
     RoadSync_Tick(); // apply infrastructure received over the network

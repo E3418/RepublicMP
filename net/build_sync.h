@@ -41,6 +41,7 @@
 #include "host_config.h"
 #include "road_sync.h" // RoadSyncSegment (access roads)
 #include "build_mode.h"
+#include "sync_check.h" // SyncCheckWire
 #include "../hooks/weather.h" // WeatherWire
 #include "settings_sync.h" // SettingWire
 
@@ -58,6 +59,7 @@
 #define BUILD_SYNC_KIND_WEATHER 12      // host -> client: the weather block (hooks/weather)
 #define BUILD_SYNC_KIND_MONEY 8         // host -> client: both balances (moneyRub, moneyUsd; hooks/money)
 #define BUILD_SYNC_KIND_RESYNC 9        // host -> client: the host closes the channels for a re-sync (net/save_sync)
+#define BUILD_SYNC_KIND_STATE 10        // client -> host: hourly state summary (net/sync_check)
 #define BUILD_SYNC_KIND_SETTING 11      // either way: a building window setting (net/settings_sync)
 
 struct BuildSyncMsg {
@@ -79,6 +81,8 @@ struct BuildSyncMsg {
     int speedSaved;             // thisPtr+0x5a8
     int speedTurbo;             // thisPtr+0x5ac
     float timeProgress;         // TIME: thisPtr+0x59c
+    // STATE only
+    SyncCheckWire state;
     // WEATHER only
     WeatherWire weather;
     // MONEY only
@@ -122,6 +126,9 @@ void BuildSync_SendMoney(double rub, double usd);
 
 // Announces a re-sync to the client (net/save_sync). Game thread only.
 void BuildSync_SendResync();
+
+// Sends the player's hourly state summary (net/sync_check). Game thread only.
+void BuildSync_SendState(const SyncCheckWire& w);
 
 // Sends a changed building setting (net/settings_sync). Game thread only.
 void BuildSync_SendSetting(const SettingWire& w);

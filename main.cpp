@@ -17,6 +17,7 @@
 #include "net/build_sync.h"
 #include "net/road_sync.h"
 #include "net/terrain_sync.h"
+#include "net/sync_check.h"
 #include "net/settings_sync.h"
 #include "hooks/weather.h"
 
@@ -49,6 +50,7 @@ extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPlugi
     InputBlock_Bind(host);
     StateHash_Bind(host);
     Determinism_Bind(host);
+    SyncCheck_Bind(host);
     Weather_Bind(host);
     SettingsSync_Bind(host);
     info->name    = "republicmp";
@@ -85,6 +87,7 @@ extern "C" __declspec(dllexport) int TsmPluginStart(void)
     // Fixed timer, call-site random numbers, pinned math - inactive until used.
     bool okDeterminism = Determinism_Install();
     Logf("republicmp  determinism layer: %d%s", okDeterminism, okDeterminism ? "" : " - the determinism probe is unavailable");
+    SyncCheck_Install();
     Weather_Install();
 
     HANDLE presentHook = CreateThread(nullptr, 0, PresentHookThread, nullptr, 0, nullptr);

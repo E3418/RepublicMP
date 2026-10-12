@@ -65,6 +65,10 @@ both machines.
     turbines), snowfall (road snow) and rain are sent every second. The game
     does not save the weather, so not even joining again aligned it.
 
+13. **Drift check** - Every game hour both games compare citizens, vehicles,
+    storage and production; the host window shows the difference and can
+    re-sync automatically above a chosen limit.
+
 Not synced yet: simulation state (vehicles, citizens, production) is only
 brought back in line by a re-sync.
 
