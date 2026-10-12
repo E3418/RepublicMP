@@ -18,10 +18,12 @@
 // building has two pay flags (building+0x608 rubles, +0x609 dollars) that the
 // construction-site window and placement-with-money set; FUN_140160550(this,
 // building, rub, usd) writes them and runs FUN_140161440 on the building.
-// The buildings list is scanned every PAY_SCAN_INTERVAL_MS; a flag that
-// switched on is sent (BUILD_SYNC_KIND_PAY) and the receiver calls
-// FUN_140160550 on its building with the same flags. Flags going back to 0
-// (the game clears them when construction ends) are not sent.
+// The buildings list is scanned every PAY_SCAN_INTERVAL_MS; a change right
+// after a local click - on or off - is sent (BUILD_SYNC_KIND_PAY) and the
+// receiver calls FUN_140160550 on its building with the same flags. The
+// window's "stop construction" (+0x879, FUN_140160570 / continue
+// FUN_140161440) travels in the same message. Changes the game makes by
+// itself (it clears the flags when construction ends) are not sent.
 //
 // Demolitions (hooks/demolish_hook) travel on the same connection as
 // BUILD_SYNC_KIND_DEMOLISH, so a demolition never overtakes the placement of
@@ -55,7 +57,7 @@
 #define BUILD_SYNC_KIND_SPEED_BOOST 4   // either way: sender's Hyper/Plaid boost (speed field)
 #define BUILD_SYNC_KIND_TIME 5          // host -> client: game clock (speed=day, speedSaved=year, timeProgress)
 #define BUILD_SYNC_KIND_ACCESS_ROAD 6   // a road the previous building laid itself; a RoadSyncSegment follows on the wire
-#define BUILD_SYNC_KIND_PAY 7           // a building was switched to "finish with rubles/dollars" (speed=rub, speedSaved=usd)
+#define BUILD_SYNC_KIND_PAY 7           // construction controls: finish with rubles/dollars, stop (speed=rub, speedSaved=usd, speedTurbo=stopped)
 #define BUILD_SYNC_KIND_WEATHER 12      // host -> client: the weather block (hooks/weather)
 #define BUILD_SYNC_KIND_MONEY 8         // host -> client: both balances (moneyRub, moneyUsd; hooks/money)
 #define BUILD_SYNC_KIND_RESYNC 9        // host -> client: the host closes the channels for a re-sync (net/save_sync)
