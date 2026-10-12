@@ -149,10 +149,38 @@ reporting a problem, attach the logs of both players.
 
 ## Changelog
 
+### 0.4.0
+
+The world itself starts to be synced, not only what players build.
+
+- **Weather sync** - the host owns temperature, wind, snowfall and rain; the
+  player's game takes them over every second (#13).
+- **Drift check** - every game hour both games compare citizens, vehicles,
+  storage and production; the host window shows the drift and can re-sync
+  automatically above a chosen limit (#14).
+- **Determinism layer and probe** - groundwork for simulating both games in
+  lockstep: fixed time step, call-site random numbers and pinned math,
+  inactive in normal play. The Debug window's probe runs the same save twice
+  and reports whether both runs stay identical (#12).
+- Fixed: two build errors left by merging #13 and #14.
+
+Known issues:
+- With very few vehicles or citizens the drift percentage jumps (2 vehicles
+  against 0 counts as 100%), so "Re-sync on drift" can trigger needlessly -
+  keep it off or at 20% on a small city.
+- Buying vehicles is not synced yet; a re-sync brings them over.
+- A footpath drawn from a building port can fail on the other side; a
+  re-sync brings it over.
+
 ### 0.3.9
 
 - **Money sync** - the host's balances apply to both players (#8).
+- **Re-sync** - the host can send its world to the player again, by hand or
+  every 5-60 minutes; the player reconnects by itself (#9).
+- **Building settings** - what players set in a building's window is synced
+  (#11).
 - **Factory connections** are synced, including their direction (#10).
+- Roads and other paths can have up to 2048 points (was 512).
 - Fixed: a remote building was not placed when the receiving player had no
   construction tool selected (#6, issue #3), and some buildings (grain silo,
   cement plant, ...) still failed in debug builds.
