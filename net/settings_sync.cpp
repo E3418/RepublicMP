@@ -52,7 +52,11 @@ static const WatchedField kFields[] = {
     { "mechanisms only by truck", 0xE11, 1, FIELD_BYTES, FOLLOW_NONE,          { ANY, -1 } },
     { "prefer students",         0x11BE, 1, FIELD_BYTES, FOLLOW_NONE,          { ANY, -1 } },
     { "no waste disposal",       0x11BF, 1, FIELD_BYTES, FOLLOW_NONE,          { ANY, -1 } },
-    { "allow moving in",         0x1414, 1, FIELD_BYTES, FOLLOW_NONE,          { ANY, -1 } },
+    // Who may move in: 8 flags read together by FUN_14083c590 (and saved /
+    // copied as one block, FUN_1401edc40 / 0x1402D576E): +0x1414 nobody,
+    // +0x1415..+0x1417 by the citizen's education (citizen+0xA8 = 0/1/2),
+    // +0x1418..+0x141B by a second citizen trait in four ranges (citizen+0xE4).
+    { "moving in restrictions",  0x1414, 8, FIELD_BYTES, FOLLOW_NONE,          { ANY, -1 } },
     { "allow repair",            0x11C0, 1, FIELD_BYTES, FOLLOW_NONE,          { 0x6C, -1 } },
     { "repair cancel when idle", 0x11C1, 1, FIELD_BYTES, FOLLOW_NONE,          { 0x6C, -1 } },
     { "repair threshold",        0xFC8,  4, FIELD_BYTES, FOLLOW_NONE,          { 0x6C, -1 } },
@@ -414,16 +418,124 @@ void SettingsSync_OnRemote(const SettingWire& w)
     if (!Apply(w)) g_pending.push_back({ w, GetTickCount64() });
 }
 
+// ---------------------------------------------------------------------------
+// Field diff (Debug window): which bytes of a building a click changes
+// ---------------------------------------------------------------------------
+//
+// A research aid for finding window settings not synced yet. Every scan
+// copies the first FIELD_DIFF_BYTES of every building; a byte that changes
+// while the local player has NOT clicked is marked as simulation noise for
+// that building and ignored from then on; a change of a non-noise byte right
+// after a click is logged as "FIELD_DIFF". Leave the building alone for a few
+// seconds first so its noise is learned, then click the button in question.
+
+#define FIELD_DIFF_BYTES 0x1600
+#define FIELD_DIFF_MAX_RANGES 12
+
+struct FieldDiffState {
+    std::vector<unsigned char> snap;
+    std::vector<unsigned char> noisy;
+    bool seen = false;
+};
+static std::unordered_map<BYTE*, FieldDiffState> g_diff;
+static bool g_fieldDiffOn = false;
+static ULONGLONG g_lastDiffMs = 0;
+static std::vector<BYTE*> g_diffList;
+
+static bool CopyObject(BYTE* b, unsigned char* out)
+{
+    __try {
+        memcpy(out, b, FIELD_DIFF_BYTES);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+static void LogDiffRange(char* line, size_t lineSize, const unsigned char* was, const unsigned char* now, int off,
+                         int len)
+{
+    char part[96];
+    int shown = len > 8 ? 8 : len;
+    int n = _snprintf_s(part, sizeof(part), _TRUNCATE, " +0x%X", off);
+    if (len > 1) n += _snprintf_s(part + n, sizeof(part) - n, _TRUNCATE, "[%d]", len);
+    n += _snprintf_s(part + n, sizeof(part) - n, _TRUNCATE, " ");
+    for (int i = 0; i < shown; i++) n += _snprintf_s(part + n, sizeof(part) - n, _TRUNCATE, "%02X", was[off + i]);
+    n += _snprintf_s(part + n, sizeof(part) - n, _TRUNCATE, "->");
+    for (int i = 0; i < shown; i++) n += _snprintf_s(part + n, sizeof(part) - n, _TRUNCATE, "%02X", now[off + i]);
+    strcat_s(line, lineSize, part);
+}
+
+static void FieldDiffScan(bool byPlayer)
+{
+    g_diffList.resize(200000);
+    int n = CopyBuildings(g_diffList.data(), (int)g_diffList.size());
+    for (auto& kv : g_diff) kv.second.seen = false;
+    std::vector<unsigned char> cur(FIELD_DIFF_BYTES);
+    for (int i = 0; i < n; i++) {
+        BYTE* b = g_diffList[i];
+        if (!CopyObject(b, cur.data())) continue;
+        FieldDiffState& d = g_diff[b];
+        d.seen = true;
+        if (d.snap.empty()) {
+            d.snap = cur;
+            d.noisy.assign(FIELD_DIFF_BYTES, 0);
+            continue;
+        }
+        char line[1024] = "";
+        int ranges = 0;
+        for (int off = 0; off < FIELD_DIFF_BYTES;) {
+            if (cur[off] == d.snap[off] || d.noisy[off]) { ++off; continue; }
+            int start = off;
+            while (off < FIELD_DIFF_BYTES && cur[off] != d.snap[off] && !d.noisy[off]) ++off;
+            if (!byPlayer) {
+                for (int k = start; k < off; k++) d.noisy[k] = 1; // changed by itself
+            } else if (ranges < FIELD_DIFF_MAX_RANGES) {
+                LogDiffRange(line, sizeof(line), d.snap.data(), cur.data(), start, off - start);
+                ranges++;
+            }
+        }
+        if (ranges) {
+            int category;
+            float pos[3];
+            if (!ReadIdentity(b, &category, pos)) category = -1, pos[0] = pos[2] = 0;
+            Logf("republicmp  FIELD_DIFF: category 0x%X at (%.1f,%.1f):%s", category, pos[0], pos[2], line);
+        }
+        d.snap.swap(cur);
+        cur.resize(FIELD_DIFF_BYTES);
+    }
+    for (auto it = g_diff.begin(); it != g_diff.end();) {
+        if (!it->second.seen) it = g_diff.erase(it);
+        else ++it;
+    }
+}
+
+void SettingsSync_SetFieldDiff(bool on)
+{
+    g_fieldDiffOn = on;
+    g_diff.clear();
+    Logf("republicmp  FIELD_DIFF: %s", on ? "on - leave the building alone a few seconds, then click" : "off");
+}
+
+bool SettingsSync_GetFieldDiff() { return g_fieldDiffOn; }
+
+bool SettingsSync_ClickedRecently() { return ClickedRecently(GetTickCount64()); }
+
 void SettingsSync_Tick()
 {
+    ULONGLONG now = GetTickCount64();
+    TrackClick(now); // every frame - a click can be shorter than the scan interval
+    if (g_fieldDiffOn && now - g_lastDiffMs >= SETTINGS_SCAN_INTERVAL_MS) {
+        g_lastDiffMs = now;
+        FieldDiffScan(ClickedRecently(now));
+    }
+
     bool syncing = BuildSync_IsConnected() && !SyncBlock_IsActive();
     if (!syncing) {
         g_states.clear();
         g_pending.clear();
         return;
     }
-    ULONGLONG now = GetTickCount64();
-    TrackClick(now); // every frame - a click can be shorter than the scan interval
     // A setting for a building whose placement is still on its way waits for it.
     for (size_t i = 0; i < g_pending.size();) {
         if (Apply(g_pending[i].w)) {
