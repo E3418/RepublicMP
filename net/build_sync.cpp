@@ -7,6 +7,7 @@
 #include "../hooks/game_speed.h"    // GameSpeed_OnRemote
 #include "save_sync.h"               // SaveSync_OnResyncAnnounced
 #include "../hooks/money.h"         // Money_OnRemote
+#include "settings_sync.h"           // SettingsSync_ClickedRecently
 #include "../ui/debug_log.h"
 #include "../ui/sync_block.h"
 #include <vector>
@@ -28,7 +29,12 @@
 #define OBJ_TYPE_OFFSET 0x318            // building type record
 #define OBJ_PAY_RUB_OFFSET 0x608         // byte: finish construction with rubles
 #define OBJ_PAY_USD_OFFSET 0x609         // byte: finish construction with dollars
-#define SET_PAY_RVA 0x160550             // FUN_140160550(this, building, rub, usd)
+#define SET_PAY_RVA 0x160550             // FUN_140160550(this, building, rub, usd): sets both, then RESUME
+#define OBJ_STOPPED_OFFSET 0x879         // byte: construction stopped by the player
+#define STOP_RVA 0x160570                // FUN_140160570(this, building, 1): the window's "stop" - sets
+                                         // +0x879 and, unfinished and unpaid, cancels deliveries and workers
+#define RESUME_RVA 0x161440              // FUN_140161440(this, building): the window's "continue" - clears
+                                         // +0x879 (unless FUN_1401a9d60 says it must stay)
 #define PAY_SCAN_INTERVAL_MS 250
 #define TYPE_CATEGORY_OFFSET 0x360       // int category in the type record
 
@@ -155,15 +161,28 @@ static DWORD WINAPI ReceiveLoopThread(LPVOID)
         BuildWireItem item;
         item.msg = msg;
         if (msg.kind == BUILD_SYNC_KIND_ACCESS_ROAD) {
+            // Header, then exactly pointCount points (see road_sync.h).
             item.road = std::make_shared<RoadSyncSegment>();
-            if (!NetworkRecvExact(g_sock, item.road.get(), sizeof(RoadSyncSegment))) {
+            RoadSyncSegment* road = item.road.get();
+            if (!NetworkRecvExact(g_sock, road, ROAD_SYNC_SEGMENT_HEADER_BYTES)) {
                 BuildSyncStatus("[BUILD_SYNC] connection lost");
                 CloseConnection();
                 break;
             }
-            if (item.road->pointCount < 0 || item.road->pointCount > ROAD_SYNC_MAX_POINTS) {
-                Logf("republicmp  BUILD_SYNC: access road with bad pointCount=%d, dropped", item.road->pointCount);
-                continue;
+            if (!RoadSync_PointCountValid(road->pointCount)) {
+                // Where the next message starts depends on the count - the
+                // stream cannot go on.
+                Logf("republicmp  BUILD_SYNC: access road with bad pointCount=%d - dropping the connection",
+                     road->pointCount);
+                BuildSyncStatus("[BUILD_SYNC] bad access road on the wire, dropping connection");
+                CloseConnection();
+                break;
+            }
+            if (road->pointCount > 0 &&
+                !NetworkRecvExact(g_sock, road->points, RoadSync_PointBytes(road->pointCount))) {
+                BuildSyncStatus("[BUILD_SYNC] connection lost");
+                CloseConnection();
+                break;
             }
         }
 
@@ -300,8 +319,9 @@ static void SendNow(const BuildWireItem& item)
 {
     const BuildSyncMsg& msg = item.msg;
     if (msg.kind == BUILD_SYNC_KIND_ACCESS_ROAD) {
-        if (!item.road || !NetworkSendExact(g_sock, &msg, sizeof(msg)) ||
-            !NetworkSendExact(g_sock, item.road.get(), sizeof(RoadSyncSegment))) {
+        const RoadSyncSegment* road = item.road.get();
+        if (!road || !RoadSync_PointCountValid(road->pointCount) || !NetworkSendExact(g_sock, &msg, sizeof(msg)) ||
+            !NetworkSendExact(g_sock, road, ROAD_SYNC_SEGMENT_HEADER_BYTES + RoadSync_PointBytes(road->pointCount))) {
             BuildSyncStatus("[BUILD_SYNC] send failed, dropping connection");
             CloseConnection();
         }
@@ -327,7 +347,7 @@ static void SendNow(const BuildWireItem& item)
         }
         return;
     }
-    char mode[64];
+    char mode[96];
     Logf("republicmp  BUILD_SYNC: sending type=[%s] obj=(%.2f,%.2f,%.2f) cursor=(%.2f,%.2f,%.2f) cursorRot=%.4f p5=0x%llx pay=%s",
          msg.typeName, msg.x, msg.y, msg.z, msg.cursorX, msg.cursorY, msg.cursorZ, msg.cursorRot, msg.param5,
          BuildMode_Describe(msg.mode, mode, sizeof(mode)));
@@ -532,7 +552,7 @@ static bool ApplyOneRemotePlacement(__int64 thisPtr, const BuildSyncMsg& msg, in
             long long countBefore = BuildingCount(*vecBeginPtr, *vecEndPtr);
 
             BuildMode mine = BuildMode_Read();
-            char theirsText[64], mineText[64];
+            char theirsText[96], mineText[96];
             Logf("republicmp  BUILD_SYNC: applying type=[%s] cursor=(%.2f,%.2f,%.2f) cursorRot=%.4f mirrored=%d attempt %d/%d pay=%s (mine: %s)",
                  typeName, msg.cursorX, msg.cursorY, msg.cursorZ, msg.cursorRot, msg.mirrored,
                  attempt, BUILD_SYNC_MAX_APPLY_ATTEMPTS,
@@ -637,11 +657,18 @@ static __int64 FindBuildingAt(float x, float y, float z, int category)
 static std::unordered_map<__int64, unsigned char> g_payFlags; // building -> rub | usd << 1, as last seen
 static ULONGLONG g_lastPayScanMs = 0;
 
-// rub | usd << 1 of a building, or -1 if unreadable.
+// The construction controls of a building's window, as flags:
+#define PAY_RUB 1      // finish with rubles (+0x608)
+#define PAY_USD 2      // finish with dollars (+0x609)
+#define PAY_STOPPED 4  // construction stopped (+0x879)
+
+// The flags of a building, or -1 if unreadable.
 static int ReadPayFlags(__int64 b)
 {
     __try {
-        return (*(unsigned char*)(b + OBJ_PAY_RUB_OFFSET) ? 1 : 0) | (*(unsigned char*)(b + OBJ_PAY_USD_OFFSET) ? 2 : 0);
+        return (*(unsigned char*)(b + OBJ_PAY_RUB_OFFSET) ? PAY_RUB : 0) |
+               (*(unsigned char*)(b + OBJ_PAY_USD_OFFSET) ? PAY_USD : 0) |
+               (*(unsigned char*)(b + OBJ_STOPPED_OFFSET) ? PAY_STOPPED : 0);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return -1;
     }
@@ -675,11 +702,15 @@ static int SnapshotBuildings(__int64* out, int max)
 
 static void SendPay(__int64 b, int flags);
 
-// Sends every building whose pay flag switched on since the last scan. A
+// Sends every building whose construction controls changed since the last
+// scan - switched on AND off: cancelling the money finish or stopping the
+// construction used to stay local, so the other side kept building. A
 // building seen for the first time is only recorded (a placement with money
-// is already covered by the placement message).
+// is already covered by the placement message). Only a change right after a
+// local click is sent - the game clears these itself too (a finished site).
 static void ScanPayFlags()
 {
+    bool byPlayer = SettingsSync_ClickedRecently();
     static std::vector<__int64> s_list;
     s_list.resize(65536);
     int n = SnapshotBuildings(s_list.data(), (int)s_list.size());
@@ -691,7 +722,7 @@ static void ScanPayFlags()
         int flags = ReadPayFlags(b);
         if (flags < 0) continue;
         auto old = g_payFlags.find(b);
-        if (old != g_payFlags.end() && (flags & ~old->second) != 0) SendPay(b, flags);
+        if (old != g_payFlags.end() && flags != old->second && byPlayer) SendPay(b, flags);
         next[b] = (unsigned char)flags;
     }
     g_payFlags.swap(next);
@@ -708,9 +739,28 @@ static bool CallSetPay(__int64 thisPtr, __int64 b, int flags)
     }
 }
 
-static const char* PayName(int flags)
+static bool CallStop(__int64 thisPtr, __int64 b, bool stop)
 {
-    return (flags & 3) == 3 ? "rubles+dollars" : (flags & 1) ? "rubles" : (flags & 2) ? "dollars" : "none";
+    typedef void (*StopFn)(__int64 thisPtr, __int64 building, unsigned char cancel);
+    typedef void (*ResumeFn)(__int64 thisPtr, __int64 building);
+    __try {
+        if (stop) ((StopFn)((uintptr_t)g_exeBase + STOP_RVA))(thisPtr, b, 1);
+        else ((ResumeFn)((uintptr_t)g_exeBase + RESUME_RVA))(thisPtr, b);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// "rubles", "dollars, stopped", "none", ...
+static const char* PayName(int flags, char* out, size_t outSize)
+{
+    const char* pay = (flags & 3) == 3 ? "rubles+dollars"
+                    : (flags & PAY_RUB) ? "rubles"
+                    : (flags & PAY_USD) ? "dollars"
+                                        : "none";
+    _snprintf_s(out, outSize, _TRUNCATE, "%s%s", pay, (flags & PAY_STOPPED) ? ", stopped" : "");
+    return out;
 }
 
 static void SendPay(__int64 b, int flags)
@@ -724,37 +774,93 @@ static void SendPay(__int64 b, int flags)
     strcpy_s(msg.typeName, "<pay>");
     msg.x = pos[0]; msg.y = pos[1]; msg.z = pos[2];
     msg.demolishCategory = category;
-    msg.speed = flags & 1;
-    msg.speedSaved = (flags >> 1) & 1;
+    msg.speed = (flags & PAY_RUB) ? 1 : 0;
+    msg.speedSaved = (flags & PAY_USD) ? 1 : 0;
+    msg.speedTurbo = (flags & PAY_STOPPED) ? 1 : 0;
+    char name[48];
     Logf("republicmp  BUILD_SYNC: sending pay at (%.2f,%.2f,%.2f) category=%d - finish with %s",
-         pos[0], pos[1], pos[2], category, PayName(flags));
+         pos[0], pos[1], pos[2], category, PayName(flags, name, sizeof(name)));
     SendOrQueue(msg);
+}
+
+// Diagnostics for "no such building": the nearest local objects of that
+// category within NEAREST_LOG_RADIUS, so one test shows where the receiver's
+// object really is (path construction sites - category -1 - did not match).
+#define NEAREST_LOG_RADIUS 300.0f
+#define NEAREST_LOG_COUNT 3
+
+static void LogNearestOfCategory(const float want[3], int category)
+{
+    static std::vector<__int64> s_list;
+    s_list.resize(65536);
+    int n = SnapshotBuildings(s_list.data(), (int)s_list.size());
+    float bestD[NEAREST_LOG_COUNT];
+    float bestP[NEAREST_LOG_COUNT][3];
+    int found = 0;
+    for (int i = 0; i < n; i++) {
+        float pos[3];
+        int cat;
+        if (!ReadBuildingInfo(s_list[i], pos, &cat) || cat != category) continue;
+        float dx = pos[0] - want[0], dz = pos[2] - want[2];
+        float d = sqrtf(dx * dx + dz * dz);
+        if (d > NEAREST_LOG_RADIUS) continue;
+        int k;
+        if (found < NEAREST_LOG_COUNT) {
+            k = found++; // a free slot
+        } else {
+            if (d >= bestD[NEAREST_LOG_COUNT - 1]) continue; // not nearer than the farthest kept
+            k = NEAREST_LOG_COUNT - 1;                       // replaces the farthest
+        }
+        // insertion into the list sorted by distance
+        while (k > 0 && bestD[k - 1] > d) {
+            bestD[k] = bestD[k - 1];
+            memcpy(bestP[k], bestP[k - 1], sizeof(bestP[k]));
+            k--;
+        }
+        bestD[k] = d;
+        memcpy(bestP[k], pos, sizeof(bestP[k]));
+    }
+    if (!found) {
+        Logf("republicmp  BUILD_SYNC:   no object of category %d within %.0fm here", category, NEAREST_LOG_RADIUS);
+        return;
+    }
+    for (int i = 0; i < found; i++)
+        Logf("republicmp  BUILD_SYNC:   nearest category %d here: (%.2f,%.2f,%.2f), %.1fm away", category,
+             bestP[i][0], bestP[i][1], bestP[i][2], bestD[i]);
 }
 
 static void ApplyOneRemotePay(__int64 thisPtr, const BuildSyncMsg& msg)
 {
-    int flags = (msg.speed ? 1 : 0) | (msg.speedSaved ? 2 : 0);
+    int flags = (msg.speed ? PAY_RUB : 0) | (msg.speedSaved ? PAY_USD : 0) | (msg.speedTurbo ? PAY_STOPPED : 0);
     __int64 b = FindBuildingAt(msg.x, msg.y, msg.z, msg.demolishCategory);
     if (!b) {
         Logf("republicmp  BUILD_SYNC: pay at (%.2f,%.2f,%.2f) category=%d - no such building here, skipped",
              msg.x, msg.y, msg.z, msg.demolishCategory);
+        float want[3] = { msg.x, msg.y, msg.z };
+        LogNearestOfCategory(want, msg.demolishCategory);
         return;
     }
     int before = ReadPayFlags(b);
     bool ok = true;
     if (before != flags) {
+        // The same calls the window makes: the money buttons (which also
+        // resume a stopped site), then stop or continue.
         TerrainSync_BeginForeignReplay();
         InterlockedIncrement(&g_applyingRemote);
-        ok = CallSetPay(thisPtr, b, flags);
+        if (before < 0 || (before & 3) != (flags & 3)) ok = CallSetPay(thisPtr, b, flags);
+        int now = ReadPayFlags(b);
+        if (ok && now >= 0 && (now & PAY_STOPPED) != (flags & PAY_STOPPED))
+            ok = CallStop(thisPtr, b, (flags & PAY_STOPPED) != 0);
         InterlockedDecrement(&g_applyingRemote);
         TerrainSync_EndForeignReplay();
     }
     int after = ReadPayFlags(b);
     if (after >= 0) g_payFlags[b] = (unsigned char)after; // not a local change - do not send it back
+    char want[48], was[48], got[48];
     Logf("republicmp  BUILD_SYNC: pay at (%.2f,%.2f,%.2f) category=%d - finish with %s: %s (flags %s -> %s)",
-         msg.x, msg.y, msg.z, msg.demolishCategory, PayName(flags),
-         !ok ? "THREW" : before == flags ? "already set" : "applied",
-         before < 0 ? "?" : PayName(before), after < 0 ? "?" : PayName(after));
+         msg.x, msg.y, msg.z, msg.demolishCategory, PayName(flags, want, sizeof(want)),
+         !ok ? "THREW" : before == flags ? "already set" : after == flags ? "applied" : "applied, differs",
+         before < 0 ? "?" : PayName(before, was, sizeof(was)), after < 0 ? "?" : PayName(after, got, sizeof(got)));
 }
 
 // Replays a remote demolition on the local building at the sender's
@@ -859,9 +965,7 @@ void BuildSync_Tick()
     }
     g_warnedWorldNotLoaded = false;
 
-    // Placements stay queued while the placement function is blocked.
     __int64 thisPtr = GetPlacementManagerThisPtr();
-    if (PlacementGuardBusy(thisPtr)) return;
 
     // Applied in arrival order; a refused placement is retried after
     // RETRY_DELAY_MS, and later ones wait behind it so order is kept.
@@ -875,13 +979,21 @@ void BuildSync_Tick()
             Logf("republicmp  BUILD_SYNC: terrain fence %d not reached after %dms - applying anyway",
                  p.msg.terrainFence, BUILD_SYNC_FENCE_TIMEOUT_MS);
         }
-        if (p.msg.kind == BUILD_SYNC_KIND_DEMOLISH) {
-            ApplyOneRemoteDemolish(thisPtr, p.msg);
+        // Construction controls do not go through the placement function, so
+        // the game's UI blocking it (any open window - the construction
+        // site's own included, which is exactly where a player watches
+        // them) must not hold them: that delayed "stop" / "finish with
+        // money" until the receiver closed the window.
+        if (p.msg.kind == BUILD_SYNC_KIND_PAY) {
+            ApplyOneRemotePay(thisPtr, p.msg);
             g_pending.erase(g_pending.begin());
             continue;
         }
-        if (p.msg.kind == BUILD_SYNC_KIND_PAY) {
-            ApplyOneRemotePay(thisPtr, p.msg);
+        // Everything else stays queued (in order) while the placement
+        // function is blocked.
+        if (PlacementGuardBusy(thisPtr)) break;
+        if (p.msg.kind == BUILD_SYNC_KIND_DEMOLISH) {
+            ApplyOneRemoteDemolish(thisPtr, p.msg);
             g_pending.erase(g_pending.begin());
             continue;
         }
@@ -892,7 +1004,7 @@ void BuildSync_Tick()
             BuildMode_Write(p.msg.mode);
             bool ok = p.road && RoadSync_ApplySegmentForBuild(*p.road);
             BuildMode_Write(mine);
-            char theirsText[64], mineText[64];
+            char theirsText[96], mineText[96];
             Logf("republicmp  BUILD_SYNC: access road at (%.2f,%.2f,%.2f) %s, pay=%s (mine: %s)",
                  p.msg.x, p.msg.y, p.msg.z, ok ? "built" : "REJECTED by the engine",
                  BuildMode_Describe(p.msg.mode, theirsText, sizeof(theirsText)),
