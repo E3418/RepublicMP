@@ -53,6 +53,7 @@
 #define BUILD_SYNC_KIND_TIME 5          // host -> client: game clock (speed=day, speedSaved=year, timeProgress)
 #define BUILD_SYNC_KIND_ACCESS_ROAD 6   // a road the previous building laid itself; a RoadSyncSegment follows on the wire
 #define BUILD_SYNC_KIND_PAY 7           // a building was switched to "finish with rubles/dollars" (speed=rub, speedSaved=usd)
+#define BUILD_SYNC_KIND_RESYNC 9        // host -> client: the host closes the channels for a re-sync (net/save_sync)
 #define BUILD_SYNC_KIND_MONEY 8         // host -> client: both balances (moneyRub, moneyUsd; hooks/money)
 
 struct BuildSyncMsg {
@@ -106,6 +107,8 @@ void BuildSync_SendSpeed(int kind, int speed, int speedSaved, int turbo);
 // Sends the host's game clock (hooks/game_speed). Game thread only.
 void BuildSync_SendTime(int day, int year, float progress);
 
+// Announces a re-sync to the client (net/save_sync). Game thread only.
+void BuildSync_SendResync();
 // Sends the host's money balances (hooks/money). Game thread only.
 void BuildSync_SendMoney(double rub, double usd);
 

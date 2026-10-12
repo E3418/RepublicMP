@@ -50,8 +50,13 @@ both machines.
    made by the player is paid on the host's side, where the placement is
    replayed with the player's construction mode.
 
-Not synced yet: simulation state (vehicles, citizens, production) - both
-games simulate on their own.
+10. **Re-sync** - Both games simulate on their own, so vehicles, citizens and
+    production drift apart. The host can send its world to the player again
+    with **Re-sync now**, or automatically every 5-60 minutes. Both games
+    pause for it like on the first join; the player reconnects by itself.
+
+Not synced yet: simulation state (vehicles, citizens, production) is only
+brought back in line by a re-sync.
 
 ## How it works
 
