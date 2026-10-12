@@ -54,8 +54,8 @@
 #define ROAD_SYNC_TEST_HOST_IP REPUBLICMP_HOST_IP
 
 // Upper bound on interior points per segment (the longest real drags seen
-// were ~125 points).
-#define ROAD_SYNC_MAX_POINTS 512
+// were ~125 points; 742 was seen on a long road).
+#define ROAD_SYNC_MAX_POINTS 2048
 
 // Tool categories. The value travels on the wire, so the order must match on
 // both machines. Manager offsets / wrappers: see g_categories in road_sync.cpp.
