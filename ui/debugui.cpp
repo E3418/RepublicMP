@@ -8,6 +8,7 @@
 #include "../net/terrain_sync.h"
 #include "../net/save_sync.h"
 #include "../hooks/determinism.h"
+#include "../net/settings_sync.h"
 #include "debug_log.h"
 #include <vector>
 #include <string>
@@ -180,6 +181,17 @@ void Debugui::Draw()
         ImGui::TextWrapped("Saves the game as 'mp_probe', then loads and simulates it twice and compares the "
                            "state. Don't touch the game while it runs. Not during a multiplayer session.");
         ImGui::TextWrapped("Result: %s", Probe_Status());
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // --- Field diff (net/settings_sync) ---
+        bool fieldDiff = SettingsSync_GetFieldDiff();
+        if (ImGui::Checkbox("Log building fields changed by clicks (FIELD_DIFF)", &fieldDiff))
+            SettingsSync_SetFieldDiff(fieldDiff);
+        ImGui::TextWrapped("For finding window settings that are not synced yet: open the building's window, "
+                           "leave it a few seconds, then click the setting. The changed bytes go to the log.");
 
         ImGui::Spacing();
         ImGui::Separator();
