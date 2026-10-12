@@ -54,6 +54,7 @@
 #define BUILD_SYNC_KIND_ACCESS_ROAD 6   // a road the previous building laid itself; a RoadSyncSegment follows on the wire
 #define BUILD_SYNC_KIND_PAY 7           // a building was switched to "finish with rubles/dollars" (speed=rub, speedSaved=usd)
 #define BUILD_SYNC_KIND_RESYNC 9        // host -> client: the host closes the channels for a re-sync (net/save_sync)
+#define BUILD_SYNC_KIND_MONEY 8         // host -> client: both balances (moneyRub, moneyUsd; hooks/money)
 
 struct BuildSyncMsg {
     int kind;                   // BUILD_SYNC_KIND_*
@@ -74,6 +75,9 @@ struct BuildSyncMsg {
     int speedSaved;             // thisPtr+0x5a8
     int speedTurbo;             // thisPtr+0x5ac
     float timeProgress;         // TIME: thisPtr+0x59c
+    // MONEY only
+    double moneyRub;            // thisPtr+0x588
+    double moneyUsd;            // thisPtr+0x580
 };
 
 // Longest a received message waits for its terrain fence before it is
@@ -105,6 +109,8 @@ void BuildSync_SendTime(int day, int year, float progress);
 
 // Announces a re-sync to the client (net/save_sync). Game thread only.
 void BuildSync_SendResync();
+// Sends the host's money balances (hooks/money). Game thread only.
+void BuildSync_SendMoney(double rub, double usd);
 
 // True while a remote placement or demolition is being replayed.
 bool BuildSync_IsApplyingRemote();
