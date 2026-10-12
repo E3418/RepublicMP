@@ -149,6 +149,39 @@ reporting a problem, attach the logs of both players.
 
 ## Changelog
 
+### 0.4.1
+
+Fixes and the construction-site controls.
+
+- **Construction sites**: stopping and continuing construction, and
+  cancelling "finish with rubles / dollars", now reach the other player
+  (before, only switching the money finish on did). They apply at once even
+  while the other player has a window open.
+- **Moving-in restrictions**: all eight "who may move in" flags of a house
+  are synced (before, only "nobody").
+- **Roads**: a road message carries only the points actually used - a short
+  path is ~200 bytes instead of ~48 KB. Paths can have up to 2048 points.
+- Fixed: a crash on the other side when a footpath was replayed while that
+  player's cursor was over a road.
+- Drift check: per-subsystem floors (2 vehicles against 0 is no longer
+  100%), vehicles count fully, the limit must be exceeded 3 game hours in a
+  row and an automatic re-sync waits at least 10 minutes after the last one;
+  summaries that arrive early are no longer dropped.
+- Weather: only the host's rain decision is taken over; dawn, dusk and night
+  follow the local clock (no more flickering light).
+- The build mode in the log reads "rubles, auto purchase on 70% option 1,
+  fill 20" instead of raw numbers.
+- Debug window: "Log building fields changed by clicks (FIELD_DIFF)", a
+  helper for finding window settings that are not synced yet.
+
+Known issues:
+- Stopping or paying for a road / rail construction site may not reach the
+  other player (their site is not found at the same spot); a re-sync brings
+  it over.
+- While a player has a window open, buildings and roads from the other
+  player wait until it is closed.
+- Buying vehicles is not synced yet; a re-sync brings them over.
+
 ### 0.4.0
 
 The world itself starts to be synced, not only what players build.
