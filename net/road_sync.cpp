@@ -38,7 +38,18 @@
 #define PRESET_CURVE_MODE_RVA 0x9E8088    // int: preset curve index, -1 = free curve
 
 // Hover state the tools read from the local mouse.
-static const unsigned int kHoverPtrRvas[] = { 0x9E45E8, 0x9E4560, 0x9E4558, 0x9E45E0, 0x9E45D8 };
+//
+// 0x9E4590 / 0x9E45A0: the road segment under the cursor. The footpath tool
+// (manager+0x258 == 4) copies them at drag start (fc040, 0x4FC650) into
+// manager+0x360 / +0x370, and its commit (0x51C9F6) then joins the path to
+// that road segment, looking it up in the road manager's list (FUN_14053d510)
+// and indexing with the result. Left set, a replayed footpath was joined to
+// whatever road the LOCAL player happened to point at - and when that
+// pointer was stale (the segment rebuilt meanwhile), the lookup gave -1 and
+// the commit crashed half-way (0x56DFE4 via FUN_1405446d0), leaving the tool
+// broken and the game crashing on the next frame.
+static const unsigned int kHoverPtrRvas[] = { 0x9E45E8, 0x9E4560, 0x9E4558, 0x9E45E0, 0x9E45D8,
+                                              0x9E4590, 0x9E45A0 };
 #define HOVER_FLAG_RVA 0x9E45F8
 #define HOVER_NODE_RVA 0x9E4560  // thisPtr+0xf650: hovered path node (fcaf0 DAT_1409e4560)
 #define HOVER_PORT_BUILDING_RVA 0x9E45B0  // building whose connection port is hovered
@@ -64,6 +75,8 @@ static const unsigned int kHoverPtrRvas[] = { 0x9E45E8, 0x9E4560, 0x9E4558, 0x9E
 #define MGR_ERROR_CATEGORY_OFFSET 0x318   // int: -1 = no error
 #define MGR_ERROR_SUBCODE_OFFSET 0x31c
 #define MGR_HOVER_SEGMENT_COPY_OFFSET 0x3b8
+#define MGR_ROAD_LINK_OFFSET 0x360        // footpath tool: road segment the path joins (fc040 copies 0x9E4590)
+#define MGR_ROAD_LINK_EXTRA_OFFSET 0x370  // ... and 0x9E45A0
 #define MGR_ROUTE_BEGIN_OFFSET 0x410      // interior route records (24 bytes each)
 #define MGR_ROUTE_END_OFFSET 0x418
 #define MGR_START_NODE_OFFSET 0x428
@@ -357,9 +370,13 @@ static bool SegmentBetweenNodesExists(const RoadSyncSegment& want)
 // road_sync.h). Returns false only if the replay threw; *outEngineAccepted is
 // the engine's verdict right before the commit (+0x315 valid, no error).
 // All spoofed input state is restored before returning.
+// Set by ApplySegmentImpl: the last replay threw inside the engine.
+static bool g_lastApplyThrew = false;
+
 static bool ApplySegmentImpl(const RoadSyncSegment& seg, bool* outEngineAccepted)
 {
     *outEngineAccepted = false;
+    g_lastApplyThrew = false;
 
     const RoadSyncCategoryInfo* info = RoadSync_GetCategoryInfo(seg.category);
     if (!info || !info->enabled || seg.pointCount < 0 || seg.pointCount > ROAD_SYNC_MAX_POINTS) {
@@ -489,9 +506,24 @@ static bool ApplySegmentImpl(const RoadSyncSegment& seg, bool* outEngineAccepted
         threw = true;
     }
 
+    g_lastApplyThrew = threw;
     if (threw) {
         Logf("republicmp  ROAD_SYNC: <exception applying segment>");
         *outEngineAccepted = false;
+        // The release never reached the wrapper's own end of the drag
+        // (0x3D6A3F: thisPtr+0xd2ac = 0). Left set, the per-frame tool code
+        // (FUN_14030d1a0) keeps working on the half-built drag and crashes
+        // the game a frame later (0x310E58). End it the way the wrapper and
+        // the demolish replay do.
+        __try {
+            *(unsigned char*)(thisPtr + TOOL_DRAG_ACTIVE_OFFSET) = 0;
+            *(long long*)(manager + MGR_ROAD_LINK_OFFSET) = 0;
+            *(long long*)(manager + MGR_ROAD_LINK_EXTRA_OFFSET) = 0;
+            ((ManagerResetFn)((uintptr_t)g_exe + MANAGER_RESET_RVA))(manager, manager + MANAGER_RESET_STATE_OFFSET);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            Logf("republicmp  ROAD_SYNC: resetting the tool after the exception threw too");
+        }
+        HoverGlobals_Clear();
         return false;
     }
     Logf("republicmp  ROAD_SYNC:   apply done - %s", *outEngineAccepted ? "engine ACCEPTED" : "engine REJECTED");
@@ -1341,9 +1373,17 @@ static void ApplySegmentAndAck(const RoadSyncMsg& msg)
     for (; attempt <= ROAD_SYNC_MAX_APPLY_ATTEMPTS; attempt++) {
         ok = ApplySegment(seg, &engineAccepted);
         if (ok) break;
+        // A throw inside the engine is not transient, and the throw may have
+        // left a half-built path behind (a start node, say): a retry on top
+        // of that is what turned one failed path into a crash. A re-sync
+        // brings the path over instead.
+        if (g_lastApplyThrew) {
+            Logf("republicmp  ROAD_SYNC: seq=%d threw inside the engine - not retried", msg.seq);
+            break;
+        }
     }
     BuildMode_Write(mine);
-    if (!ok) attempt = ROAD_SYNC_MAX_APPLY_ATTEMPTS;
+    if (!ok && attempt > ROAD_SYNC_MAX_APPLY_ATTEMPTS) attempt = ROAD_SYNC_MAX_APPLY_ATTEMPTS;
 
     char theirs[64], local[64];
     Logf("republicmp  ROAD_SYNC: seq=%d %s after %d attempt(s), pay=%s (mine: %s)", msg.seq,
