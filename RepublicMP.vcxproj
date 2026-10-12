@@ -179,6 +179,7 @@
     <ClCompile Include="hooks\detect_spawn.cpp" />
     <ClCompile Include="hooks\present_hook.cpp" />
     <ClCompile Include="hooks\game_speed.cpp" />
+    <ClCompile Include="hooks\money.cpp" />
     <ClCompile Include="hooks\imgui_hook.cpp" />
     <ClCompile Include="hooks\terrain_hook.cpp" />
     <ClCompile Include="hooks\demolish_hook.cpp" />
@@ -214,6 +215,7 @@
     <ClInclude Include="hooks\detect_spawn.h" />
     <ClInclude Include="hooks\present_hook.h" />
     <ClInclude Include="hooks\game_speed.h" />
+    <ClInclude Include="hooks\money.h" />
     <ClInclude Include="hooks\window_focus.h" />
     <ClInclude Include="hooks\save_load.h" />
     <ClInclude Include="hooks\imgui_hook.h" />

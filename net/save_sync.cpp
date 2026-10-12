@@ -504,7 +504,7 @@ static bool RunHostJoin(SOCKET sock)
         HostStep(sock, 7, "Starting live sync");
         StartChannelsHost();
         if (!WaitForChannels(false)) {
-            if (!g_disconnectRequested) SetSessionError("the live sync channels didn't connect");
+            if (!g_disconnectRequested) SetSessionError("the live sync channels didn't connect - TCP ports %d-%d must reach the host too (forward them like port %d)", BUILD_SYNC_PORT, TERRAIN_SYNC_PORT, SAVE_SYNC_PORT);
             ResetChannels();
             break;
         }
@@ -692,7 +692,7 @@ static bool RunClientJoin()
         ClientStep(7, "Starting live sync");
         SendMsg(sock, MSG_READY, 7, -1, "");
         if (!WaitForChannels(true)) {
-            if (!g_disconnectRequested) SetSessionError("the live sync channels didn't connect");
+            if (!g_disconnectRequested) SetSessionError("the live sync channels didn't connect - TCP ports %d-%d of the host are not reachable (only port %d is forwarded?)", BUILD_SYNC_PORT, TERRAIN_SYNC_PORT, SAVE_SYNC_PORT);
             ResetChannels();
             break;
         }
