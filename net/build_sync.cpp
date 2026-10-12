@@ -310,7 +310,7 @@ static void SendNow(const BuildWireItem& item)
     if (msg.kind == BUILD_SYNC_KIND_SPEED_SET || msg.kind == BUILD_SYNC_KIND_SPEED_REQUEST ||
         msg.kind == BUILD_SYNC_KIND_SPEED_BOOST || msg.kind == BUILD_SYNC_KIND_TIME ||
         msg.kind == BUILD_SYNC_KIND_MONEY || msg.kind == BUILD_SYNC_KIND_RESYNC ||
-        msg.kind == BUILD_SYNC_KIND_SETTING) {
+        msg.kind == BUILD_SYNC_KIND_SETTING || msg.kind == BUILD_SYNC_KIND_WEATHER) {{
         if (!NetworkSendExact(g_sock, &msg, sizeof(msg))) {
             BuildSyncStatus("[BUILD_SYNC] send failed, dropping connection");
             CloseConnection();
@@ -383,7 +383,17 @@ void BuildSync_SendTime(int day, int year, float progress)
     msg.timeProgress = progress;
     SendOrQueue(msg);
 }
-
+  
+void BuildSync_SendWeather(const WeatherWire& w)
+{
+    if (!g_connected) return;
+    BuildSyncMsg msg = {};
+    msg.kind = BUILD_SYNC_KIND_WEATHER;
+    strcpy_s(msg.typeName, "<weather>");
+    msg.weather = w;
+    SendOrQueue(msg);
+}
+  
 void BuildSync_SendMoney(double rub, double usd)
 {
     if (!g_connected) return;
@@ -793,7 +803,8 @@ void BuildSync_Tick()
         // placement waiting for its terrain or a retry.
         if (msg.kind == BUILD_SYNC_KIND_SPEED_SET || msg.kind == BUILD_SYNC_KIND_SPEED_REQUEST ||
             msg.kind == BUILD_SYNC_KIND_SPEED_BOOST || msg.kind == BUILD_SYNC_KIND_TIME ||
-            msg.kind == BUILD_SYNC_KIND_MONEY || msg.kind == BUILD_SYNC_KIND_SETTING) {
+            msg.kind == BUILD_SYNC_KIND_MONEY || msg.kind == BUILD_SYNC_KIND_SETTING ||
+            msg.kind == BUILD_SYNC_KIND_WEATHER) {
             speedMsgs.push_back(msg);
             continue;
         }
@@ -805,6 +816,7 @@ void BuildSync_Tick()
 
     for (const BuildSyncMsg& m : speedMsgs) {
         if (m.kind == BUILD_SYNC_KIND_TIME) GameSpeed_OnRemoteTime(m.speed, m.speedSaved, m.timeProgress);
+        else if (m.kind == BUILD_SYNC_KIND_WEATHER) Weather_OnRemote(m.weather);
         else if (m.kind == BUILD_SYNC_KIND_MONEY) Money_OnRemote(m.moneyRub, m.moneyUsd);
         else if (m.kind == BUILD_SYNC_KIND_SETTING) SettingsSync_OnRemote(m.setting);
         else GameSpeed_OnRemote(m.kind, m.speed, m.speedSaved, m.speedTurbo);

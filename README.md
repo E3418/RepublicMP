@@ -61,6 +61,10 @@ both machines.
     storage limits, and the gameplay checkboxes (the personal "notify me"
     ones stay local).
 
+12. **Weather** - The host owns it: temperature (heating demand), wind (wind
+    turbines), snowfall (road snow) and rain are sent every second. The game
+    does not save the weather, so not even joining again aligned it.
+
 Not synced yet: simulation state (vehicles, citizens, production) is only
 brought back in line by a re-sync.
 

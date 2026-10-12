@@ -11,9 +11,11 @@
 #include "../net/road_sync.h"
 #include "../net/terrain_sync.h"
 #include "../net/save_sync.h"
-#include "game_speed.h"
-#include "money.h"
 #include "../net/settings_sync.h"
+#include "game_speed.h"
+#include "weather.h"
+#include "money.h"
+
 
 #include <d3d11.h>
 #include <dxgi.h>
@@ -79,6 +81,7 @@ static HRESULT PresentFrame(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
     DemolishHook_Tick(); // send demolitions captured this frame (after the terrain batch, for its fence)
     BuildSync_Tick(); // apply any building placements received over the network
     GameSpeed_SyncTick(); // send local speed changes (host decides, see game_speed.h)
+    Weather_SyncTick(); // host: send the weather (see weather.h)
     SaveSync_Tick(); // host: send a requested re-sync announcement
     Money_SyncTick(); // host: send the money balances (see money.h)
     SettingsSync_Tick(); // building window settings: send local changes, apply received ones

@@ -60,6 +60,9 @@
     <ClCompile Include="hooks\game_speed.cpp">
       <Filter>hooks</Filter>
     </ClCompile>
+    <ClCompile Include="hooks\weather.cpp">
+      <Filter>hooks</Filter>
+    </ClCompile>
     <ClCompile Include="hooks\money.cpp">
       <Filter>hooks</Filter>
     </ClCompile>
@@ -174,6 +177,9 @@
       <Filter>hooks</Filter>
     </ClInclude>
     <ClInclude Include="hooks\game_speed.h">
+      <Filter>hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\weather.h">
       <Filter>hooks</Filter>
     </ClInclude>
     <ClInclude Include="hooks\state_hash.h">
