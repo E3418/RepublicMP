@@ -14,6 +14,7 @@
 
 #include <d3d11.h>
 #include <dxgi.h>
+#include <dxgi1_2.h> // IDXGISwapChain1::Present1 (re-entry fallback)
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
 
@@ -27,7 +28,46 @@ typedef HRESULT(STDMETHODCALLTYPE* PresentFn)(IDXGISwapChain* pSwapChain, UINT S
 static PresentFn g_origPresent = nullptr;
 volatile long long g_presentCallCount = 0;
 
+// Depth of HookedPresent on this thread. An overlay that hooks the same
+// Present after us (the Steam overlay does) may keep HookedPresent as its own
+// "original": g_origPresent then runs the overlay, which calls HookedPresent
+// again, which calls g_origPresent again - without a guard the stack runs out
+// within a frame and the game crashes.
+static thread_local int t_presentDepth = 0;
+static volatile bool g_reentryLogged = false;
+
+// Presents the frame without g_origPresent (which leads back into the
+// overlay): through IDXGISwapChain1::Present1, which this module never hooks.
+static HRESULT PresentBypassingChain(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags)
+{
+    IDXGISwapChain1* sc1 = nullptr;
+    if (FAILED(pSwapChain->QueryInterface(__uuidof(IDXGISwapChain1), (void**)&sc1)) || !sc1)
+        return S_OK; // nothing better possible - the frame is dropped instead of the game
+    DXGI_PRESENT_PARAMETERS params = {};
+    HRESULT hr = sc1->Present1(SyncInterval, Flags, &params);
+    sc1->Release();
+    return hr;
+}
+
+static HRESULT PresentFrame(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags);
+
 static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags)
+{
+    if (t_presentDepth > 0) {
+        if (!g_reentryLogged) {
+            g_reentryLogged = true;
+            Logf("republicmp  PRESENT: re-entered through another overlay's Present hook (Steam overlay?) - "
+                 "presenting through Present1 to break the loop");
+        }
+        return PresentBypassingChain(pSwapChain, SyncInterval, Flags);
+    }
+    t_presentDepth++;
+    HRESULT hr = PresentFrame(pSwapChain, SyncInterval, Flags);
+    t_presentDepth--;
+    return hr;
+}
+
+static HRESULT PresentFrame(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags)
 {
     g_presentCallCount++;
     InputBlock_Tick();  // keep the game's mouse-button bytes clear while the join screen is up
