@@ -309,7 +309,8 @@ static void SendNow(const BuildWireItem& item)
     }
     if (msg.kind == BUILD_SYNC_KIND_SPEED_SET || msg.kind == BUILD_SYNC_KIND_SPEED_REQUEST ||
         msg.kind == BUILD_SYNC_KIND_SPEED_BOOST || msg.kind == BUILD_SYNC_KIND_TIME ||
-         msg.kind == BUILD_SYNC_KIND_MONEY || msg.kind == BUILD_SYNC_KIND_RESYNC) {
+        msg.kind == BUILD_SYNC_KIND_MONEY || msg.kind == BUILD_SYNC_KIND_RESYNC ||
+        msg.kind == BUILD_SYNC_KIND_SETTING) {
         if (!NetworkSendExact(g_sock, &msg, sizeof(msg))) {
             BuildSyncStatus("[BUILD_SYNC] send failed, dropping connection");
             CloseConnection();
@@ -400,6 +401,16 @@ void BuildSync_SendResync()
     BuildSyncMsg msg = {};
     msg.kind = BUILD_SYNC_KIND_RESYNC;
     strcpy_s(msg.typeName, "<resync>");
+    SendOrQueue(msg);
+}
+
+void BuildSync_SendSetting(const SettingWire& w)
+{
+    if (!g_connected) return;
+    BuildSyncMsg msg = {};
+    msg.kind = BUILD_SYNC_KIND_SETTING;
+    strcpy_s(msg.typeName, "<setting>");
+    msg.setting = w;
     SendOrQueue(msg);
 }
 
@@ -782,7 +793,7 @@ void BuildSync_Tick()
         // placement waiting for its terrain or a retry.
         if (msg.kind == BUILD_SYNC_KIND_SPEED_SET || msg.kind == BUILD_SYNC_KIND_SPEED_REQUEST ||
             msg.kind == BUILD_SYNC_KIND_SPEED_BOOST || msg.kind == BUILD_SYNC_KIND_TIME ||
-            msg.kind == BUILD_SYNC_KIND_MONEY) {
+            msg.kind == BUILD_SYNC_KIND_MONEY || msg.kind == BUILD_SYNC_KIND_SETTING) {
             speedMsgs.push_back(msg);
             continue;
         }
@@ -795,6 +806,7 @@ void BuildSync_Tick()
     for (const BuildSyncMsg& m : speedMsgs) {
         if (m.kind == BUILD_SYNC_KIND_TIME) GameSpeed_OnRemoteTime(m.speed, m.speedSaved, m.timeProgress);
         else if (m.kind == BUILD_SYNC_KIND_MONEY) Money_OnRemote(m.moneyRub, m.moneyUsd);
+        else if (m.kind == BUILD_SYNC_KIND_SETTING) SettingsSync_OnRemote(m.setting);
         else GameSpeed_OnRemote(m.kind, m.speed, m.speedSaved, m.speedTurbo);
     }
 

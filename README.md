@@ -55,6 +55,12 @@ both machines.
     with **Re-sync now**, or automatically every 5-60 minutes. Both games
     pause for it like on the first join; the player reconnects by itself.
 
+11. **Building settings** - What players set in a building's window travels
+    to the other side: import/export mode and amount of power connections
+    and pipelines, worker and visitor limits, priority, auto purchase,
+    storage limits, and the gameplay checkboxes (the personal "notify me"
+    ones stay local).
+
 Not synced yet: simulation state (vehicles, citizens, production) is only
 brought back in line by a re-sync.
 

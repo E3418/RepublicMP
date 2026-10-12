@@ -41,6 +41,7 @@
 #include "host_config.h"
 #include "road_sync.h" // RoadSyncSegment (access roads)
 #include "build_mode.h"
+#include "settings_sync.h" // SettingWire
 
 #define BUILD_SYNC_PORT 5557
 #define BUILD_SYNC_TEST_HOST_IP REPUBLICMP_HOST_IP
@@ -53,8 +54,9 @@
 #define BUILD_SYNC_KIND_TIME 5          // host -> client: game clock (speed=day, speedSaved=year, timeProgress)
 #define BUILD_SYNC_KIND_ACCESS_ROAD 6   // a road the previous building laid itself; a RoadSyncSegment follows on the wire
 #define BUILD_SYNC_KIND_PAY 7           // a building was switched to "finish with rubles/dollars" (speed=rub, speedSaved=usd)
-#define BUILD_SYNC_KIND_RESYNC 9        // host -> client: the host closes the channels for a re-sync (net/save_sync)
 #define BUILD_SYNC_KIND_MONEY 8         // host -> client: both balances (moneyRub, moneyUsd; hooks/money)
+#define BUILD_SYNC_KIND_RESYNC 9        // host -> client: the host closes the channels for a re-sync (net/save_sync)
+#define BUILD_SYNC_KIND_SETTING 11      // either way: a building window setting (net/settings_sync)
 
 struct BuildSyncMsg {
     int kind;                   // BUILD_SYNC_KIND_*
@@ -78,6 +80,8 @@ struct BuildSyncMsg {
     // MONEY only
     double moneyRub;            // thisPtr+0x588
     double moneyUsd;            // thisPtr+0x580
+    // SETTING only
+    SettingWire setting;
 };
 
 // Longest a received message waits for its terrain fence before it is
@@ -107,10 +111,14 @@ void BuildSync_SendSpeed(int kind, int speed, int speedSaved, int turbo);
 // Sends the host's game clock (hooks/game_speed). Game thread only.
 void BuildSync_SendTime(int day, int year, float progress);
 
-// Announces a re-sync to the client (net/save_sync). Game thread only.
-void BuildSync_SendResync();
 // Sends the host's money balances (hooks/money). Game thread only.
 void BuildSync_SendMoney(double rub, double usd);
+
+// Announces a re-sync to the client (net/save_sync). Game thread only.
+void BuildSync_SendResync();
+
+// Sends a changed building setting (net/settings_sync). Game thread only.
+void BuildSync_SendSetting(const SettingWire& w);
 
 // True while a remote placement or demolition is being replayed.
 bool BuildSync_IsApplyingRemote();

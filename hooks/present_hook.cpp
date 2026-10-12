@@ -13,6 +13,7 @@
 #include "../net/save_sync.h"
 #include "game_speed.h"
 #include "money.h"
+#include "../net/settings_sync.h"
 
 #include <d3d11.h>
 #include <dxgi.h>
@@ -80,6 +81,7 @@ static HRESULT PresentFrame(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
     GameSpeed_SyncTick(); // send local speed changes (host decides, see game_speed.h)
     SaveSync_Tick(); // host: send a requested re-sync announcement
     Money_SyncTick(); // host: send the money balances (see money.h)
+    SettingsSync_Tick(); // building window settings: send local changes, apply received ones
     RoadSync_Tick(); // apply infrastructure received over the network
     DetectSpawn_Tick(); // drag state, captured commits, F9 debug spawn
 
