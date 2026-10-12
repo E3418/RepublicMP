@@ -30,6 +30,7 @@ static WeatherWire g_received;
 static bool g_hasReceived = false;
 static ULONGLONG g_lastSendMs = 0;
 static bool g_loggedFirst = false;
+static int g_hostSky = -1;          // client: the host's last sky (main thread), -1 = none
 
 static BYTE* World() { return g_exeBase + WORLD_RVA; }
 
@@ -68,14 +69,26 @@ static void WriteWeather(const WeatherWire& w)
         *(int*)(p + W_SNOWING) = w.snowing;
         *(float*)(p + W_SNOW_TIMER) = w.snowTimer;
         *(float*)(p + W_WETNESS) = w.wetness;
-        int sky = *(int*)(p + W_SKY);
-        if (sky != w.sky && w.sky >= 0 && w.sky <= 3) {
-            *(int*)(p + W_SKY) = w.sky;
-            *(int*)(p + W_DAY_START_RESET) = 0;
-            ((SetSkyFn)(g_exeBase + SET_SKY_RVA))(0, w.sky, -1, SKY_BLEND);
-            Logf("republicmp  WEATHER: sky %d -> %d (host)", sky, w.sky);
-        }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+// Switches the sky the way FUN_140333bd0 does (it also zeroes +0x598 on a
+// switch). False if it already was `sky` or could not be read.
+static bool ApplySky(int sky, int* previous)
+{
+    if (sky < 0 || sky > 3) return false;
+    __try {
+        BYTE* p = World();
+        int cur = *(int*)(p + W_SKY);
+        if (cur == sky) return false;
+        *(int*)(p + W_SKY) = sky;
+        *(int*)(p + W_DAY_START_RESET) = 0;
+        ((SetSkyFn)(g_exeBase + SET_SKY_RVA))(0, sky, -1, SKY_BLEND);
+        *previous = cur;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
     }
 }
 
@@ -87,21 +100,80 @@ static bool Plausible(const WeatherWire& w)
 }
 
 // Main thread, right after a simulation step.
+//
+// Only the RAIN decision is enforced on the sky, after every step. Sunrise /
+// sunset (1) and night (2) are worked out by FUN_140333bd0 from the local
+// clock every frame, and the player's clock is up to an hour off the host's
+// between corrections: forcing the host's 0/1/2 made the two fight every
+// frame at dawn and dusk. Rain (3) is the one random part - rolled at the
+// start of a day - and the game keeps it once set, so the host's rain is
+// re-applied right after the game's own roll (no second-long flash of the
+// wrong weather), and the time-of-day sky is left to the local clock.
+//
+// Should the game switch it back again and again anyway, the correction
+// stops for SKY_BACKOFF_MS instead of fighting.
+#define SKY_FIGHT_WINDOW_MS 2000
+#define SKY_FIGHT_LIMIT 4
+#define SKY_BACKOFF_MS 10000
+
+static ULONGLONG g_skyWindowStart = 0;
+static int g_skyFixes = 0;
+static ULONGLONG g_skyBackoffUntil = 0;
+
+static void KeepHostRain()
+{
+    if (g_hostSky < 0) return;
+    int cur;
+    __try {
+        cur = *(int*)(World() + W_SKY);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return;
+    }
+    if ((cur == 3) == (g_hostSky == 3)) return; // same rain state - time of day is local
+    ULONGLONG now = GetTickCount64();
+    if (now < g_skyBackoffUntil) return;
+    if (now - g_skyWindowStart > SKY_FIGHT_WINDOW_MS) {
+        g_skyWindowStart = now;
+        g_skyFixes = 0;
+    }
+    if (++g_skyFixes > SKY_FIGHT_LIMIT) {
+        g_skyBackoffUntil = now + SKY_BACKOFF_MS;
+        Logf("republicmp  WEATHER: the game keeps switching the sky back - leaving it alone for %ds",
+             SKY_BACKOFF_MS / 1000);
+        return;
+    }
+    int previous;
+    if (ApplySky(g_hostSky, &previous))
+        Logf("republicmp  WEATHER: sky %d -> %d (host's %s)", previous, g_hostSky,
+             g_hostSky == 3 ? "rain" : "dry weather");
+}
+
 static void OnStep()
 {
-    if (!g_hasReceived) return;
-    WeatherWire w;
-    EnterCriticalSection(&g_weatherLock);
-    w = g_received;
-    g_hasReceived = false;
-    LeaveCriticalSection(&g_weatherLock);
-    if (BuildSync_IsHostRole() || !BuildSync_IsConnected() || SyncBlock_IsActive()) return;
-    if (!g_loggedFirst) {
-        g_loggedFirst = true;
-        Logf("republicmp  WEATHER: following the host - %.1f°C, wind %.0f, sky %d, snowing %d", w.temperature,
-             w.wind, w.sky, w.snowing);
+    if (BuildSync_IsHostRole() || !BuildSync_IsConnected() || SyncBlock_IsActive()) {
+        g_hostSky = -1;
+        if (g_hasReceived) { // a block from before the pause/drop - the next one comes within a second
+            EnterCriticalSection(&g_weatherLock);
+            g_hasReceived = false;
+            LeaveCriticalSection(&g_weatherLock);
+        }
+        return;
     }
-    WriteWeather(w);
+    if (g_hasReceived) {
+        WeatherWire w;
+        EnterCriticalSection(&g_weatherLock);
+        w = g_received;
+        g_hasReceived = false;
+        LeaveCriticalSection(&g_weatherLock);
+        if (!g_loggedFirst) {
+            g_loggedFirst = true;
+            Logf("republicmp  WEATHER: following the host - %.1f°C, wind %.0f, sky %d, snowing %d", w.temperature,
+                 w.wind, w.sky, w.snowing);
+        }
+        WriteWeather(w);
+        g_hostSky = w.sky;
+    }
+    KeepHostRain();
 }
 
 void Weather_Install()

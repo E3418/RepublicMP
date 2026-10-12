@@ -18,8 +18,10 @@
 // The host sends the block every WEATHER_SYNC_INTERVAL_MS; the client writes
 // it right after a simulation step on the main thread, where the game itself
 // updates the weather. Copying the timers keeps the client from re-rolling in
-// between. A changed sky type also needs the lighting switched the way
-// FUN_140333bd0 does it: FUN_140334020(_, type, -1, 0.001f).
+// between. Of the sky only the rain decision (3 or not) is taken over - the
+// time-of-day skies follow the local clock (see OnStep in weather.cpp). A
+// changed sky type also needs the lighting switched the way FUN_140333bd0
+// does it: FUN_140334020(_, type, -1, 0.001f).
 //
 // Not copied: season (+0xE1C..+0xE24) and night factor (+0xE74) follow from
 // the synced clock; particles, UI and the per-road snow bytes stay local.
