@@ -425,15 +425,6 @@ void BuildSync_SendSetting(const SettingWire& w)
     SendOrQueue(msg);
 }
 
-void BuildSync_SendResync()
-{
-    if (!g_connected) return;
-    BuildSyncMsg msg = {};
-    msg.kind = BUILD_SYNC_KIND_RESYNC;
-    strcpy_s(msg.typeName, "<resync>");
-    SendOrQueue(msg);
-}
-
 void BuildSync_SendState(const SyncCheckWire& w)
 {
     if (!g_connected) return;
