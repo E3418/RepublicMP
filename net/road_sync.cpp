@@ -994,7 +994,7 @@ static bool ApplyDemolishInner(const RoadSyncDemolishMsg& m, bool* outRemoved)
 {
     *outRemoved = false;
     int engineRs = 0, engineRe = 0, rs = 0, re = 0;
-    bool adopted = false, viaNode = false;
+    bool adopted = false, viaNode = false, direct = false;
     const RoadSyncCategoryInfo* info = RoadSync_GetCategoryInfo(m.category);
     if (!info || !info->enabled) {
         Logf("republicmp  ROAD_SYNC: refusing demolish category=%d", m.category);
@@ -1038,19 +1038,43 @@ static bool ApplyDemolishInner(const RoadSyncDemolishMsg& m, bool* outRemoved)
                         const RoadSyncPoint* pb = *(const RoadSyncPoint**)(seg + SEG_POINTS_BEGIN_OFFSET);
                         const RoadSyncPoint* pe = *(const RoadSyncPoint**)(seg + SEG_POINTS_END_OFFSET);
                         int count = (pb && pe > pb) ? (int)(pe - pb) : 0;
-                        // The node the piece touches (node 0 for an interior piece).
-                        __int64 node = *(__int64*)(seg + (lo < 0 || hi < count ? SEG_NODE0_OFFSET : SEG_NODE1_OFFSET));
-                        *(__int64*)((uintptr_t)g_exe + HOVER_NODE_RVA) = node;
-                        reset(manager, manager + MANAGER_RESET_STATE_OFFSET);
-                        fcaf0(manager, c, ROAD_DEMOLISH_TYPE, 0, 0, 0, 0, 0, 0, 0);
-                        viaNode = *(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) != 0;
+                        // The node the piece touches (node 0 for an interior piece)
+                        // first, then the other end: a building's whole access
+                        // road starts at the building's port node, whose first
+                        // edge is not the road.
+                        __int64 first = *(__int64*)(seg + (lo < 0 || hi < count ? SEG_NODE0_OFFSET : SEG_NODE1_OFFSET));
+                        __int64 other = *(__int64*)(seg + (lo < 0 || hi < count ? SEG_NODE1_OFFSET : SEG_NODE0_OFFSET));
+                        __int64 tryNodes[2] = { first, other };
+                        for (int k = 0; k < 2 && !viaNode; k++) {
+                            if (!tryNodes[k]) continue;
+                            *(__int64*)((uintptr_t)g_exe + HOVER_NODE_RVA) = tryNodes[k];
+                            reset(manager, manager + MANAGER_RESET_STATE_OFFSET);
+                            fcaf0(manager, c, ROAD_DEMOLISH_TYPE, 0, 0, 0, 0, 0, 0, 0);
+                            viaNode = *(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) != 0;
+                        }
+                        // The sender's tool hit this piece with its camera's ray
+                        // (the hover edge, 0x9E4558); the replay has only the
+                        // cursor, and next to a building neither the cursor nor
+                        // a node picks it. Arm it the way fcaf0's node path does
+                        // (0x4FEA52: +0x380 piece, +0x388/+0x38c range, +0x390
+                        // hit) - AdoptSenderRange then writes the sender's range,
+                        // route and cut points - if the drag nodes are there.
+                        if (!viaNode && *(__int64*)(manager + MGR_START_NODE_OFFSET) &&
+                            *(__int64*)(manager + MGR_END_NODE_OFFSET)) {
+                            *(__int64*)(manager + MGR_UPG_SEGMENT_OFFSET) = seg;
+                            *(int*)(manager + MGR_UPG_RANGE_START_OFFSET) = -2; // never the sender's, so it is written
+                            *(int*)(manager + MGR_UPG_RANGE_END_OFFSET) = -2;
+                            *(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) = 1;
+                            direct = true;
+                        }
                     }
                 }
                 if (*(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) != 0) {
                     adopted = AdoptSenderRange(manager, m, &engineRs, &engineRe, &rs, &re);
-                    // Through the node the engine's own pick is only a stand-in
-                    // for the sender's piece - never cut it on its own.
-                    if (adopted || !viaNode) {
+                    // Through the node, or armed directly, the engine's own pick
+                    // is only a stand-in for the sender's piece - never cut it on
+                    // its own.
+                    if (adopted || (!viaNode && !direct)) {
                         commit(manager, 0, 0, 0, 0, 0, 0);
                         *outRemoved = true;
                     }
@@ -1070,7 +1094,9 @@ static bool ApplyDemolishInner(const RoadSyncDemolishMsg& m, bool* outRemoved)
     InterlockedDecrement(&g_applyingSegment);
     if (threw) Logf("republicmp  ROAD_SYNC: <exception applying demolish>");
     else if (*outRemoved) {
-        if (viaNode)
+        if (direct)
+            Logf("republicmp  ROAD_SYNC:   not picked at the cursor or its nodes - armed directly on the piece");
+        else if (viaNode)
             Logf("republicmp  ROAD_SYNC:   nothing picked at the cursor - armed through the piece's node");
         if (!m.hasRange)
             Logf("republicmp  ROAD_SYNC:   range (%d,%d) chosen here (sender sent no range)", engineRs, engineRe);
@@ -1134,31 +1160,91 @@ static bool ApplyDemolishPieces(const RoadSyncDemolishMsg& m, bool* outRemoved)
 
 // True if the piece the sender demolished is still in this network's
 // committed edges.
-static bool DemolishPieceStillHere(const RoadSyncDemolishMsg& m)
+// The local segment of the piece the sender demolished, or 0 if it is gone.
+static __int64 FindDemolishPiece(const RoadSyncDemolishMsg& m)
 {
     const RoadSyncCategoryInfo* info = RoadSync_GetCategoryInfo(m.category);
-    if (!info) return false;
+    if (!info) return 0;
     __try {
         __int64 manager = *(__int64*)(GetWorldThisPtr() + info->managerOffset);
-        if (!manager) return false;
+        if (!manager) return 0;
         if (m.pieceCount > 0) {
             for (int i = 0; i < m.pieceCount && i < 8; i++) {
                 bool reversed = false;
-                if (FindLocalSegment(manager, m.pieces[i], &reversed)) return true;
+                __int64 seg = FindLocalSegment(manager, m.pieces[i], &reversed);
+                if (seg) return seg;
             }
-            return false;
+            return 0;
         }
-        return m.hasRange && FindSegmentWithRange(manager, m.rangeA, m.rangeB) != 0;
+        return m.hasRange ? FindSegmentWithRange(manager, m.rangeA, m.rangeB) : 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
+        return 0;
     }
 }
 
-// Returns false to be tried again later: nothing was picked although the
-// piece is still here - in a batch of demolitions the neighbouring one,
-// applied in the same frame, has just changed the junction, and the game
-// settles it only in its next frame.
-static bool ApplyDemolishAndAck(const RoadSyncDemolishMsg& m, bool lastTry)
+static bool DemolishPieceStillHere(const RoadSyncDemolishMsg& m)
+{
+    return FindDemolishPiece(m) != 0;
+}
+
+// The building a segment belongs to (segment +0x138, e.g. the building whose
+// access road it is). The demolish tool skips a segment whose owner is being
+// demolished (owner +0xea8 set - fcaf0 at 0x4FE0B3): a piece next to a
+// building the other PC is still pulling down cannot be picked until that
+// demolition is over. Fills owner details for the log.
+#define SEG_OWNER_OFFSET 0x138
+#define OWNER_DEMOLISHING_OFFSET 0xea8
+#define OWNER_PROGRESS_OFFSET 0x604
+#define OWNER_POS_OFFSET 0x350
+
+struct PieceOwner {
+    bool has;
+    bool demolishing;
+    float pos[3];
+    float progress;
+};
+
+// One line with a segment's state words, to compare a piece the demolish
+// tool will not pick with one it does.
+static void LogSegmentState(const char* what, __int64 seg)
+{
+    __try {
+        Logf("republicmp  ROAD_SYNC:   %s: type %d variant %d +128=%d +129=%d planned(+140)=%d kind(+12c)=%d owner(+138)=%p points=%d",
+             what, *(int*)(seg + 0x120), *(int*)(seg + 0x124), (int)*(unsigned char*)(seg + 0x128),
+             (int)*(unsigned char*)(seg + 0x129), (int)*(unsigned char*)(seg + 0x140), *(int*)(seg + 0x12c),
+             *(void**)(seg + 0x138),
+             (int)((*(__int64*)(seg + SEG_POINTS_END_OFFSET) - *(__int64*)(seg + SEG_POINTS_BEGIN_OFFSET)) / 0x18));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+static PieceOwner ReadPieceOwner(__int64 seg)
+{
+    PieceOwner o = {};
+    __try {
+        __int64 owner = seg ? *(__int64*)(seg + SEG_OWNER_OFFSET) : 0;
+        if (!owner) return o;
+        o.has = true;
+        o.demolishing = *(unsigned char*)(owner + OWNER_DEMOLISHING_OFFSET) != 0;
+        memcpy(o.pos, (const float*)(owner + OWNER_POS_OFFSET), 12);
+        o.progress = *(float*)(owner + OWNER_PROGRESS_OFFSET);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        o.has = false;
+    }
+    return o;
+}
+
+// Outcome of one try at a remote demolition.
+enum DemolishOutcome {
+    DEMOLISH_DONE,       // removed, gone already, or failed - acked
+    DEMOLISH_RETRY,      // not picked although still here - try again shortly
+    DEMOLISH_WAIT_OWNER  // its building is still being demolished here - wait for that
+};
+
+// DEMOLISH_RETRY: in a batch of demolitions the neighbouring one, applied in
+// the same frame, has just changed the junction, and the game settles it
+// only in its next frame. DEMOLISH_WAIT_OWNER: see ReadPieceOwner.
+static DemolishOutcome ApplyDemolishAndAck(const RoadSyncDemolishMsg& m, bool lastTry, bool ownerWaitOver)
 {
     bool removed = false;
     bool ok = m.pieceCount > 0 ? ApplyDemolishPieces(m, &removed) : ApplyDemolish(m, &removed);
@@ -1173,18 +1259,31 @@ static bool ApplyDemolishAndAck(const RoadSyncDemolishMsg& m, bool lastTry)
     } else if (!DemolishPieceStillHere(m)) {
         result = "already gone here";
         success = true;
-    } else if (!lastTry) {
-        Logf("republicmp  ROAD_SYNC: demolish seq=%d %s at (%.2f,%.2f,%.2f) - not picked, the piece is still here - trying again",
-             m.seq, CategoryName(m.category), m.cursor[0], m.cursor[1], m.cursor[2]);
-        return false;
     } else {
+        PieceOwner owner = ReadPieceOwner(FindDemolishPiece(m));
+        if (owner.demolishing && !ownerWaitOver) {
+            if (!lastTry) // logged once, on the first try
+                Logf("republicmp  ROAD_SYNC: demolish seq=%d %s at (%.2f,%.2f,%.2f) - its building at (%.1f,%.1f) is still being demolished here - waiting for it",
+                     m.seq, CategoryName(m.category), m.cursor[0], m.cursor[1], m.cursor[2], owner.pos[0], owner.pos[2]);
+            return DEMOLISH_WAIT_OWNER;
+        }
+        if (!lastTry) {
+            Logf("republicmp  ROAD_SYNC: demolish seq=%d %s at (%.2f,%.2f,%.2f) - not picked, the piece is still here - trying again",
+                 m.seq, CategoryName(m.category), m.cursor[0], m.cursor[1], m.cursor[2]);
+            return DEMOLISH_RETRY;
+        }
+        LogSegmentState("the piece", FindDemolishPiece(m));
+        if (owner.has)
+            Logf("republicmp  ROAD_SYNC:   the piece belongs to a building at (%.1f,%.1f): %s, progress %.2f",
+                 owner.pos[0], owner.pos[2], owner.demolishing ? "still being demolished" : "not being demolished",
+                 owner.progress);
         result = "NOT removed - the piece is still here";
         success = false;
     }
     Logf("republicmp  ROAD_SYNC: demolish seq=%d %s at (%.2f,%.2f,%.2f) - %s", m.seq, CategoryName(m.category),
          m.cursor[0], m.cursor[1], m.cursor[2], result);
     SendAck(m.seq, m.category, success, 1);
-    return true;
+    return DEMOLISH_DONE;
 }
 
 bool RoadSync_SegmentExists(const RoadSyncSegment& seg)
@@ -1217,10 +1316,18 @@ struct RoadSyncItem {
     RoadSyncDirectionMsg dir;
     int attempts;                 // demolish: tries so far
     unsigned long long notBeforeMs; // demolish: GetTickCount64() of the next try
+    unsigned long long waitSinceMs; // demolish: waiting for its building's demolition since
 };
 
 #define DEMOLISH_MAX_ATTEMPTS 4
 #define DEMOLISH_RETRY_MS 250
+// A piece whose building is still being demolished here waits aside (the
+// queue goes on), checked every DEMOLISH_OWNER_POLL_MS for up to
+// DEMOLISH_OWNER_WAIT_MS - the other PC's demolition sites work at their
+// own pace.
+#define DEMOLISH_OWNER_POLL_MS 1000
+#define DEMOLISH_OWNER_WAIT_MS 180000
+static std::vector<RoadSyncItem> g_waitingDemolish;
 
 static volatile bool g_connected = false;
 static volatile bool g_connecting = false;
@@ -1848,7 +1955,7 @@ void RoadSync_Tick()
              found ? "" : " (no matching pending send)");
     }
 
-    if (g_pending.empty()) return;
+    if (g_pending.empty() && g_waitingDemolish.empty()) return;
 
     if (!IsWorldLoaded()) {
         if (!g_warnedWorldNotLoaded) {
@@ -1862,9 +1969,24 @@ void RoadSync_Tick()
     // Never replay into a manager while the local player is dragging, or
     // while the tool wrappers are blocked by UI - items stay queued.
     __int64 thisPtr = GetWorldThisPtr();
+    ULONGLONG nowMs = GetTickCount64();
+    for (size_t i = 0; i < g_waitingDemolish.size();) {
+        RoadSyncItem& item = g_waitingDemolish[i];
+        if (nowMs < item.notBeforeMs || DetectSpawn_IsToolDragActive() || ToolWrapperGuardBusy(thisPtr)) {
+            ++i;
+            continue;
+        }
+        bool over = nowMs - item.waitSinceMs >= DEMOLISH_OWNER_WAIT_MS;
+        if (ApplyDemolishAndAck(item.dem, true, over) == DEMOLISH_WAIT_OWNER) {
+            item.notBeforeMs = nowMs + DEMOLISH_OWNER_POLL_MS;
+            ++i;
+        } else {
+            g_waitingDemolish.erase(g_waitingDemolish.begin() + i);
+        }
+    }
+
     std::vector<RoadSyncItem> toApply;
     toApply.swap(g_pending);
-    ULONGLONG nowMs = GetTickCount64();
     for (size_t i = 0; i < toApply.size(); i++) {
         if (DetectSpawn_IsToolDragActive() || ToolWrapperGuardBusy(thisPtr) || !TerrainFenceAllows(toApply[i]) ||
             nowMs < toApply[i].notBeforeMs) {
@@ -1877,7 +1999,12 @@ void RoadSync_Tick()
             ApplyUpgradeAndAck(toApply[i].up);
         else if (toApply[i].tag == ROAD_SYNC_WIRE_DEMOLISH) {
             RoadSyncItem& item = toApply[i];
-            if (!ApplyDemolishAndAck(item.dem, item.attempts + 1 >= DEMOLISH_MAX_ATTEMPTS)) {
+            DemolishOutcome r = ApplyDemolishAndAck(item.dem, item.attempts + 1 >= DEMOLISH_MAX_ATTEMPTS, false);
+            if (r == DEMOLISH_WAIT_OWNER) {
+                item.waitSinceMs = nowMs;
+                item.notBeforeMs = nowMs + DEMOLISH_OWNER_POLL_MS;
+                g_waitingDemolish.push_back(item);
+            } else if (r == DEMOLISH_RETRY) {
                 // Again after the game's next frames; later items wait behind it.
                 item.attempts++;
                 item.notBeforeMs = nowMs + DEMOLISH_RETRY_MS;
