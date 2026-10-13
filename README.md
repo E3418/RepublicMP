@@ -149,7 +149,7 @@ reporting a problem, attach the logs of both players.
 
 ## Changelog
 
-### Unreleased
+### 0.4.2
 
 The other player's camera no longer decides how a building or a road comes
 out.
@@ -163,7 +163,10 @@ out.
 - **Demolishing roads** works wherever the other player is looking (the pick
   and the piece lookup no longer use the camera's list of roads). A piece
   the game has not settled yet after a neighbouring demolition is tried
-  again a moment later, and a piece already gone counts as done.
+  again a moment later, and a piece already gone counts as done. A
+  building's access road laid by the other PC's own game is now demolished
+  too, and a piece whose building is still being demolished there waits
+  for it.
 - **Footpaths joined to a road** get their pedestrian crossing on the other
   PC too: where the path splits the road (or meets its node) now travels
   with the path. Protocol 17.
@@ -182,10 +185,16 @@ out.
   be placed.
 - **Joining**: both games stay paused after a successful join or re-sync
   until either player resumes (#18).
+- **Citizens' destinations**: where a home's or bus stop's workers,
+  students, passengers and tourists go (up to 9 buildings per list) is
+  synced, including removing them (#15, by TucKnock).
 
 Known issues:
 - Realistic construction can still drift apart (e.g. a road at different
   percentages) - each PC simulates its own workers and vehicles.
+- Buying vehicles and a shop's or pub's goods purchases are not synced yet.
+- While a player has a window open, buildings and roads from the other
+  player wait until it is closed.
 
 ### 0.4.1
 
