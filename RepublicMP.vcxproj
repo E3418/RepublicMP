@@ -191,6 +191,7 @@
     <ClCompile Include="hooks\placement_collision.cpp" />
     <ClCompile Include="hooks\session_patches.cpp" />
     <ClCompile Include="net\view_list_scope.cpp" />
+    <ClCompile Include="net\citizen_destinations.cpp" />
     <ClCompile Include="hooks\input_block.cpp" />
     <ClCompile Include="net\build_sync.cpp" />
     <ClCompile Include="net\road_sync.cpp" />
@@ -237,6 +238,7 @@
     <ClInclude Include="hooks\placement_collision.h" />
     <ClInclude Include="hooks\session_patches.h" />
     <ClInclude Include="net\view_list_scope.h" />
+    <ClInclude Include="net\citizen_destinations.h" />
     <ClInclude Include="hooks\input_block.h" />
     <ClInclude Include="version.h" />
     <ClInclude Include="net\build_sync.h" />

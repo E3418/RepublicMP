@@ -129,6 +129,9 @@
     <ClCompile Include="net\view_list_scope.cpp">
       <Filter>net</Filter>
     </ClCompile>
+    <ClCompile Include="net\citizen_destinations.cpp">
+      <Filter>net</Filter>
+    </ClCompile>
     <ClCompile Include="hooks\input_block.cpp">
       <Filter>hooks</Filter>
     </ClCompile>
@@ -186,6 +189,9 @@
       <Filter>hooks</Filter>
     </ClInclude>
     <ClInclude Include="net\view_list_scope.h">
+      <Filter>net</Filter>
+    </ClInclude>
+    <ClInclude Include="net\citizen_destinations.h">
       <Filter>net</Filter>
     </ClInclude>
     <ClInclude Include="hooks\input_block.h">

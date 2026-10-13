@@ -1,5 +1,6 @@
 // See settings_sync.h.
 #include "settings_sync.h"
+#include "citizen_destinations.h"
 #include "build_sync.h"
 #include "../ui/sync_block.h"
 #include <unordered_map>
@@ -68,6 +69,7 @@ static const int kFieldCount = sizeof(kFields) / sizeof(kFields[0]);
 void SettingsSync_Bind(const TsmHost* host)
 {
     TsmBind(host);
+    CitizenDestinations_Bind(host);
 }
 
 static bool FieldApplies(const WatchedField& f, int category)
@@ -379,6 +381,7 @@ static void Scan(bool sendChanges)
             st.slotKnown[s] = true;
         }
     }
+    CitizenDestinations_Scan(g_scanList.data(), n, sendChanges, byPlayer);
     // Forget demolished buildings (their address may be reused).
     for (auto it = g_states.begin(); it != g_states.end();) {
         if (!it->second.seen) it = g_states.erase(it);
@@ -389,6 +392,7 @@ static void Scan(bool sendChanges)
 // Applies one received setting; false if its building is not there (yet).
 static bool Apply(const SettingWire& w)
 {
+    if (w.field == CITIZEN_DESTINATIONS_FIELD) return CitizenDestinations_Apply(w);
     BYTE* b = FindBuilding(w.pos, w.category);
     if (!b) return false;
     BuildingState& st = g_states[b];
@@ -415,7 +419,20 @@ static bool Apply(const SettingWire& w)
 
 void SettingsSync_OnRemote(const SettingWire& w)
 {
-    if (!Apply(w)) g_pending.push_back({ w, GetTickCount64() });
+    // A newer full list supersedes an older list waiting for an endpoint.
+    if (w.field == CITIZEN_DESTINATIONS_FIELD) {
+        for (auto it = g_pending.begin(); it != g_pending.end();) {
+            const SettingWire& old = it->w;
+            if (old.field == w.field && old.slot == w.slot && old.category == w.category &&
+                old.value == w.value && !memcmp(old.pos, w.pos, sizeof(w.pos)))
+                it = g_pending.erase(it);
+            else ++it;
+        }
+    }
+    if (!Apply(w)) {
+        if (w.field == CITIZEN_DESTINATIONS_FIELD) CitizenDestinations_LogPending(w, "queued");
+        g_pending.push_back({ w, GetTickCount64() });
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -532,6 +549,7 @@ void SettingsSync_Tick()
 
     bool syncing = BuildSync_IsConnected() && !SyncBlock_IsActive();
     if (!syncing) {
+        CitizenDestinations_Reset();
         g_states.clear();
         g_pending.clear();
         return;
@@ -541,8 +559,11 @@ void SettingsSync_Tick()
         if (Apply(g_pending[i].w)) {
             g_pending.erase(g_pending.begin() + i);
         } else if (now - g_pending[i].since > SETTINGS_RETRY_MS) {
-            Logf("republicmp  SETTINGS: building for a setting at (%.1f,%.1f) never appeared - dropped",
-                 g_pending[i].w.pos[0], g_pending[i].w.pos[2]);
+            if (g_pending[i].w.field == CITIZEN_DESTINATIONS_FIELD)
+                CitizenDestinations_LogPending(g_pending[i].w, "timeout - dropped");
+            else
+                Logf("republicmp  SETTINGS: building for a setting at (%.1f,%.1f) never appeared - dropped",
+                     g_pending[i].w.pos[0], g_pending[i].w.pos[2]);
             g_pending.erase(g_pending.begin() + i);
         } else {
             ++i;
