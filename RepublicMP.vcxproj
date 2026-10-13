@@ -188,6 +188,9 @@
     <ClCompile Include="hooks\imgui_hook.cpp" />
     <ClCompile Include="hooks\terrain_hook.cpp" />
     <ClCompile Include="hooks\demolish_hook.cpp" />
+    <ClCompile Include="hooks\placement_collision.cpp" />
+    <ClCompile Include="hooks\session_patches.cpp" />
+    <ClCompile Include="net\view_list_scope.cpp" />
     <ClCompile Include="hooks\input_block.cpp" />
     <ClCompile Include="net\build_sync.cpp" />
     <ClCompile Include="net\road_sync.cpp" />
@@ -231,6 +234,9 @@
     <ClInclude Include="hooks\imgui_hook.h" />
     <ClInclude Include="hooks\terrain_hook.h" />
     <ClInclude Include="hooks\demolish_hook.h" />
+    <ClInclude Include="hooks\placement_collision.h" />
+    <ClInclude Include="hooks\session_patches.h" />
+    <ClInclude Include="net\view_list_scope.h" />
     <ClInclude Include="hooks\input_block.h" />
     <ClInclude Include="version.h" />
     <ClInclude Include="net\build_sync.h" />

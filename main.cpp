@@ -8,6 +8,9 @@
 #include "hooks/imgui_hook.h"
 #include "hooks/terrain_hook.h"
 #include "hooks/demolish_hook.h"
+#include "hooks/placement_collision.h"
+#include "hooks/session_patches.h"
+#include "net/view_list_scope.h"
 #include "hooks/input_block.h"
 #include "hooks/state_hash.h"
 #include "hooks/determinism.h"
@@ -47,6 +50,9 @@ extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPlugi
     TerrainHook_Bind(host);
     TerrainSync_Bind(host);
     DemolishHook_Bind(host);
+    PlacementCollision_Bind(host);
+    SessionPatches_Bind(host);
+    ViewListScope_Bind(host);
     InputBlock_Bind(host);
     StateHash_Bind(host);
     Determinism_Bind(host);
@@ -80,6 +86,10 @@ extern "C" __declspec(dllexport) int TsmPluginStart(void)
 
     bool okDemolish = InstallDemolishHook();
     Logf("republicmp  demolish hook: %d%s", okDemolish, okDemolish ? "" : " - demolitions will NOT be synced");
+
+    bool okCollision = InstallPlacementCollisionHook();
+    Logf("republicmp  placement collision hook: %d%s", okCollision,
+         okCollision ? "" : " - access roads may take a different route on each PC");
 
     bool okTerrain = InstallTerrainHooks();
     Logf("republicmp  terrain hooks: %d%s", okTerrain, okTerrain ? "" : " - terrain will NOT be fully synced");

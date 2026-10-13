@@ -149,6 +149,44 @@ reporting a problem, attach the logs of both players.
 
 ## Changelog
 
+### Unreleased
+
+The other player's camera no longer decides how a building or a road comes
+out.
+
+- **Access roads**: a building's automatic access road is laid with the same
+  collision checks and the same nearby roads on both PCs, instead of what
+  each player's camera sees. Before, it could come out as a road on one PC
+  and a footpath on the other, or take another route, so the sender's later
+  demolition missed it and new buildings were refused there (by
+  SoylentGreed).
+- **Demolishing roads** works wherever the other player is looking (the pick
+  and the piece lookup no longer use the camera's list of roads). A piece
+  the game has not settled yet after a neighbouring demolition is tried
+  again a moment later, and a piece already gone counts as done.
+- **Footpaths joined to a road** get their pedestrian crossing on the other
+  PC too: where the path splits the road (or meets its node) now travels
+  with the path. Protocol 17.
+- **Alt-tab**: a game in the background (low frame rate) no longer builds
+  differently from the other player's; construction sites a camera sees no
+  longer get faster worker updates; a new citizen's value is set by the
+  simulation only, never first by a window or overlay on one PC. All of
+  these are active only while connected (and in the determinism probe) (by
+  SoylentGreed).
+- **Construction sites**: stop / continue / money finish is sent only from
+  that building's own window, never the game's own clean-up of a finished
+  site (#17) or a new site drawn with the road tool.
+- **Placement**: the replayed building is found by identity and checked
+  against the sender's position before it gets the sender's rotation (#16);
+  an access road is no longer built twice, or for a building that could not
+  be placed.
+- **Joining**: both games stay paused after a successful join or re-sync
+  until either player resumes (#18).
+
+Known issues:
+- Realistic construction can still drift apart (e.g. a road at different
+  percentages) - each PC simulates its own workers and vehicles.
+
 ### 0.4.1
 
 Fixes and the construction-site controls.
