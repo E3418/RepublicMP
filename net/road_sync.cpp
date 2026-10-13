@@ -5,6 +5,7 @@
 #include "../hooks/detect_spawn.h" // DetectSpawn_IsToolDragActive, g_origRoadCommit
 #include "terrain_sync.h"            // TerrainSync_Begin/EndForeignReplay
 #include "../ui/sync_block.h"
+#include "view_list_scope.h"
 #include <vector>
 #include <unordered_map>
 #include <stdio.h>
@@ -51,6 +52,13 @@
 static const unsigned int kHoverPtrRvas[] = { 0x9E45E8, 0x9E4560, 0x9E4558, 0x9E45E0, 0x9E45D8,
                                               0x9E4590, 0x9E45A0 };
 #define HOVER_FLAG_RVA 0x9E45F8
+// The footpath tool's road link (see RoadSync_ReadFootpathLinks).
+#define HOVER_ROAD_EDGE_RVA 0x9E4590   // road edge under the cursor
+#define HOVER_ROAD_POINT_RVA 0x9E4598  // int: its point the path would split it at
+#define HOVER_ROAD_NODE_RVA 0x9E45A0   // road node under the cursor
+#define MGR_ROAD_LINK_POINT_OFFSET 0x368
+#define ROAD_NETWORK_OFFSET 0xf7a0      // world+0xf7a0 = DAT_1409e46b0, the road network
+#define NET_NODES_OFFSET 0x298          // committed nodes: begin, end
 #define HOVER_NODE_RVA 0x9E4560  // thisPtr+0xf650: hovered path node (fcaf0 DAT_1409e4560)
 #define HOVER_PORT_BUILDING_RVA 0x9E45B0  // building whose connection port is hovered
 #define HOVER_PORT_INDEX_RVA 0x9E45B8     // that port's index
@@ -83,8 +91,11 @@ static const unsigned int kHoverPtrRvas[] = { 0x9E45E8, 0x9E4560, 0x9E4558, 0x9E
 #define MGR_END_NODE_OFFSET 0x430
 #define MGR_START_ATTACHED_OFFSET 0x748   // byte: start is an existing node
 #define MGR_END_ATTACHED_OFFSET 0x749     // byte: end snapped to an existing node
-#define MGR_SEGMENTS_BEGIN_OFFSET 0xaa0   // this tool's segment objects
-#define MGR_SEGMENTS_END_OFFSET 0xaa8
+// The network's committed edges. (+0xaa0/+0xaa8 is only what the local
+// camera sees - lookups there missed every piece the player looked away
+// from; see view_list_scope.h.)
+#define MGR_SEGMENTS_BEGIN_OFFSET 0x2b0
+#define MGR_SEGMENTS_END_OFFSET 0x2b8
 // Upgrade branch of the commit (FUN_140518a80 line 303).
 #define MGR_UPG_SEGMENT_OFFSET 0x380
 #define MGR_UPG_RANGE_START_OFFSET 0x388
@@ -167,6 +178,20 @@ int RoadSync_CategoryForManager(__int64 thisPtr, __int64 manager)
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
     return -1;
+}
+
+int RoadSync_SegmentCount(__int64 thisPtr, int category)
+{
+    if (category < 0 || category >= ROAD_SYNC_CATEGORY_COUNT || !thisPtr) return -1;
+    __try {
+        __int64 manager = *(__int64*)(thisPtr + g_categories[category].managerOffset);
+        if (!manager) return -1;
+        __int64 begin = *(__int64*)(manager + MGR_SEGMENTS_BEGIN_OFFSET);
+        __int64 end = *(__int64*)(manager + MGR_SEGMENTS_END_OFFSET);
+        return (begin && end >= begin) ? (int)((end - begin) / 8) : 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return -1;
+    }
 }
 
 static const char* CategoryName(int category)
@@ -315,6 +340,126 @@ static bool NodeNear(__int64 node, const float pos[3])
     return fabsf(p[0] - pos[0]) < 0.5f && fabsf(p[2] - pos[2]) < 0.5f && fabsf(p[1] - pos[1]) < 1.0f;
 }
 
+// ---------------------------------------------------------------------------
+// Footpath road links
+// ---------------------------------------------------------------------------
+//
+// The footpath commit (FUN_14051c9f6 onwards) joins each end to a road: the
+// start to the edge in manager+0x360 split at point +0x368 and/or the node in
+// +0x370 (copied from the hover globals when the drag began, FUN_1404fc040 at
+// 0x4FC650), the end to the hover globals themselves. It splits the road
+// edge there and links the road node and the path node (+0xd0 both ways) -
+// the pedestrian crossing - and the tool then refreshes the roads. A replay
+// with the globals cleared joined nothing: no crossing, the path only touching
+// the road. The sender's links travel by position and are resolved here.
+
+static bool InPointerList(__int64 list, __int64 p)
+{
+    __int64* it = *(__int64**)list;
+    __int64* end = *(__int64**)(list + 8);
+    for (; it && it < end; ++it)
+        if (*it == p) return true;
+    return false;
+}
+
+static __int64 RoadNetwork()
+{
+    return *(__int64*)(GetWorldThisPtr() + ROAD_NETWORK_OFFSET);
+}
+
+// Caller wraps in __try.
+static void ReadLink(__int64 edge, int pointIndex, __int64 node, RoadSyncRoadLink& out)
+{
+    memset(&out, 0, sizeof(out));
+    __int64 roads = RoadNetwork();
+    if (!roads) return;
+    if (edge && InPointerList(roads + MGR_SEGMENTS_BEGIN_OFFSET, edge)) {
+        __int64 n0 = *(__int64*)(edge + SEG_NODE0_OFFSET);
+        __int64 n1 = *(__int64*)(edge + SEG_NODE1_OFFSET);
+        if (n0 && n1) {
+            out.hasEdge = 1;
+            out.pointIndex = pointIndex;
+            memcpy(out.edgeA, (const float*)(n0 + NODE_POS_OFFSET), 12);
+            memcpy(out.edgeB, (const float*)(n1 + NODE_POS_OFFSET), 12);
+            out.edgePoints = (int)((*(__int64*)(edge + SEG_POINTS_END_OFFSET) -
+                                    *(__int64*)(edge + SEG_POINTS_BEGIN_OFFSET)) / 0x18);
+        }
+    }
+    if (node && InPointerList(roads + NET_NODES_OFFSET, node)) {
+        out.hasNode = 1;
+        memcpy(out.node, (const float*)(node + NODE_POS_OFFSET), 12);
+    }
+}
+
+void RoadSync_ReadFootpathLinks(__int64 manager, int category, RoadSyncSegment& seg)
+{
+    memset(&seg.startLink, 0, sizeof(seg.startLink));
+    memset(&seg.endLink, 0, sizeof(seg.endLink));
+    if (category != ROAD_SYNC_CATEGORY_PEDESTRIAN) return;
+    __try {
+        ReadLink(*(__int64*)(manager + MGR_ROAD_LINK_OFFSET), *(int*)(manager + MGR_ROAD_LINK_POINT_OFFSET),
+                 *(__int64*)(manager + MGR_ROAD_LINK_EXTRA_OFFSET), seg.startLink);
+        ReadLink(*(__int64*)((uintptr_t)g_exe + HOVER_ROAD_EDGE_RVA), *(int*)((uintptr_t)g_exe + HOVER_ROAD_POINT_RVA),
+                 *(__int64*)((uintptr_t)g_exe + HOVER_ROAD_NODE_RVA), seg.endLink);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        memset(&seg.startLink, 0, sizeof(seg.startLink));
+        memset(&seg.endLink, 0, sizeof(seg.endLink));
+    }
+}
+
+// The local road edge / node of a link, 0 if not here. Caller wraps in __try.
+static __int64 FindLinkEdge(const RoadSyncRoadLink& l)
+{
+    __int64 roads = RoadNetwork();
+    if (!roads || !l.hasEdge) return 0;
+    __int64* it = *(__int64**)(roads + MGR_SEGMENTS_BEGIN_OFFSET);
+    __int64* end = *(__int64**)(roads + MGR_SEGMENTS_END_OFFSET);
+    for (; it && it < end; ++it) {
+        __int64 e = *it;
+        if (!e) continue;
+        __int64 n0 = *(__int64*)(e + SEG_NODE0_OFFSET);
+        __int64 n1 = *(__int64*)(e + SEG_NODE1_OFFSET);
+        if (!n0 || !n1 || !NodeNear(n0, l.edgeA) || !NodeNear(n1, l.edgeB)) continue;
+        int count = (int)((*(__int64*)(e + SEG_POINTS_END_OFFSET) - *(__int64*)(e + SEG_POINTS_BEGIN_OFFSET)) / 0x18);
+        if (count == l.edgePoints) return e;
+    }
+    return 0;
+}
+
+static __int64 FindLinkNode(const RoadSyncRoadLink& l)
+{
+    __int64 roads = RoadNetwork();
+    if (!roads || !l.hasNode) return 0;
+    __int64* it = *(__int64**)(roads + NET_NODES_OFFSET);
+    __int64* end = *(__int64**)(roads + NET_NODES_OFFSET + 8);
+    for (; it && it < end; ++it)
+        if (*it && NodeNear(*it, l.node)) return *it;
+    return 0;
+}
+
+// Puts a link into the hover globals (what the footpath tool reads); false
+// if a part of it is not here (that part stays 0 - the end only touches).
+static bool SetRoadHover(const RoadSyncRoadLink& l, const char* which)
+{
+    if (!l.hasEdge && !l.hasNode) return true;
+    __int64 edge = 0, node = 0;
+    __try {
+        edge = FindLinkEdge(l);
+        node = FindLinkNode(l);
+        if (edge && (l.pointIndex < 0 || l.pointIndex >= l.edgePoints)) edge = 0;
+        *(long long*)((uintptr_t)g_exe + HOVER_ROAD_EDGE_RVA) = edge;
+        *(int*)((uintptr_t)g_exe + HOVER_ROAD_POINT_RVA) = edge ? l.pointIndex : 0;
+        *(long long*)((uintptr_t)g_exe + HOVER_ROAD_NODE_RVA) = node;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+    bool ok = (!l.hasEdge || edge) && (!l.hasNode || node);
+    Logf("republicmp  ROAD_SYNC:   %s joins a road: edge %s (point %d), node %s", which,
+         !l.hasEdge ? "-" : edge ? "found" : "NOT FOUND", l.pointIndex,
+         !l.hasNode ? "-" : node ? "found" : "NOT FOUND");
+    return ok;
+}
+
 // Layout of an MSVC std::vector header; lets fcaf0 / FUN_14021d2b0 read a
 // route we own without constructing a std::vector inside an SEH function.
 struct RawVectorHeader {
@@ -373,7 +518,45 @@ static bool SegmentBetweenNodesExists(const RoadSyncSegment& want)
 // Set by ApplySegmentImpl: the last replay threw inside the engine.
 static bool g_lastApplyThrew = false;
 
+// Margin around a replayed piece for the view-list scope (80 m around a
+// road, 150 m around a building).
+#define SCOPE_ROAD_MARGIN 80.0f
+
+struct ScopeBox {
+    float minX, minZ, maxX, maxZ;
+    bool any;
+};
+
+static void BoxAdd(ScopeBox& b, const float p[3])
+{
+    if (!b.any) { b.minX = b.maxX = p[0]; b.minZ = b.maxZ = p[2]; b.any = true; return; }
+    if (p[0] < b.minX) b.minX = p[0];
+    if (p[0] > b.maxX) b.maxX = p[0];
+    if (p[2] < b.minZ) b.minZ = p[2];
+    if (p[2] > b.maxZ) b.maxZ = p[2];
+}
+
+static bool BeginScope(const ScopeBox& b, float margin)
+{
+    return b.any && ViewListScope_Begin(b.minX - margin, b.minZ - margin, b.maxX + margin, b.maxZ + margin);
+}
+
+static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAccepted);
+
+// The replay sees the same "camera-visible" edges as the sender's does.
 static bool ApplySegmentImpl(const RoadSyncSegment& seg, bool* outEngineAccepted)
+{
+    ScopeBox box = {};
+    BoxAdd(box, seg.startNode);
+    BoxAdd(box, seg.endNode);
+    for (int i = 0; i < seg.pointCount && i < ROAD_SYNC_MAX_POINTS; i++) BoxAdd(box, seg.points[i].pos);
+    bool scoped = BeginScope(box, SCOPE_ROAD_MARGIN);
+    bool ok = ApplySegmentImplInner(seg, outEngineAccepted);
+    if (scoped) ViewListScope_End();
+    return ok;
+}
+
+static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAccepted)
 {
     *outEngineAccepted = false;
     g_lastApplyThrew = false;
@@ -441,7 +624,9 @@ static bool ApplySegmentImpl(const RoadSyncSegment& seg, bool* outEngineAccepted
 
             // Drag start: the wrapper sets up its drag state and calls fc040;
             // fc040 is then re-run with fuzzy node matching so the start
-            // attaches to the node already at this position.
+            // attaches to the node already at this position. A footpath takes
+            // its start's road link from the hover globals there.
+            if (seg.category == ROAD_SYNC_CATEGORY_PEDESTRIAN) SetRoadHover(seg.startLink, "start");
             SetHoveredPort(seg.startPort, "start");
             *(float*)(thisPtr + CURSOR_X_OFFSET) = seg.startNode[0];
             *(float*)(thisPtr + CURSOR_Y_OFFSET) = seg.startNode[1];
@@ -466,6 +651,10 @@ static bool ApplySegmentImpl(const RoadSyncSegment& seg, bool* outEngineAccepted
             // copies it into its route buffer instead of routing itself, and
             // matches the end node against existing nodes within +-1m.
             SetHoveredPort(seg.endPort, "end");
+            if (seg.category == ROAD_SYNC_CATEGORY_PEDESTRIAN) {
+                HoverGlobals_Clear();
+                SetRoadHover(seg.endLink, "end");
+            }
             RawVectorHeader route = { seg.points, seg.points + seg.pointCount, seg.points + seg.pointCount };
             float end[3] = { seg.endNode[0], seg.endNode[1], seg.endNode[2] };
             *lmbHeld = 1;
@@ -501,6 +690,7 @@ static bool ApplySegmentImpl(const RoadSyncSegment& seg, bool* outEngineAccepted
                 *(float*)(manager + MGR_RELAX_TIMER_OFFSET) = savedRelax;
             }
             ClearHoveredPort();
+            if (seg.category == ROAD_SYNC_CATEGORY_PEDESTRIAN) HoverGlobals_Clear();
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         threw = true;
@@ -569,7 +759,20 @@ static __int64 FindLocalSegment(__int64 manager, const RoadSyncUpgradePiece& pie
 // Re-types one segment range: resets the manager with fc040, fills in the
 // fields the engine's own re-type drag leaves behind (fcaf0 lines 1864-1907)
 // and runs the commit, which takes its upgrade branch.
+static bool ApplyUpgradePieceInner(int category, const RoadSyncUpgradeMsg& msg, const RoadSyncUpgradePiece& piece);
+
 static bool ApplyUpgradePiece(int category, const RoadSyncUpgradeMsg& msg, const RoadSyncUpgradePiece& piece)
+{
+    ScopeBox box = {};
+    BoxAdd(box, piece.segStart);
+    BoxAdd(box, piece.segEnd);
+    bool scoped = BeginScope(box, SCOPE_ROAD_MARGIN * 2);
+    bool ok = ApplyUpgradePieceInner(category, msg, piece);
+    if (scoped) ViewListScope_End();
+    return ok;
+}
+
+static bool ApplyUpgradePieceInner(int category, const RoadSyncUpgradeMsg& msg, const RoadSyncUpgradePiece& piece)
 {
     const RoadSyncCategoryInfo* info = RoadSync_GetCategoryInfo(category);
     __try {
@@ -773,7 +976,21 @@ static bool AdoptSenderRange(__int64 manager, const RoadSyncDemolishMsg& m, int*
 // manager's preview state (as the tool does every frame), let fcaf0 pick the
 // piece under the cursor, and commit if it found one. outRemoved = the engine
 // armed and ran the commit.
+static bool ApplyDemolishInner(const RoadSyncDemolishMsg& m, bool* outRemoved);
+
+// The pick finds the piece wherever this player's camera is.
 static bool ApplyDemolish(const RoadSyncDemolishMsg& m, bool* outRemoved)
+{
+    ScopeBox box = {};
+    BoxAdd(box, m.cursor);
+    if (m.hasRange) { BoxAdd(box, m.rangeA); BoxAdd(box, m.rangeB); }
+    bool scoped = BeginScope(box, SCOPE_ROAD_MARGIN);
+    bool ok = ApplyDemolishInner(m, outRemoved);
+    if (scoped) ViewListScope_End();
+    return ok;
+}
+
+static bool ApplyDemolishInner(const RoadSyncDemolishMsg& m, bool* outRemoved)
 {
     *outRemoved = false;
     int engineRs = 0, engineRe = 0, rs = 0, re = 0;
@@ -915,14 +1132,64 @@ static bool ApplyDemolishPieces(const RoadSyncDemolishMsg& m, bool* outRemoved)
     return ok;
 }
 
-static void ApplyDemolishAndAck(const RoadSyncDemolishMsg& m)
+// True if the piece the sender demolished is still in this network's
+// committed edges.
+static bool DemolishPieceStillHere(const RoadSyncDemolishMsg& m)
+{
+    const RoadSyncCategoryInfo* info = RoadSync_GetCategoryInfo(m.category);
+    if (!info) return false;
+    __try {
+        __int64 manager = *(__int64*)(GetWorldThisPtr() + info->managerOffset);
+        if (!manager) return false;
+        if (m.pieceCount > 0) {
+            for (int i = 0; i < m.pieceCount && i < 8; i++) {
+                bool reversed = false;
+                if (FindLocalSegment(manager, m.pieces[i], &reversed)) return true;
+            }
+            return false;
+        }
+        return m.hasRange && FindSegmentWithRange(manager, m.rangeA, m.rangeB) != 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// Returns false to be tried again later: nothing was picked although the
+// piece is still here - in a batch of demolitions the neighbouring one,
+// applied in the same frame, has just changed the junction, and the game
+// settles it only in its next frame.
+static bool ApplyDemolishAndAck(const RoadSyncDemolishMsg& m, bool lastTry)
 {
     bool removed = false;
     bool ok = m.pieceCount > 0 ? ApplyDemolishPieces(m, &removed) : ApplyDemolish(m, &removed);
+    const char* result;
+    bool success;
+    if (!ok) {
+        result = "FAILED";
+        success = false;
+    } else if (removed) {
+        result = "removed";
+        success = true;
+    } else if (!DemolishPieceStillHere(m)) {
+        result = "already gone here";
+        success = true;
+    } else if (!lastTry) {
+        Logf("republicmp  ROAD_SYNC: demolish seq=%d %s at (%.2f,%.2f,%.2f) - not picked, the piece is still here - trying again",
+             m.seq, CategoryName(m.category), m.cursor[0], m.cursor[1], m.cursor[2]);
+        return false;
+    } else {
+        result = "NOT removed - the piece is still here";
+        success = false;
+    }
     Logf("republicmp  ROAD_SYNC: demolish seq=%d %s at (%.2f,%.2f,%.2f) - %s", m.seq, CategoryName(m.category),
-         m.cursor[0], m.cursor[1], m.cursor[2],
-         !ok ? "FAILED" : removed ? "removed" : "nothing under the cursor here (already gone?)");
-    SendAck(m.seq, m.category, ok && removed, 1);
+         m.cursor[0], m.cursor[1], m.cursor[2], result);
+    SendAck(m.seq, m.category, success, 1);
+    return true;
+}
+
+bool RoadSync_SegmentExists(const RoadSyncSegment& seg)
+{
+    return SegmentBetweenNodesExists(seg);
 }
 
 bool RoadSync_ApplySegmentForBuild(const RoadSyncSegment& seg)
@@ -948,7 +1215,12 @@ struct RoadSyncItem {
     RoadSyncUpgradeMsg up;
     RoadSyncDemolishMsg dem;
     RoadSyncDirectionMsg dir;
+    int attempts;                 // demolish: tries so far
+    unsigned long long notBeforeMs; // demolish: GetTickCount64() of the next try
 };
+
+#define DEMOLISH_MAX_ATTEMPTS 4
+#define DEMOLISH_RETRY_MS 250
 
 static volatile bool g_connected = false;
 static volatile bool g_connecting = false;
@@ -1592,8 +1864,10 @@ void RoadSync_Tick()
     __int64 thisPtr = GetWorldThisPtr();
     std::vector<RoadSyncItem> toApply;
     toApply.swap(g_pending);
+    ULONGLONG nowMs = GetTickCount64();
     for (size_t i = 0; i < toApply.size(); i++) {
-        if (DetectSpawn_IsToolDragActive() || ToolWrapperGuardBusy(thisPtr) || !TerrainFenceAllows(toApply[i])) {
+        if (DetectSpawn_IsToolDragActive() || ToolWrapperGuardBusy(thisPtr) || !TerrainFenceAllows(toApply[i]) ||
+            nowMs < toApply[i].notBeforeMs) {
             g_pending.insert(g_pending.begin(), toApply.begin() + i, toApply.end());
             break;
         }
@@ -1601,9 +1875,16 @@ void RoadSync_Tick()
             ApplyDirectionAndAck(toApply[i].dir);
         else if (toApply[i].tag == ROAD_SYNC_WIRE_UPGRADE)
             ApplyUpgradeAndAck(toApply[i].up);
-        else if (toApply[i].tag == ROAD_SYNC_WIRE_DEMOLISH)
-            ApplyDemolishAndAck(toApply[i].dem);
-        else
+        else if (toApply[i].tag == ROAD_SYNC_WIRE_DEMOLISH) {
+            RoadSyncItem& item = toApply[i];
+            if (!ApplyDemolishAndAck(item.dem, item.attempts + 1 >= DEMOLISH_MAX_ATTEMPTS)) {
+                // Again after the game's next frames; later items wait behind it.
+                item.attempts++;
+                item.notBeforeMs = nowMs + DEMOLISH_RETRY_MS;
+                g_pending.insert(g_pending.begin(), toApply.begin() + i, toApply.end());
+                break;
+            }
+        } else
             ApplySegmentAndAck(toApply[i].seg);
     }
 }

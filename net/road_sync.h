@@ -89,6 +89,10 @@ const RoadSyncCategoryInfo* RoadSync_GetCategoryInfo(int category);
 // Category whose manager object is `manager`, or -1 (also for disabled ones).
 int RoadSync_CategoryForManager(__int64 thisPtr, __int64 manager);
 
+// Number of segments in a category's network, or -1 if unreadable
+// (diagnostics: which networks a building placement adds to).
+int RoadSync_SegmentCount(__int64 thisPtr, int category);
+
 // One route record exactly as the engine stores it in manager+0x410
 // (24 bytes). `extra` is engine-internal per-point data (orientation and
 // running length); it is transmitted verbatim, never interpreted.
@@ -108,6 +112,21 @@ struct RoadSyncBuildingPort {
     float bldPos[3];
 };
 
+// Where a footpath end joins a road (the footpath tool's hover state, see
+// RoadSync_ReadFootpathLinks): a road edge it splits at one of its points,
+// and/or a road node it meets. The commit links the two networks' nodes
+// there - the pedestrian crossing. Edges and nodes are identified by
+// position (an edge by its end nodes and point count).
+struct RoadSyncRoadLink {
+    int hasEdge;
+    int pointIndex;     // the edge's point the road is split at
+    float edgeA[3];     // the edge's node 0
+    float edgeB[3];     // the edge's node 1
+    int edgePoints;     // the edge's point count
+    int hasNode;
+    float node[3];
+};
+
 // Everything needed to rebuild one committed segment.
 struct RoadSyncSegment {
     int category;       // RoadSyncCategory
@@ -118,6 +137,8 @@ struct RoadSyncSegment {
     float endNode[3];   // end node position
     RoadSyncBuildingPort startPort;
     RoadSyncBuildingPort endPort;
+    RoadSyncRoadLink startLink; // footpaths only
+    RoadSyncRoadLink endLink;
     int pointCount;     // interior points, 0..ROAD_SYNC_MAX_POINTS (power-line spans can have 0-1)
     RoadSyncPoint points[ROAD_SYNC_MAX_POINTS];
 };
@@ -254,6 +275,15 @@ int RoadSync_SendSegment(const RoadSyncSegment& seg);
 int RoadSync_SendUpgrade(const RoadSyncUpgradeMsg& msg);
 int RoadSync_SendDemolish(int category, const float cursor[3], const float* rangeA, const float* rangeB,
                           const RoadSyncUpgradePiece* pieces = nullptr, int pieceCount = 0);
+
+// True if this exact segment (same end nodes and middle point) exists here.
+bool RoadSync_SegmentExists(const RoadSyncSegment& seg);
+
+// Footpath commit (inside the commit hook, before the original runs): reads
+// where its ends join roads - the start from the footpath manager
+// (+0x360 edge, +0x368 point, +0x370 node), the end from the hover globals
+// (0x9E4590 / 0x9E4598 / 0x9E45A0). Clears both links for other networks.
+void RoadSync_ReadFootpathLinks(__int64 manager, int category, RoadSyncSegment& seg);
 
 // Builds a path that a building laid as its own access road (sent on the
 // build_sync connection right after the building). Returns true if the
