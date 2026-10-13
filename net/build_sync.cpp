@@ -13,6 +13,7 @@
 #include <vector>
 #include <memory>
 #include <unordered_map>
+#include <algorithm>
 #include <stdio.h>
 #include <stdarg.h>
 #include <math.h>
@@ -30,6 +31,7 @@
 #define OBJ_PAY_RUB_OFFSET 0x608         // byte: finish construction with rubles
 #define OBJ_PAY_USD_OFFSET 0x609         // byte: finish construction with dollars
 #define SET_PAY_RVA 0x160550             // FUN_140160550(this, building, rub, usd): sets both, then RESUME
+#define OBJ_PROGRESS_OFFSET 0x604        // float: construction progress, 0..1 (SoylentGreed's notes)
 #define OBJ_STOPPED_OFFSET 0x879         // byte: construction stopped by the player
 #define STOP_RVA 0x160570                // FUN_140160570(this, building, 1): the window's "stop" - sets
                                          // +0x879 and, unfinished and unpaid, cancels deliveries and workers
@@ -54,6 +56,9 @@
 // nothing is selected. FUN_1403c4850 (the road routing a building's access
 // road goes through) reads +0x2b5 without a null check.
 #define SELECTED_ENTRY_OFFSET 0xd428
+// Pointer to the object the open window (or a pick tool) acts on - a
+// building or a vehicle - per SoylentGreed's notes.
+#define SELECTED_OBJECT_OFFSET 0xd298
 #define REPLAY_ENTRY_SIZE 0x1000         // covers every field read off an entry
 
 #define RETRY_DELAY_MS 500
@@ -107,11 +112,6 @@ static bool IsWorldLoaded()
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
-}
-
-static long long BuildingCount(void* begin, void* end)
-{
-    return (begin && end) ? (long long)(((uintptr_t)end - (uintptr_t)begin) / sizeof(void*)) : -1;
 }
 
 // ---------------------------------------------------------------------------
@@ -491,20 +491,72 @@ static void FlushOutbound()
 // Applying received placements (game thread only)
 // ---------------------------------------------------------------------------
 
-// The new object sitting on the placement cursor among vecBegin[from, to).
-// Caller wraps in __try.
-static void* PickMainNewObject(void** vecBegin, long long from, long long to, float cx, float cz)
+// The sender's main object and ours may differ by float noise only; one
+// farther away is some other object and must not get the sender's rotation.
+#define MAIN_OBJECT_MAX_DELTA 1.0f
+
+// The buildings before a replayed placement, sorted, so the new ones are
+// found by identity - not as "the vector's tail", which a placement that
+// also removes or reorders objects breaks (issue #16, a pub 22.5 m off).
+static std::vector<void*> g_placeBefore;
+
+// The buildings vector's bounds; false if unreadable.
+static bool ReadBuildingsVector(void*** begin, void*** end)
+{
+    __try {
+        *begin = *(void***)((uintptr_t)g_exeBase + VEC_BUILDINGS_BEGIN_RVA);
+        *end = *(void***)((uintptr_t)g_exeBase + VEC_BUILDINGS_END_RVA);
+        return *begin && *end >= *begin;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+static void SnapshotBeforePlacement()
+{
+    g_placeBefore.clear();
+    void** begin;
+    void** end;
+    if (ReadBuildingsVector(&begin, &end)) g_placeBefore.assign(begin, end);
+    std::sort(g_placeBefore.begin(), g_placeBefore.end());
+}
+
+// Plain binary search: no STL iterators, which can't sit in a __try.
+static bool WasBeforePlacement(void* obj)
+{
+    void* const* a = g_placeBefore.data();
+    size_t lo = 0, hi = g_placeBefore.size();
+    while (lo < hi) {
+        size_t mid = (lo + hi) / 2;
+        if (a[mid] < obj) lo = mid + 1;
+        else hi = mid;
+    }
+    return lo < g_placeBefore.size() && a[lo] == obj;
+}
+
+// The new object (not in the snapshot) nearest the sender's main object at
+// (x, z); *newCount = how many new objects there are, *dist = its distance.
+static void* PickMainNewObject(float x, float z, int* newCount, float* dist)
 {
     void* best = nullptr;
     float bestD2 = 0.0f;
-    for (long long i = from; i < to; i++) {
-        void* obj = vecBegin[i];
-        if (!obj) continue;
-        float dx = *(float*)((char*)obj + OBJ_POS_OFFSET) - cx;
-        float dz = *(float*)((char*)obj + OBJ_POS_OFFSET + 8) - cz;
-        float d2 = dx * dx + dz * dz;
-        if (!best || d2 < bestD2) { best = obj; bestD2 = d2; }
+    *newCount = 0;
+    __try {
+        void** it = *(void***)((uintptr_t)g_exeBase + VEC_BUILDINGS_BEGIN_RVA);
+        void** end = *(void***)((uintptr_t)g_exeBase + VEC_BUILDINGS_END_RVA);
+        for (; it && it < end; ++it) {
+            void* obj = *it;
+            if (!obj || WasBeforePlacement(obj)) continue;
+            ++*newCount;
+            float dx = *(float*)((char*)obj + OBJ_POS_OFFSET) - x;
+            float dz = *(float*)((char*)obj + OBJ_POS_OFFSET + 8) - z;
+            float d2 = dx * dx + dz * dz;
+            if (!best || d2 < bestD2) { best = obj; bestD2 = d2; }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        best = nullptr;
     }
+    *dist = sqrtf(bestD2);
     return best;
 }
 
@@ -547,9 +599,7 @@ static bool ApplyOneRemotePlacement(__int64 thisPtr, const BuildSyncMsg& msg, in
             char typeName[64];
             strncpy_s(typeName, msg.typeName, _TRUNCATE);
 
-            void** vecBeginPtr = (void**)((uintptr_t)g_exeBase + VEC_BUILDINGS_BEGIN_RVA);
-            void** vecEndPtr   = (void**)((uintptr_t)g_exeBase + VEC_BUILDINGS_END_RVA);
-            long long countBefore = BuildingCount(*vecBeginPtr, *vecEndPtr);
+            SnapshotBeforePlacement();
 
             BuildMode mine = BuildMode_Read();
             char theirsText[96], mineText[96];
@@ -588,28 +638,30 @@ static bool ApplyOneRemotePlacement(__int64 thisPtr, const BuildSyncMsg& msg, in
                 DetectSpawn_EndBuildingPlacement();
             }
 
-            void* beginAfter = *vecBeginPtr;
-            long long countAfter = BuildingCount(beginAfter, *vecEndPtr);
-            void* obj = (countBefore >= 0 && countAfter > countBefore)
-                ? PickMainNewObject((void**)beginAfter, countBefore, countAfter, msg.cursorX, msg.cursorZ)
-                : nullptr;
+            int newCount = 0;
+            float delta = 0.0f;
+            void* obj = PickMainNewObject(msg.x, msg.z, &newCount, &delta);
             if (!obj) {
                 const int* result = (const int*)(thisPtr + PLACEMENT_RESULT_OFFSET);
                 Logf("republicmp  BUILD_SYNC: placement refused by the engine type=[%s] result=(%d,%d,%d)",
                      typeName, result[0], result[1], result[2]);
+            } else if (delta > MAIN_OBJECT_MAX_DELTA) {
+                // Something was built, but not where the sender's building
+                // is: no rotation for it, and no retry - a retry would build
+                // the helper objects again.
+                placed = true;
+                Logf("republicmp  BUILD_SYNC: placed type=[%s] objects=%d, but the nearest new object is %.3fm from the sender's - NOT verified, rotation not written",
+                     typeName, newCount, delta);
             } else {
                 placed = true;
-                float ox = *(float*)((char*)obj + OBJ_POS_OFFSET);
-                float oz = *(float*)((char*)obj + OBJ_POS_OFFSET + 8);
                 *(float*)((char*)obj + OBJ_ROT_SIN_OFFSET) = msg.rotSin;
                 *(float*)((char*)obj + OBJ_ROT_COS_OFFSET) = msg.rotCos;
                 *(float*)((char*)obj + OBJ_ROT2_COS_OFFSET) = msg.rotCos;
                 *(float*)((char*)obj + OBJ_ROT2_SIN_OFFSET) = msg.rotSin;
                 *(float*)((char*)obj + OBJ_ROT3_NSIN_OFFSET) = -msg.rotSin;
                 *(float*)((char*)obj + OBJ_ROT3_COS_OFFSET) = msg.rotCos;
-                Logf("republicmp  BUILD_SYNC: placed type=[%s] objects=%lld, main object delta to sender %.3fm",
-                     typeName, countAfter - countBefore,
-                     sqrtf((ox - msg.x) * (ox - msg.x) + (oz - msg.z) * (oz - msg.z)));
+                Logf("republicmp  BUILD_SYNC: placed type=[%s] objects=%d, main object delta to sender %.3fm",
+                     typeName, newCount, delta);
             }
         } __finally {
             cursor[0] = savedCursor[0]; cursor[1] = savedCursor[1]; cursor[2] = savedCursor[2];
@@ -701,15 +753,52 @@ static int SnapshotBuildings(__int64* out, int max)
 }
 
 static void SendPay(__int64 b, int flags);
+static const char* PayName(int flags, char* out, size_t outSize);
+
+// The building the open window acts on, or 0.
+static __int64 ReadSelectedObject()
+{
+    __try {
+        return *(__int64*)(GetPlacementManagerThisPtr() + SELECTED_OBJECT_OFFSET);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+// True for a finished building (progress >= 1).
+static bool IsConstructionDone(__int64 b)
+{
+    __try {
+        return *(float*)(b + OBJ_PROGRESS_OFFSET) >= 1.0f;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
 
 // Sends every building whose construction controls changed since the last
 // scan - switched on AND off: cancelling the money finish or stopping the
 // construction used to stay local, so the other side kept building. A
 // building seen for the first time is only recorded (a placement with money
 // is already covered by the placement message). Only a change right after a
-// local click is sent - the game clears these itself too (a finished site).
+// local click in THIS building's window is sent: the game changes these
+// itself too - a finished site clears its money flags, and a new site drawn
+// with the road tool can come up stopped - and those used to go out as the
+// player's stop / cancel (issue #17), which left the other side's copy
+// stuck unfinished. The window's building is remembered for the click
+// window, so closing the window right after the click still sends.
 static void ScanPayFlags()
 {
+    static __int64 s_windowBuilding = 0;
+    static ULONGLONG s_windowSeenMs = 0;
+    ULONGLONG nowMs = GetTickCount64();
+    __int64 selected = ReadSelectedObject();
+    if (selected) {
+        s_windowBuilding = selected;
+        s_windowSeenMs = nowMs;
+    } else if (s_windowBuilding && nowMs - s_windowSeenMs > SETTINGS_CLICK_WINDOW_MS) {
+        s_windowBuilding = 0;
+    }
+
     bool byPlayer = SettingsSync_ClickedRecently();
     static std::vector<__int64> s_list;
     s_list.resize(65536);
@@ -722,7 +811,17 @@ static void ScanPayFlags()
         int flags = ReadPayFlags(b);
         if (flags < 0) continue;
         auto old = g_payFlags.find(b);
-        if (old != g_payFlags.end() && flags != old->second && byPlayer) SendPay(b, flags);
+        if (old != g_payFlags.end() && flags != old->second && byPlayer) {
+            char was[48], now[48];
+            if (b != s_windowBuilding)
+                Logf("republicmp  BUILD_SYNC: pay flags %s -> %s of a building whose window is not open - not sent",
+                     PayName(old->second, was, sizeof(was)), PayName(flags, now, sizeof(now)));
+            else if (IsConstructionDone(b) && (flags & ~old->second) == 0)
+                Logf("republicmp  BUILD_SYNC: pay flags %s -> %s of a finished building (the game's cleanup) - not sent",
+                     PayName(old->second, was, sizeof(was)), PayName(flags, now, sizeof(now)));
+            else
+                SendPay(b, flags);
+        }
         next[b] = (unsigned char)flags;
     }
     g_payFlags.swap(next);
