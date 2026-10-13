@@ -586,7 +586,9 @@ static bool RunHostJoin(SOCKET sock)
     g_activeSock = INVALID_SOCKET;
     NetworkCloseSocket(sock);
     SyncBlock_SetActive(false, nullptr);
-    EnsureGameUnpaused();
+    // A joined player starts paused on both sides - either player resumes
+    // when both are ready (issue #18); the speed sync carries it over.
+    if (!joined) EnsureGameUnpaused();
     return joined;
 }
 
@@ -643,7 +645,7 @@ static void RunHostSession()
         g_resyncRequested = false; // one asked for during the join is already done
 
         SetState(SESSION_HOST_IN_GAME);
-        SaveStatus("[HOST] %s is in the game - live sync running", peer);
+        SaveStatus("[HOST] %s is in the game - live sync running, paused until either player resumes", peer);
         const char* why = MonitorLiveSession(false);
         ResetChannels();
         if (!why) break; // Stop hosting
@@ -807,7 +809,8 @@ static bool RunClientJoin(bool rejoin)
     g_activeSock = INVALID_SOCKET;
     if (sock != INVALID_SOCKET) NetworkCloseSocket(sock);
     SyncBlock_SetActive(false, nullptr);
-    EnsureGameUnpaused();
+    // Joined: stays paused until either player resumes (see RunHostJoin).
+    if (!joined) EnsureGameUnpaused();
     return joined;
 }
 
@@ -827,7 +830,7 @@ static void RunClientSession()
         }
 
         SetState(SESSION_CLIENT_IN_GAME);
-        SaveStatus("[CLIENT] in the game at %s - live sync running", g_targetIp);
+        SaveStatus("[CLIENT] in the game at %s - live sync running, paused until either player resumes", g_targetIp);
         const char* why = MonitorLiveSession(true);
         ResetChannels();
         if (why == kResyncReason) {
