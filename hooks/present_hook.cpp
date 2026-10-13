@@ -6,6 +6,7 @@
 #include "imgui_hook.h"
 #include "terrain_hook.h"
 #include "demolish_hook.h"
+#include "session_patches.h"
 #include "input_block.h"
 #include "../net/build_sync.h"
 #include "../net/road_sync.h"
@@ -76,6 +77,7 @@ static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain* pSwapChain, UINT 
 static HRESULT PresentFrame(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags)
 {
     g_presentCallCount++;
+    SessionPatches_Tick(); // camera/frame-rate patches while connected (see session_patches.h)
     InputBlock_Tick();  // keep the game's mouse-button bytes clear while the join screen is up
     TerrainHook_Tick(); // flush last frame's terrain-edit log, F8 verbose toggle
     TerrainSync_Tick(); // send this frame's terrain edits, apply received ones (before roads/buildings)
