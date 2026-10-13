@@ -8,6 +8,7 @@
 #include "save_sync.h"               // SaveSync_OnResyncAnnounced
 #include "../hooks/money.h"         // Money_OnRemote
 #include "settings_sync.h"           // SettingsSync_ClickedRecently
+#include "view_list_scope.h"
 #include "../ui/debug_log.h"
 #include "../ui/sync_block.h"
 #include <vector>
@@ -31,7 +32,7 @@
 #define OBJ_PAY_RUB_OFFSET 0x608         // byte: finish construction with rubles
 #define OBJ_PAY_USD_OFFSET 0x609         // byte: finish construction with dollars
 #define SET_PAY_RVA 0x160550             // FUN_140160550(this, building, rub, usd): sets both, then RESUME
-#define OBJ_PROGRESS_OFFSET 0x604        // float: construction progress, 0..1 (SoylentGreed's notes)
+#define OBJ_PROGRESS_OFFSET 0x604        // float: construction progress, 0..1
 #define OBJ_STOPPED_OFFSET 0x879         // byte: construction stopped by the player
 #define STOP_RVA 0x160570                // FUN_140160570(this, building, 1): the window's "stop" - sets
                                          // +0x879 and, unfinished and unpaid, cancels deliveries and workers
@@ -56,9 +57,15 @@
 // nothing is selected. FUN_1403c4850 (the road routing a building's access
 // road goes through) reads +0x2b5 without a null check.
 #define SELECTED_ENTRY_OFFSET 0xd428
-// Pointer to the object the open window (or a pick tool) acts on - a
-// building or a vehicle - per SoylentGreed's notes.
-#define SELECTED_OBJECT_OFFSET 0xd298
+// The open windows: a vector of window pointers at this+0xCAC0 (begin) /
+// +0xCAC8 (end), walked by the window dispatcher FUN_1406e9b80. A building
+// window's building is window+0x240 - FUN_1406f8cc0 (the building window)
+// passes it to the stop / continue / pay calls.
+#define OPEN_WINDOWS_BEGIN_OFFSET 0xCAC0
+#define OPEN_WINDOWS_END_OFFSET 0xCAC8
+#define WINDOW_BUILDING_OFFSET 0x240
+#define OPEN_WINDOWS_MAX 64
+#define PLACE_SCOPE_MARGIN 150.0f // view-list scope around a placement
 #define REPLAY_ENTRY_SIZE 0x1000         // covers every field read off an entry
 
 #define RETRY_DELAY_MS 500
@@ -495,6 +502,39 @@ static void FlushOutbound()
 // farther away is some other object and must not get the sender's rotation.
 #define MAIN_OBJECT_MAX_DELTA 1.0f
 
+// Buildings the replayed placement already connected to the road network
+// itself (it lays its own access road, as on the sender). Their access road
+// message is then not built again: when the local network differs a little
+// (a road a few percent less built), the game's own road takes another
+// route, the sender's one no longer matches it, and both were built - a
+// duplicate road next to the building.
+#define SELF_CONNECTED_KEEP 16
+static float g_selfConnectedAt[SELF_CONNECTED_KEEP][3];
+static int g_selfConnectedRoads[SELF_CONNECTED_KEEP];
+static int g_selfConnectedCount = 0;
+
+static void RememberSelfConnected(const float pos[3], int roadsAdded)
+{
+    int k = g_selfConnectedCount++ % SELF_CONNECTED_KEEP;
+    memcpy(g_selfConnectedAt[k], pos, sizeof(g_selfConnectedAt[k]));
+    g_selfConnectedRoads[k] = roadsAdded;
+}
+
+// Road segments the latest placement of the building at the port added
+// here, or 0.
+static int SelfConnectedRoads(const RoadSyncBuildingPort& port)
+{
+    if (!port.valid) return 0;
+    int kept = g_selfConnectedCount < SELF_CONNECTED_KEEP ? g_selfConnectedCount : SELF_CONNECTED_KEEP;
+    for (int n = 1; n <= kept; n++) { // newest first: a rebuilt spot uses its latest placement
+        int i = (g_selfConnectedCount - n) % SELF_CONNECTED_KEEP;
+        if (fabsf(g_selfConnectedAt[i][0] - port.bldPos[0]) < 0.5f && fabsf(g_selfConnectedAt[i][2] - port.bldPos[2]) < 0.5f &&
+            fabsf(g_selfConnectedAt[i][1] - port.bldPos[1]) < 1.0f)
+            return g_selfConnectedRoads[i];
+    }
+    return 0;
+}
+
 // The buildings before a replayed placement, sorted, so the new ones are
 // found by identity - not as "the vector's tail", which a placement that
 // also removes or reorders objects breaks (issue #16, a pub 22.5 m off).
@@ -600,6 +640,8 @@ static bool ApplyOneRemotePlacement(__int64 thisPtr, const BuildSyncMsg& msg, in
             strncpy_s(typeName, msg.typeName, _TRUNCATE);
 
             SnapshotBeforePlacement();
+            int roadsBefore = RoadSync_SegmentCount(thisPtr, ROAD_SYNC_CATEGORY_ROAD);
+            int pathsBefore = RoadSync_SegmentCount(thisPtr, ROAD_SYNC_CATEGORY_PEDESTRIAN);
 
             BuildMode mine = BuildMode_Read();
             char theirsText[96], mineText[96];
@@ -628,9 +670,13 @@ static bool ApplyOneRemotePlacement(__int64 thisPtr, const BuildSyncMsg& msg, in
             memset(g_replayEntry, 0, sizeof(g_replayEntry));
             memcpy(g_replayEntry, typeName, strnlen(typeName, 63));
             *selected = (__int64)g_replayEntry;
+            // The same "camera-visible" edges as the sender's click (view_list_scope.h).
+            bool scoped = ViewListScope_Begin(msg.cursorX - PLACE_SCOPE_MARGIN, msg.cursorZ - PLACE_SCOPE_MARGIN,
+                                              msg.cursorX + PLACE_SCOPE_MARGIN, msg.cursorZ + PLACE_SCOPE_MARGIN);
             __try {
                 g_origUniversal(thisPtr, typeName, 0, 1, msg.param5, 0xffffffff, 0, 1);
             } __finally {
+                if (scoped) ViewListScope_End();
                 *selected = savedSelected;
                 BuildMode_Write(mine);
                 InterlockedDecrement(&g_applyingRemote);
@@ -660,8 +706,12 @@ static bool ApplyOneRemotePlacement(__int64 thisPtr, const BuildSyncMsg& msg, in
                 *(float*)((char*)obj + OBJ_ROT2_SIN_OFFSET) = msg.rotSin;
                 *(float*)((char*)obj + OBJ_ROT3_NSIN_OFFSET) = -msg.rotSin;
                 *(float*)((char*)obj + OBJ_ROT3_COS_OFFSET) = msg.rotCos;
-                Logf("republicmp  BUILD_SYNC: placed type=[%s] objects=%d, main object delta to sender %.3fm",
-                     typeName, newCount, delta);
+                int roadsAdded = RoadSync_SegmentCount(thisPtr, ROAD_SYNC_CATEGORY_ROAD) - roadsBefore;
+                float pos[3] = { msg.x, msg.y, msg.z };
+                RememberSelfConnected(pos, roadsAdded);
+                Logf("republicmp  BUILD_SYNC: placed type=[%s] objects=%d, main object delta to sender %.3fm, road segments %+d, footpath segments %+d",
+                     typeName, newCount, delta, roadsAdded,
+                     RoadSync_SegmentCount(thisPtr, ROAD_SYNC_CATEGORY_PEDESTRIAN) - pathsBefore);
             }
         } __finally {
             cursor[0] = savedCursor[0]; cursor[1] = savedCursor[1]; cursor[2] = savedCursor[2];
@@ -755,14 +805,25 @@ static int SnapshotBuildings(__int64* out, int max)
 static void SendPay(__int64 b, int flags);
 static const char* PayName(int flags, char* out, size_t outSize);
 
-// The building the open window acts on, or 0.
-static __int64 ReadSelectedObject()
+// The buildings of the open windows (window+0x240 of every open window - for
+// a window that is not a building's it is some other pointer, which never
+// matches a building). Returns how many were written to out.
+static int ReadOpenWindowBuildings(__int64* out, int max)
 {
+    int n = 0;
     __try {
-        return *(__int64*)(GetPlacementManagerThisPtr() + SELECTED_OBJECT_OFFSET);
+        __int64 world = GetPlacementManagerThisPtr();
+        __int64* it = *(__int64**)(world + OPEN_WINDOWS_BEGIN_OFFSET);
+        __int64* end = *(__int64**)(world + OPEN_WINDOWS_END_OFFSET);
+        for (; it && it < end && n < max; ++it) {
+            __int64 window = *it;
+            if (!window) continue;
+            __int64 b = *(__int64*)(window + WINDOW_BUILDING_OFFSET);
+            if (b) out[n++] = b;
+        }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 0;
     }
+    return n;
 }
 
 // True for a finished building (progress >= 1).
@@ -784,20 +845,17 @@ static bool IsConstructionDone(__int64 b)
 // itself too - a finished site clears its money flags, and a new site drawn
 // with the road tool can come up stopped - and those used to go out as the
 // player's stop / cancel (issue #17), which left the other side's copy
-// stuck unfinished. The window's building is remembered for the click
-// window, so closing the window right after the click still sends.
+// stuck unfinished. A window's building is remembered for the click window,
+// so closing the window right after the click still sends.
 static void ScanPayFlags()
 {
-    static __int64 s_windowBuilding = 0;
-    static ULONGLONG s_windowSeenMs = 0;
+    static std::unordered_map<__int64, ULONGLONG> s_windowSeenMs; // building -> last seen in an open window
     ULONGLONG nowMs = GetTickCount64();
-    __int64 selected = ReadSelectedObject();
-    if (selected) {
-        s_windowBuilding = selected;
-        s_windowSeenMs = nowMs;
-    } else if (s_windowBuilding && nowMs - s_windowSeenMs > SETTINGS_CLICK_WINDOW_MS) {
-        s_windowBuilding = 0;
-    }
+    __int64 open[OPEN_WINDOWS_MAX];
+    int openCount = ReadOpenWindowBuildings(open, OPEN_WINDOWS_MAX);
+    for (int i = 0; i < openCount; i++) s_windowSeenMs[open[i]] = nowMs;
+    for (auto it = s_windowSeenMs.begin(); it != s_windowSeenMs.end();)
+        it = nowMs - it->second > SETTINGS_CLICK_WINDOW_MS ? s_windowSeenMs.erase(it) : std::next(it);
 
     bool byPlayer = SettingsSync_ClickedRecently();
     static std::vector<__int64> s_list;
@@ -813,7 +871,7 @@ static void ScanPayFlags()
         auto old = g_payFlags.find(b);
         if (old != g_payFlags.end() && flags != old->second && byPlayer) {
             char was[48], now[48];
-            if (b != s_windowBuilding)
+            if (!s_windowSeenMs.count(b))
                 Logf("republicmp  BUILD_SYNC: pay flags %s -> %s of a building whose window is not open - not sent",
                      PayName(old->second, was, sizeof(was)), PayName(flags, now, sizeof(now)));
             else if (IsConstructionDone(b) && (flags & ~old->second) == 0)
@@ -1007,6 +1065,23 @@ struct PendingPlacement {
     unsigned long long fenceWaitStartMs; // 0 = not waiting for the terrain fence yet
 };
 static std::vector<PendingPlacement> g_pending;
+
+// Buildings whose placement was given up (sender's main object position).
+// Their access road comes right after them; built alone it is a path to
+// nowhere that the sender doesn't have.
+#define GAVE_UP_KEEP 16
+static float g_gaveUpAt[GAVE_UP_KEEP][3];
+static int g_gaveUpCount = 0;
+
+static bool PortOnGivenUpBuilding(const RoadSyncBuildingPort& port)
+{
+    if (!port.valid) return false;
+    for (int i = 0; i < g_gaveUpCount && i < GAVE_UP_KEEP; i++)
+        if (fabsf(g_gaveUpAt[i][0] - port.bldPos[0]) < 0.5f && fabsf(g_gaveUpAt[i][2] - port.bldPos[2]) < 0.5f &&
+            fabsf(g_gaveUpAt[i][1] - port.bldPos[1]) < 1.0f)
+            return true;
+    return false;
+}
 static bool g_warnedWorldNotLoaded = false;
 
 void BuildSync_Tick()
@@ -1099,13 +1174,30 @@ void BuildSync_Tick()
         if (p.msg.kind == BUILD_SYNC_KIND_ACCESS_ROAD) {
             // Not into a manager the local player is dragging with.
             if (DetectSpawn_IsToolDragActive()) break;
+            if (p.road && (PortOnGivenUpBuilding(p.road->startPort) || PortOnGivenUpBuilding(p.road->endPort))) {
+                Logf("republicmp  BUILD_SYNC: access road at (%.2f,%.2f,%.2f) skipped - its building was not placed here",
+                     p.msg.x, p.msg.y, p.msg.z);
+                g_pending.erase(g_pending.begin());
+                continue;
+            }
+            int selfRoads = p.road ? SelfConnectedRoads(p.road->startPort) + SelfConnectedRoads(p.road->endPort) : 0;
+            if (selfRoads > 0 && p.road->category == ROAD_SYNC_CATEGORY_ROAD) {
+                Logf("republicmp  BUILD_SYNC: access road at (%.2f,%.2f,%.2f) skipped - the placement already laid %d road segment(s) for its building here%s",
+                     p.msg.x, p.msg.y, p.msg.z, selfRoads,
+                     RoadSync_SegmentExists(*p.road) ? " (same as the sender's)" : " (DIFFERENT route from the sender's)");
+                g_pending.erase(g_pending.begin());
+                continue;
+            }
             BuildMode mine = BuildMode_Read();
             BuildMode_Write(p.msg.mode);
+            int pathsBefore = RoadSync_SegmentCount(thisPtr, ROAD_SYNC_CATEGORY_PEDESTRIAN);
             bool ok = p.road && RoadSync_ApplySegmentForBuild(*p.road);
+            int pathsAdded = RoadSync_SegmentCount(thisPtr, ROAD_SYNC_CATEGORY_PEDESTRIAN) - pathsBefore;
             BuildMode_Write(mine);
             char theirsText[96], mineText[96];
-            Logf("republicmp  BUILD_SYNC: access road at (%.2f,%.2f,%.2f) %s, pay=%s (mine: %s)",
-                 p.msg.x, p.msg.y, p.msg.z, ok ? "built" : "REJECTED by the engine",
+            Logf("republicmp  BUILD_SYNC: access road %s at (%.2f,%.2f,%.2f) %s, footpath segments %+d, pay=%s (mine: %s)",
+                 p.road ? (p.road->category == ROAD_SYNC_CATEGORY_PEDESTRIAN ? "FOOTPATH" : "ROAD") : "?",
+                 p.msg.x, p.msg.y, p.msg.z, ok ? "built" : "REJECTED by the engine", pathsAdded,
                  BuildMode_Describe(p.msg.mode, theirsText, sizeof(theirsText)),
                  BuildMode_Describe(mine, mineText, sizeof(mineText)));
             g_pending.erase(g_pending.begin());
@@ -1118,6 +1210,8 @@ void BuildSync_Tick()
         if (++p.attempts >= BUILD_SYNC_MAX_APPLY_ATTEMPTS) {
             BuildSyncStatus("[BUILD_SYNC] gave up on [%s] at (%.1f, %.1f) after %d attempts",
                             p.msg.typeName, p.msg.cursorX, p.msg.cursorZ, p.attempts);
+            float* at = g_gaveUpAt[g_gaveUpCount++ % GAVE_UP_KEEP];
+            at[0] = p.msg.x; at[1] = p.msg.y; at[2] = p.msg.z;
             g_pending.erase(g_pending.begin());
             continue;
         }

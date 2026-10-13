@@ -5,6 +5,7 @@
 #include "window_focus.h"
 #include "../net/build_sync.h"
 #include "../net/road_sync.h"
+#include "../net/view_list_scope.h"
 #include "demolish_hook.h" // DemolishHook_InDemolish
 #include "../ui/sync_block.h"
 #include <stdio.h>
@@ -102,8 +103,11 @@ RoadCommitFn g_origRoadCommit = nullptr;
 
 #define NODE_POS_OFFSET 4
 
-#define MGR_SEGMENTS_BEGIN_OFFSET 0xaa0  // the manager's segment objects
-#define MGR_SEGMENTS_END_OFFSET 0xaa8
+#define PLACE_LMB_HELD_RVA 0xA54E90         // byte: left mouse button held
+#define PLACE_LMB_JUST_PRESSED_RVA 0xA54E91 // byte: pressed this frame
+#define PLACE_SCOPE_MARGIN 150.0f           // view-list scope around a placement
+#define MGR_SEGMENTS_BEGIN_OFFSET 0x2b0  // the network's committed edges (+0xaa0 is only the camera's)
+#define MGR_SEGMENTS_END_OFFSET 0x2b8
 
 // Demolish/cancel tools use type ids >= 100 (e.g. road_destroy).
 #define TOOL_TYPE_DEMOLISH_MIN 100
@@ -436,6 +440,7 @@ static bool FillSegment(__int64 manager, int category, RoadSyncSegment& seg)
                      *(int*)(manager + MGR_START_PORT_INDEX_OFFSET), &seg.startPort);
     ReadBuildingPort(*(__int64*)((uintptr_t)g_exe + HOVER_PORT_BUILDING_RVA),
                      *(int*)((uintptr_t)g_exe + HOVER_PORT_INDEX_RVA), &seg.endPort);
+    RoadSync_ReadFootpathLinks(manager, category, seg); // where a footpath joins roads (crossings)
 
     return true;
 }
@@ -944,11 +949,25 @@ void HookedUniversal(__int64 param_1, char* param_2, char param_3, char param_4,
     }
 
     g_accessCount = 0;
+    int pathsBefore = RoadSync_SegmentCount(param_1, ROAD_SYNC_CATEGORY_PEDESTRIAN);
+    // A click frame in a session places with the same "camera-visible" edges
+    // the other PC's replay uses (view_list_scope.h); preview frames stay native.
+    static bool s_lmbWasDown = false;
+    bool lmbDown = false;
+    __try {
+        lmbDown = *(g_exeBase + PLACE_LMB_HELD_RVA) || *(g_exeBase + PLACE_LMB_JUST_PRESSED_RVA);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    bool scoped = BuildSync_IsConnected() && (lmbDown || s_lmbWasDown) &&
+                  ViewListScope_Begin(cursorX - PLACE_SCOPE_MARGIN, cursorZ - PLACE_SCOPE_MARGIN,
+                                      cursorX + PLACE_SCOPE_MARGIN, cursorZ + PLACE_SCOPE_MARGIN);
+    s_lmbWasDown = lmbDown;
     DetectSpawn_BeginBuildingPlacement();
     __try {
         g_origUniversal(param_1, param_2, param_3, param_4, param_5, param_6, param_7, param_8);
     } __finally {
         DetectSpawn_EndBuildingPlacement();
+        if (scoped) ViewListScope_End();
     }
 
     __try {
@@ -990,10 +1009,11 @@ void HookedUniversal(__int64 param_1, char* param_2, char param_3, char param_4,
         msg.mirrored = *(unsigned char*)(param_1 + MIRROR_EFFECTIVE_OFFSET) != 0;
         strncpy_s(msg.typeName, LooksLikeValidType(typeName) ? typeName : "<unknown>", _TRUNCATE);
 
-        Logf("republicmp  BUILD: placed type=[%s] objects=%lld pos=(%.2f,%.2f,%.2f) rotDeg=%.2f mirrored=%d cursor=(%.2f,%.2f,%.2f)",
+        Logf("republicmp  BUILD: placed type=[%s] objects=%lld pos=(%.2f,%.2f,%.2f) rotDeg=%.2f mirrored=%d cursor=(%.2f,%.2f,%.2f) footpath segments %+d",
              msg.typeName, countDelta, msg.x, msg.y, msg.z,
              atan2(msg.rotSin, msg.rotCos) * 180.0 / 3.14159265358979323846,
-             msg.mirrored, cursorX, cursorY, cursorZ);
+             msg.mirrored, cursorX, cursorY, cursorZ,
+             RoadSync_SegmentCount(param_1, ROAD_SYNC_CATEGORY_PEDESTRIAN) - pathsBefore);
 
         BuildSync_SendPlacement(msg);
 
