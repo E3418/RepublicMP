@@ -977,6 +977,37 @@ static __int64 FindSegmentWithRange(__int64 manager, const float a[3], const flo
     return 0;
 }
 
+#define NODE_ALLOC_RVA 0x84DECC // operator new
+#define NODE_CTOR_RVA 0x0FF950  // node constructor (returns the node)
+#define NODE_OBJECT_SIZE 0xE8
+typedef __int64 (*AllocFn)(unsigned long long size);
+typedef __int64 (*NodeCtorFn)(__int64 node);
+
+// A pick that reached a segment end may hold that segment's own node as the
+// drag's start/end node (+0x748/+0x749 set, the node in the network's list).
+// Moving it to a cut point dragged the rest of the line along: a whole-segment
+// pick cut down to the sender's middle piece moved the segment's first node
+// (at a switch's port) onto the cut, and the next demolitions removed the
+// wrong pieces - a couple of spans stayed on the receiver (#23). Before the
+// node moves, put a fresh copy in its place, as the drag tick itself does
+// (0x4FE448..0x4FE48A).
+static void DetachDragNode(__int64 manager, int nodeOffset, int attachedOffset, const float target[3])
+{
+    __int64 node = *(__int64*)(manager + nodeOffset);
+    if (!node) return;
+    const float* p = (const float*)(node + NODE_POS_OFFSET);
+    if (p[0] == target[0] && p[1] == target[1] && p[2] == target[2]) return; // stays where it is
+    if (!*(unsigned char*)(manager + attachedOffset) && !InPointerList(manager + NET_NODES_OFFSET, node)) return;
+    __int64 fresh = ((AllocFn)((uintptr_t)g_exe + NODE_ALLOC_RVA))(NODE_OBJECT_SIZE);
+    if (!fresh) return;
+    ((NodeCtorFn)((uintptr_t)g_exe + NODE_CTOR_RVA))(fresh);
+    memcpy((void*)(fresh + NODE_POS_OFFSET), p, 12);
+    *(__int64*)(manager + nodeOffset) = fresh;
+    *(unsigned char*)(manager + attachedOffset) = 0;
+    Logf("republicmp  ROAD_SYNC:   the cut's %s held the segment's own node at (%.2f,%.2f,%.2f) - a fresh node takes its place",
+         nodeOffset == MGR_START_NODE_OFFSET ? "start" : "end", p[0], p[1], p[2]);
+}
+
 // After fcaf0 armed a demolish on segment +0x380: if its range is not the
 // sender's, cut the sender's range instead - indices, the route buffer of
 // the points strictly inside, and the two end nodes on the range ends (the
@@ -1016,9 +1047,14 @@ static bool AdoptSenderRange(__int64 manager, const RoadSyncDemolishMsg& m, int*
     // and the node with no points at all; the game's frame code reads the
     // first point of every segment on a node (SOVIET64+0x526605) and crashes
     // on it. The engine snaps such ends to the node - do the same (the sender
-    // may have had more points on its copy of the segment).
-    if (rs == 0) rs = -1;
-    if (re == count - 1) re = count;
+    // may have had more points on its copy of the segment). Power-line spans
+    // need no points (the game lays them with none), so a power line is cut
+    // exactly where the sender cut it - snapped, it lost the next span too and
+    // the sender's demolition of that span found it already gone.
+    if (!IsPowerLine(m.category)) {
+        if (rs == 0) rs = -1;
+        if (re == count - 1) re = count;
+    }
     if (rs >= re) return false;
     *rsOut = rs;
     *reOut = re;
@@ -1035,6 +1071,8 @@ static bool AdoptSenderRange(__int64 manager, const RoadSyncDemolishMsg& m, int*
     *(__int64*)(manager + MGR_UPG_SEGMENT_OFFSET) = seg;
     *(int*)(manager + MGR_UPG_RANGE_START_OFFSET) = rs;
     *(int*)(manager + MGR_UPG_RANGE_END_OFFSET) = re;
+    DetachDragNode(manager, MGR_START_NODE_OFFSET, MGR_START_ATTACHED_OFFSET, splitStart);
+    DetachDragNode(manager, MGR_END_NODE_OFFSET, MGR_END_ATTACHED_OFFSET, splitEnd);
     SetNodePos(*(__int64*)(manager + MGR_START_NODE_OFFSET), splitStart);
     SetNodePos(*(__int64*)(manager + MGR_END_NODE_OFFSET), splitEnd);
     return true;
