@@ -149,7 +149,11 @@ reporting a problem, attach the logs of both players.
 
 ## Changelog
 
-### Unreleased
+### 0.4.3 (pre-release)
+
+Planned construction, the group tools and power lines now come out the same
+on both PCs; hosting needs a loaded city. Protocol 18 - both players need
+this build.
 
 - **Starting planned roads and rails** ("start construction" in the
   construction menu, the construction window or the network tool panel)
@@ -165,6 +169,15 @@ reporting a problem, attach the logs of both players.
   a separate node above the old one, so the line carried no power there and
   the sender's demolition later missed that piece. The replay now joins the
   same node (#22, #23, by TucKnock).
+- **Demolishing the middle of a power line** could move the line's own end
+  node (e.g. at a switch's port) onto the cut on the other PC, so the next
+  demolitions removed the wrong spans and a couple stayed there. The cut now
+  takes a fresh node, as the game's own tool does, and a power line is cut
+  exactly where the sender cut it - not one span further (#23).
+- **Hosting needs a loaded city**: Host is unavailable in the main menu.
+  Leaving the world (back to the main menu or loading another save) ends the
+  session - stops hosting or disconnects - instead of leaving the other
+  player connected to a game that is gone.
 - **Open windows** no longer hold the other player's buildings and roads:
   a replay runs with the menus closed for its call and puts them back
   after (#21, by TucKnock).
