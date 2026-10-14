@@ -194,6 +194,9 @@
     <ClInclude Include="net\citizen_destinations.h">
       <Filter>net</Filter>
     </ClInclude>
+    <ClInclude Include="net\replay_ui.h">
+      <Filter>net</Filter>
+    </ClInclude>
     <ClInclude Include="hooks\input_block.h">
       <Filter>hooks</Filter>
     </ClInclude>

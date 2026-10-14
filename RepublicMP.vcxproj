@@ -239,6 +239,7 @@
     <ClInclude Include="hooks\session_patches.h" />
     <ClInclude Include="net\view_list_scope.h" />
     <ClInclude Include="net\citizen_destinations.h" />
+    <ClInclude Include="net\replay_ui.h" />
     <ClInclude Include="hooks\input_block.h" />
     <ClInclude Include="version.h" />
     <ClInclude Include="net\build_sync.h" />

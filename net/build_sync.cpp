@@ -9,6 +9,7 @@
 #include "../hooks/money.h"         // Money_OnRemote
 #include "settings_sync.h"           // SettingsSync_ClickedRecently
 #include "view_list_scope.h"
+#include "replay_ui.h"
 #include "../ui/debug_log.h"
 #include "../ui/sync_block.h"
 #include <vector>
@@ -1144,6 +1145,15 @@ void BuildSync_Tick()
     // Applied in arrival order; a refused placement is retried after
     // RETRY_DELAY_MS, and later ones wait behind it so order is kept.
     unsigned long long now = GetTickCount64();
+    // A window or menu open on this PC no longer holds the other player's
+    // buildings (replay_ui.h); the join screen still does.
+    if (SyncBlock_IsActive()) return;
+    ReplayUiScope replayUi;
+    static bool s_loggedWindow = false;
+    if (replayUi.WasBlocked() != s_loggedWindow) {
+        s_loggedWindow = replayUi.WasBlocked();
+        if (s_loggedWindow) Logf("republicmp  BUILD_SYNC: a window is open here - replaying with menus closed");
+    }
     while (!g_pending.empty()) {
         PendingPlacement& p = g_pending.front();
         if (now < p.notBeforeMs) break;
