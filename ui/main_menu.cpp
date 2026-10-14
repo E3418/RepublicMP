@@ -3,12 +3,12 @@
 #include "debugui.h"
 #include "ui_log.h"
 #include "sync_block.h"
-#include "../hooks/imgui_hook.h" // g_imguiVisible - "Hide menu" button
-#include "../net/save_sync.h"
-#include "../net/build_sync.h"
-#include "../net/road_sync.h"
-#include "../net/terrain_sync.h"
-#include "../net/sync_check.h"
+#include "../game/imgui_hook.h" // g_imguiVisible - "Hide menu" button
+#include "../session/save_sync.h"
+#include "../world_sync/buildings/build_sync.h"
+#include "../world_sync/networks/road_sync.h"
+#include "../world_sync/terrain/terrain_sync.h"
+#include "../session/sync_check.h"
 
 #include "imgui.h"
 #include <misc/cpp/imgui_stdlib.h> // ImGui::InputText(const char*, std::string*)
@@ -96,7 +96,7 @@ static void ResyncControls()
     }
     ImGui::TextColored(kGrey, "Re-sync sends your world to the player again (vehicles, citizens, production).");
 
-    // Drift measured by the hourly sync check (net/sync_check).
+    // Drift measured by the hourly sync check (session/sync_check).
     SyncDrift d = SyncCheck_GetDrift();
     if (d.valid) {
         ImVec4 col = d.total < 2.0f ? kGreen : d.total < 10.0f ? kYellow : kRed;
@@ -118,7 +118,7 @@ static void ResyncControls()
     ImGui::SetNextItemWidth(110);
     if (ImGui::Combo("##driftResync", &limit, kLimitLabels, IM_ARRAYSIZE(kLimitLabels)))
         SyncCheck_SetAutoResyncPercent(kLimits[limit]);
-    // Why an automatic re-sync has not happened yet (see net/sync_check.h).
+    // Why an automatic re-sync has not happened yet (see session/sync_check.h).
     if (kLimits[limit] > 0 && d.valid && d.overLimitChecks > 0) {
         ImGui::SameLine();
         unsigned long long wait = SyncCheck_GetResyncCooldownMs();
@@ -247,7 +247,7 @@ void MainMenu::Draw()
         float spacing = ImGui::GetStyle().ItemSpacing.x;
         float half = (ImGui::GetContentRegionAvail().x - spacing) * 0.5f;
         if (ImGui::Button("Hide menu (INSERT)", ImVec2(half, 0)))
-            g_imguiVisible = false; // INSERT brings it back (hooks/imgui_hook.cpp)
+            g_imguiVisible = false; // INSERT brings it back (game/imgui_hook.cpp)
         ImGui::SameLine();
         if (ImGui::Button("Debug", ImVec2(half, 0)))
             g_debugui.Open();

@@ -2,13 +2,13 @@
 #include "debugui.h"
 #include "imgui.h"
 #include <misc/cpp/imgui_stdlib.h> // ImGui::InputText(const char*, std::string*)
-#include "../hooks/present_hook.h"
-#include "../net/build_sync.h"
-#include "../net/road_sync.h"
-#include "../net/terrain_sync.h"
-#include "../net/save_sync.h"
-#include "../hooks/determinism.h"
-#include "../net/settings_sync.h"
+#include "../game/present_hook.h"
+#include "../world_sync/buildings/build_sync.h"
+#include "../world_sync/networks/road_sync.h"
+#include "../world_sync/terrain/terrain_sync.h"
+#include "../session/save_sync.h"
+#include "../determinism/determinism.h"
+#include "../session/settings_sync.h"
 #include "debug_log.h"
 #include <vector>
 #include <string>
@@ -165,7 +165,7 @@ void Debugui::Draw()
         ImGui::Separator();
         ImGui::Spacing();
 
-        // --- Determinism probe (hooks/determinism) ---
+        // --- Determinism probe (determinism/determinism) ---
         ImGui::TextUnformatted("Determinism probe:");
         static int s_probeLength = 1;
         static const int kProbeSteps[] = { 600, 1800, 3600, 10800 };
@@ -186,7 +186,7 @@ void Debugui::Draw()
         ImGui::Separator();
         ImGui::Spacing();
 
-        // --- Field diff (net/settings_sync) ---
+        // --- Field diff (session/settings_sync) ---
         bool fieldDiff = SettingsSync_GetFieldDiff();
         if (ImGui::Checkbox("Log building fields changed by clicks (FIELD_DIFF)", &fieldDiff))
             SettingsSync_SetFieldDiff(fieldDiff);

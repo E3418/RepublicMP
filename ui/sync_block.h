@@ -5,8 +5,8 @@
 // menu to see what is happening. Meanwhile nothing can change the world:
 //   - the game is paused (re-asserted every frame in SyncBlock_Draw);
 //   - the game's input (C3D_INPUT) answers "nothing pressed"
-//     (hooks/input_block), and window messages are swallowed
-//     (hooks/imgui_hook);
+//     (game/input_block), and window messages are swallowed
+//     (game/imgui_hook);
 //   - building placement and the F10 pause hotkey refuse while active.
 #pragma once
 

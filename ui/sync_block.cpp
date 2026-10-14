@@ -1,7 +1,7 @@
 // See sync_block.h.
 #include "sync_block.h"
-#include "../hooks/game_speed.h" // EnsureGamePaused() re-assert, see SyncBlock_Draw
-#include "../net/save_sync.h"    // the Cancel button
+#include "../session/game_speed.h" // EnsureGamePaused() re-assert, see SyncBlock_Draw
+#include "../session/save_sync.h"    // the Cancel button
 #include "imgui.h"
 #include <windows.h>
 #include <mutex>
@@ -158,5 +158,5 @@ void SyncBlock_Draw()
     }
 
     // NoInputs is intentional: this window only dims the screen; input is
-    // blocked in HookedWndProc and hooks/input_block.
+    // blocked in HookedWndProc and game/input_block.
 }
