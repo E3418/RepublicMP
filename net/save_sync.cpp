@@ -867,9 +867,32 @@ static DWORD WINAPI ClientSessionThread(LPVOID)
     return 0;
 }
 
+// The world's road network (world+0xf7a0): made with every world, an empty
+// map too; deleted and zeroed when the world is torn down (0x9952C,
+// 0x29564E) - back in the main menu, or while another save loads.
+#define WORLD_ROAD_NETWORK_RVA 0x9E46B0
+// Out of the world this long in a session ends it (a load's teardown is
+// shorter, and joins/re-syncs are not checked at all).
+#define OUT_OF_WORLD_GRACE_MS 1500
+
+bool SaveSync_IsWorldLoaded()
+{
+    __try {
+        return *(__int64*)((uintptr_t)g_exe + WORLD_ROAD_NETWORK_RVA) != 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 void SaveSync_StartHost()
 {
     if (g_state != SESSION_IDLE) return;
+    if (!SaveSync_IsWorldLoaded()) {
+        // A joining player gets the host's world: there has to be one.
+        SaveStatus("[HOST] no world loaded - load a city first, then host");
+        SetSessionError("load a city before hosting");
+        return;
+    }
     g_disconnectRequested = false;
     g_isHost = true;
     g_resyncRequested = false;
@@ -945,8 +968,34 @@ void SaveSync_OnResyncAnnounced()
     g_resyncAnnounced = true;
 }
 
+// Leaving the world (main menu, another save) ends the session: the other
+// player would otherwise stay connected to a game that is gone. Joins and
+// re-syncs load a world themselves and are not checked.
+static void CheckStillInWorld()
+{
+    static ULONGLONG s_outSince = 0;
+    SessionState st = g_state;
+    bool watched = st == SESSION_HOST_LISTENING || st == SESSION_HOST_IN_GAME || st == SESSION_CLIENT_IN_GAME;
+    if (!watched || g_disconnectRequested || SaveSync_IsWorldLoaded()) {
+        s_outSince = 0;
+        return;
+    }
+    ULONGLONG now = GetTickCount64();
+    if (!s_outSince) {
+        s_outSince = now;
+        return;
+    }
+    if (now - s_outSince < OUT_OF_WORLD_GRACE_MS) return;
+    s_outSince = 0;
+    bool host = g_isHost;
+    SaveStatus(host ? "[HOST] left the world - stopping hosting" : "[CLIENT] left the world - disconnecting");
+    SaveSync_RequestDisconnect();
+    SetSessionError(host ? "hosting stopped: you left the world" : "disconnected: you left the world");
+}
+
 void SaveSync_Tick()
 {
+    CheckStillInWorld();
     if (!g_resyncSendNow || g_resyncSent) return;
     if (!BuildSync_IsConnected()) return; // AnnounceResync gives up after its timeout
     BuildSync_SendResync();

@@ -49,7 +49,11 @@ void SaveSync_Bind(const TsmHost* host);
 // Writes to tesmioloader.log and the in-game UI log.
 void SaveStatus(const char* fmt, ...);
 
-// Refused (no-op) while a session is active.
+// True while a world is loaded (not the main menu, not mid-load).
+bool SaveSync_IsWorldLoaded();
+
+// Refused (no-op) while a session is active. Hosting needs a loaded world;
+// leaving the world ends the session (SaveSync_Tick).
 void SaveSync_StartHost();
 void SaveSync_StartClient(const char* hostIp = nullptr); // nullptr = keep last IP
 

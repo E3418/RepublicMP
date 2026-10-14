@@ -191,8 +191,13 @@ static void SessionButtons(std::string& hostIp)
     float half = (ImGui::GetContentRegionAvail().x - spacing) * 0.5f;
 
     if (st == SESSION_IDLE) {
+        bool world = SaveSync_IsWorldLoaded();
+        ImGui::BeginDisabled(!world);
         if (ImGui::Button("Host", ImVec2(half, 0)))
             SaveSync_StartHost();
+        ImGui::EndDisabled();
+        if (!world && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Load a city first - the joining player gets your world.");
         ImGui::SameLine();
         ImGui::BeginDisabled(hostIp.empty());
         if (ImGui::Button("Connect", ImVec2(half, 0)))
@@ -204,6 +209,7 @@ static void SessionButtons(std::string& hostIp)
         ImGui::SameLine();
         ImGui::SetNextItemWidth(-1);
         ImGui::InputText("##hostIp", &hostIp);
+        if (!world) ImGui::TextColored(kGrey, "Host is available once a city is loaded.");
         return;
     }
 
