@@ -344,6 +344,51 @@ static bool NodeNear(__int64 node, const float pos[3])
     return fabsf(p[0] - pos[0]) < 0.5f && fabsf(p[2] - pos[2]) < 0.5f && fabsf(p[1] - pos[1]) < 1.0f;
 }
 
+static bool IsPowerLine(int category)
+{
+    return category == ROAD_SYNC_CATEGORY_POWER_HIGH || category == ROAD_SYNC_CATEGORY_POWER_LOW;
+}
+
+// The committed node of `network` the drag tick would take for an end at
+// `pos` (its own test, 0x4FEFF0: within 1m on each axis), nearest first; 0
+// if none.
+static __int64 FindNetworkNodeAt(__int64 network, const float pos[3])
+{
+    __int64 best = 0;
+    float bestD = 0.0f;
+    __try {
+        __int64* it = *(__int64**)(network + NET_NODES_OFFSET);
+        __int64* end = *(__int64**)(network + NET_NODES_OFFSET + 8);
+        for (; it && it < end; ++it) {
+            __int64 node = *it;
+            if (!node) continue;
+            const float* p = (const float*)(node + NODE_POS_OFFSET);
+            float dx = fabsf(p[0] - pos[0]), dy = fabsf(p[1] - pos[1]), dz = fabsf(p[2] - pos[2]);
+            if (dx >= 1.0f || dy >= 1.0f || dz >= 1.0f) continue;
+            float d = dx * dx + dy * dy + dz * dz;
+            if (!best || d < bestD) {
+                best = node;
+                bestD = d;
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+    return best;
+}
+
+// A power-line drag end that took an existing node must sit where the sender's
+// did; logs and puts it back if the engine moved it anyway.
+static void CheckAttachedPowerNode(__int64 node, const float want[3], const char* which)
+{
+    if (!node) return;
+    const float* p = (const float*)(node + NODE_POS_OFFSET);
+    if (fabsf(p[1] - want[1]) <= 0.5f) return;
+    Logf("republicmp  ROAD_SYNC:   WARNING %s node at (%.2f,%.2f,%.2f), the sender's at (%.2f,%.2f,%.2f) - put back",
+         which, p[0], p[1], p[2], want[0], want[1], want[2]);
+    SetNodePos(node, want);
+}
+
 // ---------------------------------------------------------------------------
 // Footpath road links
 // ---------------------------------------------------------------------------
@@ -649,6 +694,8 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
             // sender's position already includes it.
             if (*(unsigned char*)(manager + MGR_START_ATTACHED_OFFSET) == 0)
                 SetNodePos(*(__int64*)(manager + MGR_START_NODE_OFFSET), seg.startNode);
+            else if (IsPowerLine(seg.category))
+                CheckAttachedPowerNode(*(__int64*)(manager + MGR_START_NODE_OFFSET), seg.startNode, "start");
             *(float*)(manager + MGR_RELAX_TIMER_OFFSET) = 2.0f;
 
             // One drag tick with the sender's route as param_8: the engine
@@ -659,6 +706,18 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
                 HoverGlobals_Clear();
                 SetRoadHover(seg.endLink, "end");
             }
+            // Power lines: the tick then lifts the end by the pole height
+            // (manager+0x24, 0x4FF3D4) unless a node or an edge is hovered -
+            // even when the end matched a node. The sender pointed at the
+            // node it ends on, so the replay hovers that node too; without it
+            // the end hung 20m above the node, a separate node, and the line
+            // carried no power on that PC (#22) and was missed by the
+            // sender's demolition (#23).
+            __int64 endHoverNode = 0;
+            if (IsPowerLine(seg.category) && !seg.endPort.valid) {
+                endHoverNode = FindNetworkNodeAt(manager, seg.endNode);
+                if (endHoverNode) *(long long*)((uintptr_t)g_exe + HOVER_NODE_RVA) = endHoverNode;
+            }
             RawVectorHeader route = { seg.points, seg.points + seg.pointCount, seg.points + seg.pointCount };
             float end[3] = { seg.endNode[0], seg.endNode[1], seg.endNode[2] };
             *lmbHeld = 1;
@@ -666,6 +725,10 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
                                                       0, 0, 0, (__int64)&route, 0, 0);
             if (*(unsigned char*)(manager + MGR_END_ATTACHED_OFFSET) == 0)
                 SetNodePos(*(__int64*)(manager + MGR_END_NODE_OFFSET), seg.endNode);
+            else if (IsPowerLine(seg.category))
+                CheckAttachedPowerNode(*(__int64*)(manager + MGR_END_NODE_OFFSET), seg.endNode, "end");
+            if (IsPowerLine(seg.category))
+                Logf("republicmp  ROAD_SYNC:   power line end: %s", endHoverNode ? "on an existing node (hovered)" : "free");
 
             unsigned char valid = *(unsigned char*)(manager + MGR_VALID_OFFSET);
             int errCategory = *(int*)(manager + MGR_ERROR_CATEGORY_OFFSET);
@@ -681,6 +744,7 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
             wrapper(thisPtr, seg.typeId, (unsigned int)seg.variant);
             if (*(char*)(thisPtr + TOOL_DRAG_ACTIVE_OFFSET) != 0)
                 Logf("republicmp  ROAD_SYNC:   WARNING drag still active after release");
+            if (endHoverNode) *(long long*)((uintptr_t)g_exe + HOVER_NODE_RVA) = 0;
         } __finally {
             if (saved) {
                 *lmbHeld = savedLmbHeld;
@@ -1075,6 +1139,20 @@ static bool ApplyDemolishInner(const RoadSyncDemolishMsg& m, bool* outRemoved)
                 }
                 if (*(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) != 0) {
                     adopted = AdoptSenderRange(manager, m, &engineRs, &engineRe, &rs, &re);
+                    if ((viaNode || direct) && m.hasRange) {
+                        // For the log: what the fallback is about to cut.
+                        __int64 seg = *(__int64*)(manager + MGR_UPG_SEGMENT_OFFSET);
+                        if (seg) {
+                            const float* n0 = (const float*)(*(__int64*)(seg + SEG_NODE0_OFFSET) + NODE_POS_OFFSET);
+                            const float* n1 = (const float*)(*(__int64*)(seg + SEG_NODE1_OFFSET) + NODE_POS_OFFSET);
+                            const RoadSyncPoint* pb = *(const RoadSyncPoint**)(seg + SEG_POINTS_BEGIN_OFFSET);
+                            const RoadSyncPoint* pe = *(const RoadSyncPoint**)(seg + SEG_POINTS_END_OFFSET);
+                            Logf("republicmp  ROAD_SYNC:   fallback segment (%.2f,%.2f,%.2f)-(%.2f,%.2f,%.2f) %d point(s), cut (%d,%d); sender's piece (%.2f,%.2f,%.2f)-(%.2f,%.2f,%.2f)",
+                                 n0[0], n0[1], n0[2], n1[0], n1[1], n1[2], (pb && pe > pb) ? (int)(pe - pb) : 0,
+                                 *(int*)(manager + MGR_UPG_RANGE_START_OFFSET), *(int*)(manager + MGR_UPG_RANGE_END_OFFSET),
+                                 m.rangeA[0], m.rangeA[1], m.rangeA[2], m.rangeB[0], m.rangeB[1], m.rangeB[2]);
+                        }
+                    }
                     // Through the node, or armed directly, the engine's own pick
                     // is only a stand-in for the sender's piece - never cut it on
                     // its own.

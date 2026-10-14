@@ -160,6 +160,11 @@ reporting a problem, attach the logs of both players.
 - **Group construction tools** (the drag box that starts plans for rubles,
   dollars or resources, and the one that suspends construction) now act on
   the other PC too, with the same box (by SoylentGreed).
+- **Power lines joined to an existing line end**: on the other PC the new
+  line's end was lifted by the pole height (20 m for high voltage) and became
+  a separate node above the old one, so the line carried no power there and
+  the sender's demolition later missed that piece. The replay now joins the
+  same node (#22, #23, by TucKnock).
 - **Open windows** no longer hold the other player's buildings and roads:
   a replay runs with the menus closed for its call and puts them back
   after (#21, by TucKnock).

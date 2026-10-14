@@ -48,6 +48,8 @@ RoadCommitFn g_origRoadCommit = nullptr;
 #define VEC_BUILDINGS_END_RVA 0x9E6A20
 #define HOVER_PORT_BUILDING_RVA 0x9E45B0 // building whose connection port is hovered
 #define HOVER_PORT_INDEX_RVA 0x9E45B8
+#define HOVER_NODE_RVA 0x9E4560          // network node under the cursor (power lines join on it)
+#define HOVER_EDGE_RVA 0x9E4558          // network edge under the cursor
 
 // thisPtr fields.
 #define CURSOR_X_OFFSET 0xf6c            // placement cursor
@@ -262,6 +264,9 @@ bool DetectSpawn_InBuildingPlacement()    { return InterlockedCompareExchange(&g
 // inside the game's commit and must not allocate, log or do network I/O.
 static RoadSyncSegment g_segmentCapture;
 static volatile LONG g_segmentPending = 0;
+// Power lines, for the log: what the end was on at the commit (see
+// ApplySegmentImplInner) - 1 = a hovered node, 2 = a hovered edge, 0 = neither.
+static int g_segmentCaptureEndHover = 0;
 static RoadSyncUpgradeMsg g_upgradeCapture;
 static volatile LONG g_upgradePending = 0;
 
@@ -452,6 +457,8 @@ static void CaptureSegment(__int64 manager, int category)
         return;
     }
     if (!FillSegment(manager, category, g_segmentCapture)) return;
+    g_segmentCaptureEndHover = *(__int64*)((uintptr_t)g_exe + HOVER_NODE_RVA) ? 1
+                             : *(__int64*)((uintptr_t)g_exe + HOVER_EDGE_RVA) ? 2 : 0;
     MemoryBarrier();
     InterlockedExchange(&g_segmentPending, 1);
 }
@@ -824,6 +831,10 @@ static void FlushCommitCaptures()
              seg.endNode[0], seg.endNode[1], seg.endNode[2],
              seg.startPort.valid ? seg.startPort.portIndex : -1,
              seg.endPort.valid ? seg.endPort.portIndex : -1);
+        if (seg.category == ROAD_SYNC_CATEGORY_POWER_HIGH || seg.category == ROAD_SYNC_CATEGORY_POWER_LOW)
+            Logf("republicmp  ROAD_COMMIT:   power line end: %s",
+                 g_segmentCaptureEndHover == 1 ? "on a hovered node"
+                 : g_segmentCaptureEndHover == 2 ? "on a hovered edge (joins mid-line)" : "free");
         RoadSync_SendSegment(seg);
         InterlockedExchange(&g_segmentPending, 0);
     }
