@@ -6,6 +6,9 @@
 #include "terrain_sync.h"            // TerrainSync_Begin/EndForeignReplay
 #include "../ui/sync_block.h"
 #include "view_list_scope.h"
+#include "replay_ui.h"
+#include <intrin.h>
+#pragma intrinsic(_ReturnAddress)
 #include <vector>
 #include <unordered_map>
 #include <stdio.h>
@@ -196,6 +199,7 @@ int RoadSync_SegmentCount(__int64 thisPtr, int category)
 
 static const char* CategoryName(int category)
 {
+    if (category == ROAD_SYNC_GROUP_TOOL_CATEGORY) return "GROUP TOOL";
     const RoadSyncCategoryInfo* info = RoadSync_GetCategoryInfo(category);
     return info ? info->name : "?";
 }
@@ -1314,7 +1318,9 @@ struct RoadSyncItem {
     RoadSyncUpgradeMsg up;
     RoadSyncDemolishMsg dem;
     RoadSyncDirectionMsg dir;
-    int attempts;                 // demolish: tries so far
+    RoadSyncPlanStartMsg plan;
+    RoadSyncGroupToolMsg group;
+    int attempts;                // demolish: tries so far
     unsigned long long notBeforeMs; // demolish: GetTickCount64() of the next try
     unsigned long long waitSinceMs; // demolish: waiting for its building's demolition since
 };
@@ -1430,6 +1436,34 @@ static DWORD WINAPI ReceiveLoopThread(LPVOID)
             }
             Logf("republicmp  ROAD_SYNC: received demolish seq=%d %s at (%.2f,%.2f,%.2f)", item->dem.seq,
                  CategoryName(item->dem.category), item->dem.cursor[0], item->dem.cursor[1], item->dem.cursor[2]);
+            EnterCriticalSection(&g_queueLock);
+            g_incoming.push_back(*item);
+            LeaveCriticalSection(&g_queueLock);
+            delete item;
+        } else if (tag == ROAD_SYNC_WIRE_PLAN_START) {
+            RoadSyncItem* item = new RoadSyncItem();
+            item->tag = tag;
+            if (!NetworkRecvExact(g_sock, &item->plan, sizeof(item->plan))) {
+                delete item;
+                RoadSyncStatus("[ROAD_SYNC] connection lost");
+                CloseConnection();
+                break;
+            }
+            Logf("republicmp  ROAD_SYNC: received plan start seq=%d %s", item->plan.seq, CategoryName(item->plan.category));
+            EnterCriticalSection(&g_queueLock);
+            g_incoming.push_back(*item);
+            LeaveCriticalSection(&g_queueLock);
+            delete item;
+        } else if (tag == ROAD_SYNC_WIRE_GROUP_TOOL) {
+            RoadSyncItem* item = new RoadSyncItem();
+            item->tag = tag;
+            if (!NetworkRecvExact(g_sock, &item->group, sizeof(item->group))) {
+                delete item;
+                RoadSyncStatus("[ROAD_SYNC] connection lost");
+                CloseConnection();
+                break;
+            }
+            Logf("republicmp  ROAD_SYNC: received group tool seq=%d mode %d", item->group.seq, item->group.mode);
             EnterCriticalSection(&g_queueLock);
             g_incoming.push_back(*item);
             LeaveCriticalSection(&g_queueLock);
@@ -1582,7 +1616,23 @@ static void SendItemNow(RoadSyncItem& item)
 {
     int seq = ++g_nextSeq;
     bool sent;
-    if (item.tag == ROAD_SYNC_WIRE_DIRECTION) {
+    if (item.tag == ROAD_SYNC_WIRE_PLAN_START) {
+        RoadSyncPlanStartMsg& plan = item.plan;
+        plan.seq = seq;
+        char mode[96];
+        Logf("republicmp  ROAD_SYNC: sending plan start seq=%d %s%s dollars=%d rubles=%d count=%d group=%d pay=%s - %d plan(s) started here",
+             seq, CategoryName(plan.category), plan.exceptGroup ? " (every group but one)" : "", plan.dollars,
+             plan.rubles, plan.count, plan.group, BuildMode_Describe(plan.mode, mode, sizeof(mode)), plan.started);
+        sent = SendEnvelope(ROAD_SYNC_WIRE_PLAN_START, &plan, sizeof(plan));
+    } else if (item.tag == ROAD_SYNC_WIRE_GROUP_TOOL) {
+        RoadSyncGroupToolMsg& g = item.group;
+        g.seq = seq;
+        char mode[96];
+        Logf("republicmp  ROAD_SYNC: sending group tool seq=%d mode %d box (%.2f,%.2f,%.2f)-(%.2f,%.2f,%.2f) yaw %.4f pay=%s - %d planned piece(s) started here",
+             seq, g.mode, g.box[0], g.box[1], g.box[2], g.box[3], g.box[4], g.box[5], g.yaw,
+             BuildMode_Describe(g.buildMode, mode, sizeof(mode)), g.started);
+        sent = SendEnvelope(ROAD_SYNC_WIRE_GROUP_TOOL, &g, sizeof(g));
+    } else if (item.tag == ROAD_SYNC_WIRE_DIRECTION) {
         RoadSyncDirectionMsg& dir = item.dir;
         dir.seq = seq;
         Logf("republicmp  ROAD_SYNC: sending direction seq=%d %s (%.2f,%.2f,%.2f)-(%.2f,%.2f,%.2f) -> %d",
@@ -1638,7 +1688,9 @@ static int SendOrQueue(RoadSyncItem& item)
     if (!g_connected || !g_outboundQueue.empty()) {
         g_outboundQueue.push_back(item);
         Logf("republicmp  ROAD_SYNC: queued %s (%zu waiting for connection)",
-             item.tag == ROAD_SYNC_WIRE_UPGRADE ? "upgrade" : item.tag == ROAD_SYNC_WIRE_DIRECTION ? "direction" : "segment",
+             item.tag == ROAD_SYNC_WIRE_UPGRADE ? "upgrade" : item.tag == ROAD_SYNC_WIRE_DIRECTION ? "direction"
+             : item.tag == ROAD_SYNC_WIRE_PLAN_START ? "plan start"
+             : item.tag == ROAD_SYNC_WIRE_GROUP_TOOL ? "group tool" : "segment",
              g_outboundQueue.size());
         return 0;
     }
@@ -1715,6 +1767,8 @@ static bool TerrainFenceAllows(const RoadSyncItem& item)
     if (item.tag == ROAD_SYNC_WIRE_DIRECTION) return true; // no terrain involved
     int fence = item.tag == ROAD_SYNC_WIRE_UPGRADE ? item.up.terrainFence
               : item.tag == ROAD_SYNC_WIRE_DEMOLISH ? item.dem.terrainFence
+              : item.tag == ROAD_SYNC_WIRE_PLAN_START ? item.plan.terrainFence
+              : item.tag == ROAD_SYNC_WIRE_GROUP_TOOL ? item.group.terrainFence
               : item.seg.terrainFence;
     if (TerrainSync_FenceReached(fence)) {
         if (g_fenceWaitStartMs)
@@ -1916,9 +1970,376 @@ static void ApplyDirectionAndAck(const RoadSyncDirectionMsg& m)
     SendAck(m.seq, m.category, seg != 0, 1);
 }
 
+// ---------------------------------------------------------------------------
+// Starting planned construction (see RoadSyncPlanStartMsg)
+// ---------------------------------------------------------------------------
+
+#define PLAN_START_RVA 0x5258E0        // FUN_1405258e0(network, dollars, rubles, count, group)
+#define PLAN_START_EXCEPT_RVA 0x525C30 // FUN_140525c30(network, dollars, rubles, -, group)
+#define EDGE_PLANNED_OFFSET 0x140      // byte: 1 = a plan not started yet
+#define EDGE_GROUP_OFFSET 0x124
+#define PLAN_CAPTURE_MAX 16
+
+// mov rax,rsp / mov [rax+10h],dl / push rbp,rsi,rdi,r12,r13,r14 - 15 bytes
+static const unsigned char kPlanStartExpect[15] = {
+    0x48, 0x8B, 0xC4, 0x88, 0x50, 0x10, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56
+};
+// mov rax,rsp / mov [rax+18h],r8b / mov [rax+10h],dl / push rbp,rsi,rdi,r12 - 15 bytes
+static const unsigned char kPlanStartExceptExpect[15] = {
+    0x48, 0x8B, 0xC4, 0x44, 0x88, 0x40, 0x18, 0x88, 0x50, 0x10, 0x55, 0x56, 0x57, 0x41, 0x54
+};
+
+// The interface's calls (return addresses = CALL + 5): the construction
+// menu (FUN_140086f40), the construction window and the network tool panel
+// (FUN_140395c90). The others - a building's placement, the area paste -
+// start their own plans as part of an action that is synced itself.
+static const unsigned int kPlanStartUiReturns[] = {
+    0x7ECE0, 0x7EF10, 0x7F100, 0x881B1, 0x88A11, 0x88CC1, 0x39F0C0, 0x39F6F8, 0x39F8D8
+};
+static const unsigned int kPlanStartExceptUiReturns[] = { 0x7ECBA, 0x7EEEA, 0x7F0DA, 0x8818D, 0x889ED, 0x88C9D };
+
+typedef __int64 (*PlanStartFn)(__int64 network, unsigned char dollars, unsigned char rubles, __int64 count, __int64 group);
+static PlanStartFn g_origPlanStart = nullptr;
+static PlanStartFn g_origPlanStartExcept = nullptr;
+
+// Captured in the hook (interface thread), sent from RoadSync_Tick.
+static RoadSyncPlanStartMsg g_planCaptures[PLAN_CAPTURE_MAX];
+static int g_planCaptureCount = 0;
+
+static bool IsUiCall(void* ret, const unsigned int* rvas, size_t n)
+{
+    unsigned long long rva = (unsigned long long)((BYTE*)ret - (BYTE*)g_exe);
+    for (size_t i = 0; i < n; i++)
+        if (rva == rvas[i]) return true;
+    return false;
+}
+
+// Plans the call would start: planned edges among the last `count` (all if
+// count <= 0), in `group` (or every group but it, or all when group < 0).
+static int CountStartablePlans(__int64 network, bool exceptGroup, int count, int group)
+{
+    int n = 0;
+    __try {
+        __int64* begin = *(__int64**)(network + MGR_SEGMENTS_BEGIN_OFFSET);
+        __int64* end = *(__int64**)(network + MGR_SEGMENTS_END_OFFSET);
+        if (!begin || end < begin) return 0;
+        long long size = end - begin;
+        long long from = (!exceptGroup && count > 0 && count < size) ? size - count : 0;
+        for (long long i = from; i < size; i++) {
+            __int64 e = begin[i];
+            if (!e || *(unsigned char*)(e + EDGE_PLANNED_OFFSET) != 1) continue;
+            int g = *(int*)(e + EDGE_GROUP_OFFSET);
+            if (group >= 0 && (exceptGroup ? g == group : g != group)) continue;
+            n++;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+    return n;
+}
+
+static __int64 PlanStartCommon(bool exceptGroup, void* ret, __int64 network, unsigned char dollars,
+                               unsigned char rubles, __int64 count, __int64 group)
+{
+    PlanStartFn orig = exceptGroup ? g_origPlanStartExcept : g_origPlanStart;
+    bool capture = g_connected && InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0 &&
+                   (exceptGroup ? IsUiCall(ret, kPlanStartExceptUiReturns, sizeof(kPlanStartExceptUiReturns) / sizeof(kPlanStartExceptUiReturns[0]))
+                                : IsUiCall(ret, kPlanStartUiReturns, sizeof(kPlanStartUiReturns) / sizeof(kPlanStartUiReturns[0])));
+    int category = capture ? RoadSync_CategoryForManager(GetWorldThisPtr(), network) : -1;
+    int before = category >= 0 ? CountStartablePlans(network, exceptGroup, (int)count, (int)group) : 0;
+    __int64 result = orig(network, dollars, rubles, count, group);
+    if (category < 0 || before == 0) return result;
+    int started = before - CountStartablePlans(network, exceptGroup, (int)count, (int)group);
+    EnterCriticalSection(&g_queueLock);
+    if (g_planCaptureCount < PLAN_CAPTURE_MAX) {
+        RoadSyncPlanStartMsg& m = g_planCaptures[g_planCaptureCount++];
+        memset(&m, 0, sizeof(m));
+        m.category = category;
+        m.exceptGroup = exceptGroup ? 1 : 0;
+        m.dollars = dollars ? 1 : 0;
+        m.rubles = rubles ? 1 : 0;
+        m.count = (int)count;
+        m.group = (int)group;
+        m.started = started;
+        m.mode = BuildMode_Read();
+    }
+    LeaveCriticalSection(&g_queueLock);
+    return result;
+}
+
+static __int64 HookedPlanStart(__int64 network, unsigned char dollars, unsigned char rubles, __int64 count, __int64 group)
+{
+    return PlanStartCommon(false, _ReturnAddress(), network, dollars, rubles, count, group);
+}
+
+static __int64 HookedPlanStartExcept(__int64 network, unsigned char dollars, unsigned char rubles, __int64 count, __int64 group)
+{
+    return PlanStartCommon(true, _ReturnAddress(), network, dollars, rubles, count, group);
+}
+
+bool RoadSync_InstallPlanStartHooks()
+{
+    bool a = InstallInlineHook(g_exeBase + PLAN_START_RVA, (void*)HookedPlanStart, (void**)&g_origPlanStart,
+                               kPlanStartExpect, sizeof(kPlanStartExpect), "republicmp plan start");
+    bool b = InstallInlineHook(g_exeBase + PLAN_START_EXCEPT_RVA, (void*)HookedPlanStartExcept,
+                               (void**)&g_origPlanStartExcept, kPlanStartExceptExpect, sizeof(kPlanStartExceptExpect),
+                               "republicmp plan start except");
+    return a && b;
+}
+
+static void SendPlanCaptures()
+{
+    RoadSyncPlanStartMsg captured[PLAN_CAPTURE_MAX];
+    EnterCriticalSection(&g_queueLock);
+    int n = g_planCaptureCount;
+    memcpy(captured, g_planCaptures, sizeof(RoadSyncPlanStartMsg) * n);
+    g_planCaptureCount = 0;
+    LeaveCriticalSection(&g_queueLock);
+    for (int i = 0; i < n; i++) {
+        static RoadSyncItem s_item; // large - game thread only
+        memset(&s_item, 0, sizeof(s_item));
+        s_item.tag = ROAD_SYNC_WIRE_PLAN_START;
+        s_item.plan = captured[i];
+        s_item.plan.terrainFence = TerrainSync_GetFenceSeq();
+        SendOrQueue(s_item);
+    }
+}
+
+static bool CallPlanStart(PlanStartFn fn, __int64 network, const RoadSyncPlanStartMsg& m)
+{
+    __try {
+        fn(network, m.dollars ? 1 : 0, m.rubles ? 1 : 0, m.count, m.group);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+static void ApplyPlanStartAndAck(const RoadSyncPlanStartMsg& m)
+{
+    const RoadSyncCategoryInfo* info = RoadSync_GetCategoryInfo(m.category);
+    PlanStartFn fn = m.exceptGroup ? g_origPlanStartExcept : g_origPlanStart;
+    __int64 network = 0;
+    __try {
+        network = info ? *(__int64*)(GetWorldThisPtr() + info->managerOffset) : 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        network = 0;
+    }
+    if (!network || !fn) {
+        Logf("republicmp  ROAD_SYNC: plan start seq=%d %s - no network here, skipped", m.seq, CategoryName(m.category));
+        SendAck(m.seq, m.category, false, 1);
+        return;
+    }
+    bool except = m.exceptGroup != 0;
+    int before = CountStartablePlans(network, except, m.count, m.group);
+    // The new sites take the sender's build mode, not this PC's: with
+    // "rubles" here a realistic plan from the other PC finished at once.
+    BuildMode mine = BuildMode_Read();
+    BuildMode_Write(m.mode);
+    InterlockedIncrement(&g_applyingSegment);
+    TerrainSync_BeginForeignReplay();
+    bool ok = CallPlanStart(fn, network, m);
+    TerrainSync_EndForeignReplay();
+    InterlockedDecrement(&g_applyingSegment);
+    BuildMode_Write(mine);
+    int started = before - CountStartablePlans(network, except, m.count, m.group);
+    char theirs[96];
+    Logf("republicmp  ROAD_SYNC: plan start seq=%d %s dollars=%d rubles=%d pay=%s - %s: %d plan(s) started here, %d on the sender%s",
+         m.seq, CategoryName(m.category), m.dollars, m.rubles, BuildMode_Describe(m.mode, theirs, sizeof(theirs)),
+         ok ? "applied" : "THREW", started, m.started, ok && started != m.started ? " (DIFFERENT)" : "");
+    SendAck(m.seq, m.category, ok && started > 0, 1);
+}
+
+// ---------------------------------------------------------------------------
+// Group construction tools (see RoadSyncGroupToolMsg)
+// ---------------------------------------------------------------------------
+
+#define GROUP_TOOL_RVA 0x21C110
+#define GROUP_TOOL_YAW_RVA 0x9E9D20   // float: camera yaw that turns the box
+#define GROUP_TOOL_DOWN_RVA 0xA54E90  // byte: mouse button held
+#define GROUP_TOOL_PRESS_RVA 0xA54E91 // byte: mouse button pressed this frame
+#define WORLD_GROUP_BOX_OFFSET 0x13f5c
+#define WORLD_GROUP_DRAG_OFFSET 0x14033
+#define WORLD_CURSOR_OFFSET 0xf6c
+#define WORLD_NETWORK_COUNT_OFFSET 0x14034 // int: entries below
+#define WORLD_NETWORK_ENTRIES_OFFSET 0x14038 // entries of 0x50, the network at +0
+#define WORLD_NETWORK_ENTRY_SIZE 0x50
+#define GROUP_CAPTURE_MAX 8
+
+// mov rax,rsp / push rbp,rsi,rdi,r12,r13,r14,r15 / lea rbp,[rsp-70h] - 19 bytes
+static const unsigned char kGroupToolExpect[19] = {
+    0x48, 0x8B, 0xC4, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8D, 0x6C, 0x24, 0x90
+};
+
+typedef __int64 (*GroupToolFn)(__int64 world, int mode);
+static GroupToolFn g_origGroupTool = nullptr;
+
+static RoadSyncGroupToolMsg g_groupCaptures[GROUP_CAPTURE_MAX];
+static int g_groupCaptureCount = 0;
+
+// What the commit reads besides the menus (replay_ui.h closes those).
+struct GroupToolState {
+    float box[6];
+    float cursor[3];
+    float yaw;
+    unsigned char drag, down, press;
+};
+
+static void ReadGroupToolState(__int64 world, GroupToolState& s)
+{
+    BYTE* exe = g_exeBase;
+    memcpy(s.box, (void*)(world + WORLD_GROUP_BOX_OFFSET), sizeof(s.box));
+    memcpy(s.cursor, (void*)(world + WORLD_CURSOR_OFFSET), sizeof(s.cursor));
+    s.yaw = *(float*)(exe + GROUP_TOOL_YAW_RVA);
+    s.drag = *(unsigned char*)(world + WORLD_GROUP_DRAG_OFFSET);
+    s.down = exe[GROUP_TOOL_DOWN_RVA];
+    s.press = exe[GROUP_TOOL_PRESS_RVA];
+}
+
+static void WriteGroupToolState(__int64 world, const GroupToolState& s)
+{
+    BYTE* exe = g_exeBase;
+    memcpy((void*)(world + WORLD_GROUP_BOX_OFFSET), s.box, sizeof(s.box));
+    memcpy((void*)(world + WORLD_CURSOR_OFFSET), s.cursor, sizeof(s.cursor));
+    *(float*)(exe + GROUP_TOOL_YAW_RVA) = s.yaw;
+    *(unsigned char*)(world + WORLD_GROUP_DRAG_OFFSET) = s.drag;
+    exe[GROUP_TOOL_DOWN_RVA] = s.down;
+    exe[GROUP_TOOL_PRESS_RVA] = s.press;
+}
+
+// Planned pieces (edge +0x140 = 1) over every network the tool walks.
+static int CountPlannedPieces(__int64 world)
+{
+    int n = 0;
+    __try {
+        int networks = *(int*)(world + WORLD_NETWORK_COUNT_OFFSET);
+        for (int k = 0; k < networks && k < 256; k++) {
+            __int64 network = *(__int64*)(world + WORLD_NETWORK_ENTRIES_OFFSET + (__int64)k * WORLD_NETWORK_ENTRY_SIZE);
+            if (!network) continue;
+            __int64* begin = *(__int64**)(network + MGR_SEGMENTS_BEGIN_OFFSET);
+            __int64* end = *(__int64**)(network + MGR_SEGMENTS_END_OFFSET);
+            if (!begin || end < begin) continue;
+            for (__int64* p = begin; p < end; p++)
+                if (*p && *(unsigned char*)(*p + EDGE_PLANNED_OFFSET) == 1) n++;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return n;
+}
+
+static __int64 HookedGroupTool(__int64 world, int mode)
+{
+    if (!g_connected || InterlockedCompareExchange(&g_applyingSegment, 0, 0) != 0)
+        return g_origGroupTool(world, mode);
+
+    // The commit frame as the game decides it (menus closed, button up, a
+    // drag marked); every other frame only tracks the drag.
+    GroupToolState s;
+    bool commit = false;
+    __try {
+        BYTE* w = (BYTE*)world;
+        ReadGroupToolState(world, s);
+        commit = !w[0xfbc] && !w[0xfbe] && !w[0xfc3] && !s.down && s.drag;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        commit = false;
+    }
+    if (!commit) return g_origGroupTool(world, mode);
+
+    int before = CountPlannedPieces(world);
+    __int64 result = g_origGroupTool(world, mode);
+    int started = before - CountPlannedPieces(world);
+    EnterCriticalSection(&g_queueLock);
+    if (g_groupCaptureCount < GROUP_CAPTURE_MAX) {
+        RoadSyncGroupToolMsg& m = g_groupCaptures[g_groupCaptureCount++];
+        memset(&m, 0, sizeof(m));
+        m.category = ROAD_SYNC_GROUP_TOOL_CATEGORY;
+        m.mode = mode;
+        memcpy(m.box, s.box, sizeof(m.box));
+        memcpy(m.cursor, s.cursor, sizeof(m.cursor));
+        m.yaw = s.yaw;
+        m.buildMode = BuildMode_Read();
+        m.started = started;
+    }
+    LeaveCriticalSection(&g_queueLock);
+    return result;
+}
+
+bool RoadSync_InstallGroupToolHook()
+{
+    return InstallInlineHook(g_exeBase + GROUP_TOOL_RVA, (void*)HookedGroupTool, (void**)&g_origGroupTool,
+                             kGroupToolExpect, sizeof(kGroupToolExpect), "republicmp group tool");
+}
+
+static void SendGroupToolCaptures()
+{
+    RoadSyncGroupToolMsg captured[GROUP_CAPTURE_MAX];
+    EnterCriticalSection(&g_queueLock);
+    int n = g_groupCaptureCount;
+    memcpy(captured, g_groupCaptures, sizeof(RoadSyncGroupToolMsg) * n);
+    g_groupCaptureCount = 0;
+    LeaveCriticalSection(&g_queueLock);
+    for (int i = 0; i < n; i++) {
+        static RoadSyncItem s_item; // large - game thread only
+        memset(&s_item, 0, sizeof(s_item));
+        s_item.tag = ROAD_SYNC_WIRE_GROUP_TOOL;
+        s_item.group = captured[i];
+        s_item.group.terrainFence = TerrainSync_GetFenceSeq();
+        SendOrQueue(s_item);
+    }
+}
+
+static bool CallGroupTool(__int64 world, int mode)
+{
+    __try {
+        g_origGroupTool(world, mode);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// The menus are already closed by the caller's ReplayUiScope.
+static void ApplyGroupToolAndAck(const RoadSyncGroupToolMsg& m)
+{
+    __int64 world = GetWorldThisPtr();
+    if (!g_origGroupTool || m.mode < 0 || m.mode > 3) {
+        Logf("republicmp  ROAD_SYNC: group tool seq=%d mode %d - not applied", m.seq, m.mode);
+        SendAck(m.seq, m.category, false, 1);
+        return;
+    }
+    // All of it lives in the exe image (the world object is a global).
+    GroupToolState own, replay;
+    int before = CountPlannedPieces(world);
+    BuildMode mine = BuildMode_Read();
+    ReadGroupToolState(world, own);
+    memcpy(replay.box, m.box, sizeof(replay.box));
+    memcpy(replay.cursor, m.cursor, sizeof(replay.cursor));
+    replay.yaw = m.yaw;
+    replay.drag = 1;
+    replay.down = 0;
+    replay.press = 0;
+    WriteGroupToolState(world, replay);
+    BuildMode_Write(m.buildMode);
+    InterlockedIncrement(&g_applyingSegment);
+    TerrainSync_BeginForeignReplay();
+    bool ok = CallGroupTool(world, m.mode);
+    TerrainSync_EndForeignReplay();
+    InterlockedDecrement(&g_applyingSegment);
+    WriteGroupToolState(world, own); // this PC's own drag, cursor, camera and input
+    BuildMode_Write(mine);
+    int started = before - CountPlannedPieces(world);
+    char theirs[96];
+    Logf("republicmp  ROAD_SYNC: group tool seq=%d mode %d pay=%s - %s: %d planned piece(s) started here, %d on the sender%s",
+         m.seq, m.mode, BuildMode_Describe(m.buildMode, theirs, sizeof(theirs)), ok ? "applied" : "THREW",
+         started, m.started, ok && started != m.started ? " (DIFFERENT)" : "");
+    SendAck(m.seq, m.category, ok, 1);
+}
+
 void RoadSync_Tick()
 {
     FlushOutboundQueue();
+    SendPlanCaptures();
+    SendGroupToolCaptures();
 
     // Factory connection directions: only while connected and in the world
     // (the join screen and a fresh load would otherwise look like changes).
@@ -1970,6 +2391,10 @@ void RoadSync_Tick()
     // while the tool wrappers are blocked by UI - items stay queued.
     __int64 thisPtr = GetWorldThisPtr();
     ULONGLONG nowMs = GetTickCount64();
+    // A window or menu open on this PC no longer holds the other player's
+    // roads (replay_ui.h); the join screen still does.
+    if (SyncBlock_IsActive()) return;
+    ReplayUiScope replayUi;
     for (size_t i = 0; i < g_waitingDemolish.size();) {
         RoadSyncItem& item = g_waitingDemolish[i];
         if (nowMs < item.notBeforeMs || DetectSpawn_IsToolDragActive() || ToolWrapperGuardBusy(thisPtr)) {
@@ -1993,7 +2418,11 @@ void RoadSync_Tick()
             g_pending.insert(g_pending.begin(), toApply.begin() + i, toApply.end());
             break;
         }
-        if (toApply[i].tag == ROAD_SYNC_WIRE_DIRECTION)
+        if (toApply[i].tag == ROAD_SYNC_WIRE_PLAN_START)
+            ApplyPlanStartAndAck(toApply[i].plan);
+        else if (toApply[i].tag == ROAD_SYNC_WIRE_GROUP_TOOL)
+            ApplyGroupToolAndAck(toApply[i].group);
+        else if (toApply[i].tag == ROAD_SYNC_WIRE_DIRECTION)
             ApplyDirectionAndAck(toApply[i].dir);
         else if (toApply[i].tag == ROAD_SYNC_WIRE_UPGRADE)
             ApplyUpgradeAndAck(toApply[i].up);

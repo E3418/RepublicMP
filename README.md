@@ -149,6 +149,21 @@ reporting a problem, attach the logs of both players.
 
 ## Changelog
 
+### Unreleased
+
+- **Starting planned roads and rails** ("start construction" in the
+  construction menu, the construction window or the network tool panel)
+  now turns the same plans into construction sites on the other PC too;
+  before, they stayed white plans there (#20). The new sites take the
+  sender's construction mode (rubles, dollars or realistic, auto purchase),
+  not the receiver's. Protocol 18.
+- **Group construction tools** (the drag box that starts plans for rubles,
+  dollars or resources, and the one that suspends construction) now act on
+  the other PC too, with the same box (by SoylentGreed).
+- **Open windows** no longer hold the other player's buildings and roads:
+  a replay runs with the menus closed for its call and puts them back
+  after (#21, by TucKnock).
+
 ### 0.4.2
 
 The other player's camera no longer decides how a building or a road comes

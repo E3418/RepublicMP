@@ -253,12 +253,59 @@ struct RoadSyncDirectionMsg {
     int direction;              // segment+0x1bc
 };
 
+// "Start planned construction" (#20): drawn without starting, a road or rail
+// is a plan (edge +0x140 = 1) on both PCs; the construction menu, the
+// construction window and the network tool panel turn the plans into sites
+// with FUN_1405258e0(network, dollars, rubles, count, group) - every planned
+// edge of the network (count > 0: only among its last `count` edges; group
+// >= 0: only edges of that group, +0x124) - or FUN_140525c30, the same over
+// every group but `group`. That call travels as it is and the receiver makes
+// it on its own network: the same plans become sites there.
+struct RoadSyncPlanStartMsg {
+    int seq;
+    int terrainFence;
+    int category;
+    int exceptGroup; // 1 = FUN_140525c30
+    int dollars;
+    int rubles;
+    int count;
+    int group;
+    int started;     // plans the call started on the sender (for the log)
+    BuildMode mode;  // sender's build mode: each new site takes it (FUN_1402d9d40), replayed with it
+};
+
+// The group construction tools (group_build_rub = 0, group_build_usd = 1,
+// group_build_co = 2, group_suspend_const = 3): FUN_14021c110(world, mode),
+// called every frame one of them is selected. The first frame with the button
+// up (exe+0xa54e90) and a drag marked (world+0x14033) commits: the box
+// (world+0x13f5c..+0x13f70) turned by the camera yaw (exe+0x9e9d20) picks the
+// planned pieces of every network (full edge lists) and the buildings, and
+// starts (or suspends) their construction - no FUN_1405258e0 involved. That
+// frame's box, cursor, yaw and build mode travel; the receiver writes them,
+// makes the same call and puts its own back.
+// (by SoylentGreed: the commit frame and the state it reads)
+struct RoadSyncGroupToolMsg {
+    int seq;
+    int terrainFence;
+    int category;    // ROAD_SYNC_GROUP_TOOL_CATEGORY (for the ack log)
+    int mode;
+    float box[6];    // world+0x13f5c: the moving corner, then the press point
+    float cursor[3]; // world+0xf6c
+    float yaw;       // exe+0x9e9d20
+    BuildMode buildMode;
+    int started;     // planned pieces the call started on the sender (for the log)
+};
+
+#define ROAD_SYNC_GROUP_TOOL_CATEGORY (-2)
+
 // int32 tag sent before every payload on the connection.
 #define ROAD_SYNC_WIRE_SEGMENT 1 // RoadSyncMsg
 #define ROAD_SYNC_WIRE_ACK 2     // RoadSyncAckMsg
 #define ROAD_SYNC_WIRE_UPGRADE 3 // RoadSyncUpgradeMsg
 #define ROAD_SYNC_WIRE_DEMOLISH 4 // RoadSyncDemolishMsg
 #define ROAD_SYNC_WIRE_DIRECTION 5 // RoadSyncDirectionMsg
+#define ROAD_SYNC_WIRE_PLAN_START 6 // RoadSyncPlanStartMsg
+#define ROAD_SYNC_WIRE_GROUP_TOOL 7 // RoadSyncGroupToolMsg
 
 // Longest a received item waits for its terrain fence before it is applied
 // anyway (lost/reset terrain stream).
@@ -284,6 +331,14 @@ bool RoadSync_SegmentExists(const RoadSyncSegment& seg);
 // (+0x360 edge, +0x368 point, +0x370 node), the end from the hover globals
 // (0x9E4590 / 0x9E4598 / 0x9E45A0). Clears both links for other networks.
 void RoadSync_ReadFootpathLinks(__int64 manager, int category, RoadSyncSegment& seg);
+
+// Hooks FUN_1405258e0 / FUN_140525c30 (see RoadSyncPlanStartMsg). Call once
+// from TsmPluginStart.
+bool RoadSync_InstallPlanStartHooks();
+
+// Hooks FUN_14021c110 (see RoadSyncGroupToolMsg). Call once from
+// TsmPluginStart.
+bool RoadSync_InstallGroupToolHook();
 
 // Builds a path that a building laid as its own access road (sent on the
 // build_sync connection right after the building). Returns true if the

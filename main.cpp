@@ -87,6 +87,14 @@ extern "C" __declspec(dllexport) int TsmPluginStart(void)
     bool okDemolish = InstallDemolishHook();
     Logf("republicmp  demolish hook: %d%s", okDemolish, okDemolish ? "" : " - demolitions will NOT be synced");
 
+    bool okPlanStart = RoadSync_InstallPlanStartHooks();
+    Logf("republicmp  plan start hooks: %d%s", okPlanStart,
+         okPlanStart ? "" : " - starting planned roads/rails will NOT be synced");
+
+    bool okGroupTool = RoadSync_InstallGroupToolHook();
+    Logf("republicmp  group tool hook: %d%s", okGroupTool,
+         okGroupTool ? "" : " - the group construction tools will NOT be synced");
+
     bool okCollision = InstallPlacementCollisionHook();
     Logf("republicmp  placement collision hook: %d%s", okCollision,
          okCollision ? "" : " - access roads may take a different route on each PC");
