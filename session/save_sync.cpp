@@ -431,18 +431,33 @@ static void GenerateRandomSaveName(char* out, size_t outSize)
 }
 
 // The host's newest join save. Each join (and so each re-sync) writes a new
-// one; the one before it is deleted, so they do not pile up.
-static char g_prevHostSaveDir[MAX_PATH] = "";
+// one; every older one is deleted, so they do not pile up - also those left
+// by earlier runs of the game (one per run had stayed, ~150 MB each).
+static bool IsHostJoinSaveName(const std::string& name)
+{
+    const char* prefix = "mp_syncsave_";
+    if (name.size() != strlen(prefix) + 8 || name.compare(0, strlen(prefix), prefix) != 0) return false;
+    for (size_t i = strlen(prefix); i < name.size(); i++)
+        if (!isxdigit((unsigned char)name[i])) return false;
+    return true;
+}
 
 static void KeepOnlyNewestHostSave(const char* newSaveDir)
 {
-    if (g_prevHostSaveDir[0] && _stricmp(g_prevHostSaveDir, newSaveDir) != 0) {
-        std::error_code ec;
-        std::filesystem::remove_all(g_prevHostSaveDir, ec);
-        if (ec) Logf("republicmp  SESSION: couldn't delete the old join save [%s]: %s", g_prevHostSaveDir, ec.message().c_str());
-        else Logf("republicmp  SESSION: deleted the old join save [%s]", g_prevHostSaveDir);
+    std::error_code ec;
+    std::filesystem::path keep(newSaveDir);
+    std::filesystem::directory_iterator it(keep.parent_path(), ec), end;
+    int deleted = 0;
+    for (; !ec && it != end; it.increment(ec)) {
+        if (!it->is_directory(ec)) continue;
+        std::string name = it->path().filename().string();
+        if (!IsHostJoinSaveName(name) || _stricmp(name.c_str(), keep.filename().string().c_str()) == 0) continue;
+        std::error_code rm;
+        std::filesystem::remove_all(it->path(), rm);
+        if (rm) Logf("republicmp  SESSION: couldn't delete the old join save [%s]: %s", name.c_str(), rm.message().c_str());
+        else deleted++;
     }
-    strncpy_s(g_prevHostSaveDir, newSaveDir, _TRUNCATE);
+    if (deleted) Logf("republicmp  SESSION: deleted %d old join save(s)", deleted);
 }
 
 static void PeerIpOf(SOCKET sock, char* out, size_t outSize)
