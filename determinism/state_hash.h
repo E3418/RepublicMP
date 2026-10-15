@@ -30,6 +30,7 @@
 #pragma once
 
 #include "tesmio_plugin.h"
+#include <vector>
 
 struct StateSummary {
     int day, year;
@@ -54,3 +55,34 @@ bool StateHash_Compute(StateSummary* out);
 
 // Combined hash of all subsystems.
 unsigned long long StateHash_All(const StateSummary& s);
+
+// Per-object detail for the probe: what the subsystem hashes cover, one
+// record per list entry, so two runs can name the first objects that differ.
+#define RECORD_SLOTS 8
+struct BuildingRecord {
+    int index;              // +0x00
+    int category;           // type +0x360 (-1: no type)
+    float pos[3];           // +0x3a0
+    float progress;         // +0x604
+    float produced;         // +0xde4
+    int workers;            // +0xbc0 count
+    unsigned long long storage; // hash of the storage slots
+    int slots;              // storage slots (+0x970), up to RECORD_SLOTS described below
+    int slotEntries[RECORD_SLOTS];
+    float slotAmount[RECORD_SLOTS];
+};
+struct VehicleRecord {
+    int index;              // +0x04
+    float pos[3];           // +0xde0
+    unsigned long long cargo; // hash of the cargo entries
+};
+struct CitizenRecord {
+    int home;               // home building's index (-1: none)
+    float age;              // +0xd4
+    float pos[3];           // +0x620
+};
+
+// Game thread only. False if the world is not loaded or a read faulted.
+bool StateHash_BuildingRecords(std::vector<BuildingRecord>& out);
+bool StateHash_CitizenRecords(std::vector<CitizenRecord>& out);
+bool StateHash_VehicleRecords(std::vector<VehicleRecord>& out);

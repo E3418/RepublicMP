@@ -14,6 +14,8 @@
 #include "../game/input_block.h"
 #include "../determinism/state_hash.h"
 #include "../determinism/determinism.h"
+#include "../determinism/det_patches.h"
+#include "../determinism/probe_trace.h"
 #include "../save/save_zip.h"
 #include "../transport/network.h"
 #include "../session/save_sync.h"
@@ -56,6 +58,8 @@ extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPlugi
     InputBlock_Bind(host);
     StateHash_Bind(host);
     Determinism_Bind(host);
+    DetPatches_Bind(host);
+    ProbeTrace_Bind(host);
     SyncCheck_Bind(host);
     Weather_Bind(host);
     SettingsSync_Bind(host);
@@ -105,6 +109,7 @@ extern "C" __declspec(dllexport) int TsmPluginStart(void)
     // Fixed timer, call-site random numbers, pinned math - inactive until used.
     bool okDeterminism = Determinism_Install();
     Logf("republicmp  determinism layer: %d%s", okDeterminism, okDeterminism ? "" : " - the determinism probe is unavailable");
+    DetPatches_Install();
     SyncCheck_Install();
     Weather_Install();
 

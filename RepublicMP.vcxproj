@@ -181,6 +181,8 @@
     <ClCompile Include="session\game_speed.cpp" />
     <ClCompile Include="determinism\state_hash.cpp" />
     <ClCompile Include="determinism\determinism.cpp" />
+    <ClCompile Include="determinism\det_patches.cpp" />
+    <ClCompile Include="determinism\probe_trace.cpp" />
     <ClCompile Include="session\sync_check.cpp" />
     <ClCompile Include="session\money.cpp" />
     <ClCompile Include="session\settings_sync.cpp" />
@@ -226,6 +228,8 @@
     <ClInclude Include="session\game_speed.h" />
     <ClInclude Include="determinism\state_hash.h" />
     <ClInclude Include="determinism\determinism.h" />
+    <ClInclude Include="determinism\det_patches.h" />
+    <ClInclude Include="determinism\probe_trace.h" />
     <ClInclude Include="session\sync_check.h" />
     <ClInclude Include="session\money.h" />
     <ClInclude Include="session\settings_sync.h" />

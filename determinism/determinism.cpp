@@ -1,6 +1,8 @@
 // See determinism.h.
 #include "determinism.h"
 #include "state_hash.h"
+#include "det_patches.h"
+#include "probe_trace.h"
 #include "../game/save_load.h"
 #include "../session/game_speed.h"
 #include "../session/save_sync.h" // SaveSync_IsBusy - no probe during a session
@@ -51,6 +53,34 @@ static volatile unsigned long long g_stepCount = 0;
 static StepObserverFn g_stepObservers[DETERMINISM_MAX_OBSERVERS] = {};
 static int g_stepObserverCount = 0;
 static bool g_mathRedirected = false;
+// For the probe: the simulation thread's draws inside Early in this epoch
+// (count and a hash of site and value) - a split shows here first. The
+// rest of the main thread's frame (camera, tools, interface) is left out.
+static volatile DWORD g_simThread = 0;
+static volatile bool g_inEarly = false;
+static unsigned long long g_simDraws = 0, g_simDrawHash = 0;
+// Set while the main thread waits for the early worker inside Early: the
+// worker's draws then go to the probe's ledger too.
+static volatile bool g_workerPhase = false;
+static void LedgerDraw(unsigned site, int value, bool worker);
+
+// Game call sites whose numbers only feed sound and visuals and run for what
+// the camera sees or hears (vehicle sounds, electric wire sparks, vehicle
+// animation starts, ambient sounds): each has its own stream here, so they
+// shift nothing else, and the probe leaves them out of its counts.
+// (by SoylentGreed)
+static const unsigned kPresentationSites[] = {
+    0x6A3B75, 0x6A4B83, 0x6A5164, 0x6AAC3B, // vehicle sounds
+    0x699AB7, 0x6A7686,                     // electric wire sparks
+    0x66DA63, 0x66FCE0, 0x6701A0,           // vehicle animation starts
+    0x13D748, 0x13D7DE,                     // ambient sounds
+};
+static bool IsPresentationSite(unsigned site)
+{
+    for (unsigned s : kPresentationSites)
+        if (s == site) return true;
+    return false;
+}
 
 // ---------------------------------------------------------------------------
 // Call-site generator
@@ -82,7 +112,17 @@ static int SiteRand(void* returnAddress)
     }
     unsigned n = t_sites->calls[site]++;
     unsigned long long x = SplitMix(g_seed ^ ((unsigned long long)site << 32) ^ n);
-    return (int)((x >> 33) & 0x7FFF);
+    int value = (int)((x >> 33) & 0x7FFF);
+    if (g_inEarly && !IsPresentationSite(site)) {
+        if (GetCurrentThreadId() == g_simThread) {
+            g_simDraws++;
+            g_simDrawHash = (g_simDrawHash ^ (((unsigned long long)site << 32) | (unsigned)value)) * 1099511628211ull;
+            LedgerDraw(site, value, false);
+        } else if (g_workerPhase) {
+            LedgerDraw(site, value, true);
+        }
+    }
+    return value;
 }
 
 typedef int (__cdecl* RandFn)(void);
@@ -219,7 +259,9 @@ static BOOL WINAPI H_setEvent(HANDLE h)
         BYTE* obj = *(BYTE**)(g_exeBase + FILLING_OBJ_RVA);
         if (obj && h == *(HANDLE*)(obj + FILLING_START_EVENT_OFFSET)) {
             volatile BYTE* done = obj + FILLING_DONE_OFFSET;
+            g_workerPhase = true;
             while (!*done) YieldProcessor();
+            g_workerPhase = false;
         }
     }
     return r;
@@ -297,9 +339,189 @@ static unsigned long long g_runStep = 0;
 struct ProbeSample {
     unsigned long long step;
     StateSummary s;
+    unsigned long long draws, drawHash; // the simulation thread's random numbers so far
+    int population;                     // world+0xc720
 };
 static ProbeSample g_samples[2][PROBE_MAX_SAMPLES];
 static int g_sampleCount[2];
+
+// Run 1 keeps every building and citizen at every sample (within a memory
+// budget); run 2 compares its own at the same sample and logs the first
+// objects that differ - which building, which field, both values.
+#define PROBE_DETAIL_BUDGET (256ull << 20)
+#define PROBE_DETAIL_LINES 12
+static std::vector<std::vector<BuildingRecord>> g_detailBuildings;
+static std::vector<std::vector<CitizenRecord>> g_detailCitizens;
+static std::vector<std::vector<VehicleRecord>> g_detailVehicles;
+static unsigned long long g_detailBytes = 0;
+static bool g_detailFull = false, g_reportedBuildings = false, g_reportedCitizens = false, g_reportedVehicles = false;
+
+static bool SameFloat(float a, float b) { return memcmp(&a, &b, 4) == 0; }
+
+static void CompareBuildings(int sample, const std::vector<BuildingRecord>& a, const std::vector<BuildingRecord>& b)
+{
+    if (g_reportedBuildings) return;
+    size_t n = a.size() < b.size() ? a.size() : b.size();
+    int lines = 0;
+    for (size_t i = 0; i < n && lines < PROBE_DETAIL_LINES; i++) {
+        const BuildingRecord& x = a[i];
+        const BuildingRecord& y = b[i];
+        bool same = x.index == y.index && x.category == y.category && memcmp(x.pos, y.pos, 12) == 0 &&
+                    SameFloat(x.progress, y.progress) && SameFloat(x.produced, y.produced) && x.workers == y.workers &&
+                    x.storage == y.storage;
+        if (same) continue;
+        if (!lines)
+            Logf("republicmp  PROBE: buildings first differ at step %llu (sample %d), %zu/%zu listed - run 1 / run 2:",
+                 g_samples[0][sample].step, sample + 1, a.size(), b.size());
+        Logf("republicmp  PROBE:   #%zu index %d/%d category %d at (%.2f,%.2f,%.2f): progress %.6f/%.6f produced %.6f/%.6f "
+             "workers %d/%d storage %s", i, x.index, y.index, x.category, x.pos[0], x.pos[1], x.pos[2], x.progress,
+             y.progress, x.produced, y.produced, x.workers, y.workers, x.storage == y.storage ? "same" : "DIFFERENT");
+        if (x.storage != y.storage) {
+            int ns = x.slots > y.slots ? x.slots : y.slots;
+            for (int s = 0; s < ns && s < RECORD_SLOTS; s++)
+                if (x.slotEntries[s] != y.slotEntries[s] || !SameFloat(x.slotAmount[s], y.slotAmount[s]))
+                    Logf("republicmp  PROBE:     storage slot %d: %d/%d entries, amount %.6f/%.6f", s, x.slotEntries[s],
+                         y.slotEntries[s], x.slotAmount[s], y.slotAmount[s]);
+        }
+        lines++;
+    }
+    if (lines || a.size() != b.size()) {
+        if (!lines) Logf("republicmp  PROBE: buildings first differ at step %llu: %zu/%zu listed", g_samples[0][sample].step,
+                         a.size(), b.size());
+        g_reportedBuildings = true;
+    }
+}
+
+static void CompareCitizens(int sample, const std::vector<CitizenRecord>& a, const std::vector<CitizenRecord>& b)
+{
+    if (g_reportedCitizens) return;
+    size_t n = a.size() < b.size() ? a.size() : b.size();
+    int lines = 0;
+    for (size_t i = 0; i < n && lines < PROBE_DETAIL_LINES; i++) {
+        const CitizenRecord& x = a[i];
+        const CitizenRecord& y = b[i];
+        if (x.home == y.home && SameFloat(x.age, y.age) && memcmp(x.pos, y.pos, 12) == 0) continue;
+        if (!lines)
+            Logf("republicmp  PROBE: citizens first differ at step %llu (sample %d), %zu/%zu listed - run 1 / run 2:",
+                 g_samples[0][sample].step, sample + 1, a.size(), b.size());
+        Logf("republicmp  PROBE:   #%zu home %d/%d age %.6f/%.6f at (%.2f,%.2f,%.2f)/(%.2f,%.2f,%.2f)", i, x.home, y.home,
+             x.age, y.age, x.pos[0], x.pos[1], x.pos[2], y.pos[0], y.pos[1], y.pos[2]);
+        lines++;
+    }
+    if (lines || a.size() != b.size()) {
+        if (!lines) Logf("republicmp  PROBE: citizens first differ at step %llu: %zu/%zu listed", g_samples[0][sample].step,
+                         a.size(), b.size());
+        g_reportedCitizens = true;
+    }
+}
+
+static void CompareVehicles(int sample, const std::vector<VehicleRecord>& a, const std::vector<VehicleRecord>& b)
+{
+    if (g_reportedVehicles) return;
+    size_t n = a.size() < b.size() ? a.size() : b.size();
+    int lines = 0;
+    for (size_t i = 0; i < n && lines < PROBE_DETAIL_LINES; i++) {
+        const VehicleRecord& x = a[i];
+        const VehicleRecord& y = b[i];
+        if (x.index == y.index && memcmp(x.pos, y.pos, 12) == 0 && x.cargo == y.cargo) continue;
+        if (!lines)
+            Logf("republicmp  PROBE: vehicles first differ at step %llu (sample %d), %zu/%zu listed - run 1 / run 2:",
+                 g_samples[0][sample].step, sample + 1, a.size(), b.size());
+        Logf("republicmp  PROBE:   #%zu vehicle %d/%d at (%.3f,%.3f,%.3f)/(%.3f,%.3f,%.3f) cargo %s", i, x.index, y.index,
+             x.pos[0], x.pos[1], x.pos[2], y.pos[0], y.pos[1], y.pos[2], x.cargo == y.cargo ? "same" : "DIFFERENT");
+        lines++;
+    }
+    if (lines || a.size() != b.size()) {
+        if (!lines) Logf("republicmp  PROBE: vehicles first differ at step %llu: %zu/%zu listed", g_samples[0][sample].step,
+                         a.size(), b.size());
+        g_reportedVehicles = true;
+    }
+}
+
+// Main thread, at a sample.
+static void RecordDetail(int run, int sample)
+{
+    std::vector<BuildingRecord> buildings;
+    std::vector<CitizenRecord> citizens;
+    std::vector<VehicleRecord> vehicles;
+    if (!StateHash_BuildingRecords(buildings) || !StateHash_CitizenRecords(citizens) ||
+        !StateHash_VehicleRecords(vehicles))
+        return;
+    if (run == 0) {
+        if (g_detailFull) return;
+        g_detailBytes += buildings.size() * sizeof(BuildingRecord) + citizens.size() * sizeof(CitizenRecord) +
+                         vehicles.size() * sizeof(VehicleRecord);
+        if (g_detailBytes > PROBE_DETAIL_BUDGET) {
+            g_detailFull = true;
+            Logf("republicmp  PROBE: per-object detail kept for the first %d samples only (memory budget)", sample);
+            return;
+        }
+        g_detailBuildings.push_back(std::move(buildings));
+        g_detailCitizens.push_back(std::move(citizens));
+        g_detailVehicles.push_back(std::move(vehicles));
+        return;
+    }
+    if (sample >= (int)g_detailBuildings.size()) return;
+    CompareBuildings(sample, g_detailBuildings[sample], buildings);
+    CompareCitizens(sample, g_detailCitizens[sample], citizens);
+    CompareVehicles(sample, g_detailVehicles[sample], vehicles);
+}
+
+// Every random number drawn inside Early (main thread and early worker), in
+// order: run 1 records them, run 2 checks each against run 1's as it is
+// drawn and logs the first that differs - its step, the game's call site
+// (exe RVA of the return address) and the draws before it.
+struct LedgerEntry {
+    unsigned step;
+    unsigned site;
+    unsigned short value;
+    unsigned char worker;
+    unsigned char pad;
+};
+#define PROBE_LEDGER_MAX 4000000
+static std::vector<LedgerEntry> g_ledger;
+static size_t g_ledgerPos = 0;
+static bool g_ledgerReported = false, g_ledgerFull = false;
+static SRWLOCK g_ledgerLock = SRWLOCK_INIT;
+
+static void LedgerDraw(unsigned site, int value, bool worker)
+{
+    if (g_probeState != PROBE_RUNNING) return;
+    LedgerEntry e = { (unsigned)g_runStep, site, (unsigned short)value, (unsigned char)(worker ? 1 : 0), 0 };
+    AcquireSRWLockExclusive(&g_ledgerLock);
+    if (g_probeRun == 0) {
+        if (g_ledger.size() < PROBE_LEDGER_MAX) g_ledger.push_back(e);
+        else g_ledgerFull = true;
+    } else if (!g_ledgerReported && g_ledgerPos < g_ledger.size()) {
+        const LedgerEntry& r = g_ledger[g_ledgerPos];
+        if (r.step != e.step || r.site != e.site || r.value != e.value || r.worker != e.worker) {
+            g_ledgerReported = true;
+            Logf("republicmp  PROBE: random numbers first differ at draw %zu: run 1 step %u site exe+0x%X value %u %s | "
+                 "run 2 step %u site exe+0x%X value %u %s", g_ledgerPos, r.step, r.site, r.value, r.worker ? "worker" : "main",
+                 e.step, e.site, e.value, e.worker ? "worker" : "main");
+            size_t from = g_ledgerPos > 8 ? g_ledgerPos - 8 : 0;
+            for (size_t i = from; i < g_ledgerPos; i++)
+                Logf("republicmp  PROBE:   before it: draw %zu step %u site exe+0x%X value %u %s", i, g_ledger[i].step,
+                     g_ledger[i].site, g_ledger[i].value, g_ledger[i].worker ? "worker" : "main");
+        } else {
+            g_ledgerPos++;
+        }
+    }
+    ReleaseSRWLockExclusive(&g_ledgerLock);
+}
+
+static void ResetDetail()
+{
+    std::vector<LedgerEntry>().swap(g_ledger);
+    g_ledgerPos = 0;
+    g_ledgerReported = g_ledgerFull = false;
+    std::vector<std::vector<BuildingRecord>>().swap(g_detailBuildings);
+    std::vector<std::vector<CitizenRecord>>().swap(g_detailCitizens);
+    std::vector<std::vector<VehicleRecord>>().swap(g_detailVehicles);
+    g_detailBytes = 0;
+    g_detailFull = g_reportedBuildings = g_reportedCitizens = g_reportedVehicles = false;
+    ProbeTrace_Reset();
+}
 
 static CRITICAL_SECTION g_statusLock;
 static char g_probeStatus[320] = "not run yet";
@@ -317,17 +539,116 @@ static void SetProbeStatus(const char* fmt, ...)
     Logf("republicmp  PROBE: %s", body);
 }
 
+// Frame counters the simulation steps by that live outside the world and
+// outside the save, and are never reset: a load starts from whatever the
+// frames before it left. The building pass updates a third of the
+// buildings per pass by exe+0x9962a8 mod 3 (13cb52 inc, 13dbdb read); Early
+// updates one of three agent buckets per frame by exe+0x9963f0 (30cd1e..).
+// Two loads of the same save (two PCs) then step different buildings and
+// agents from the first frame. A probe run starts both at 0.
+static const unsigned int kFrameCounters[] = { 0x9962A8, 0x9963F0 };
+
+// The exe's writable section (.data), compared between the two runs right
+// after the load: whatever differs there is state the save does not restore.
+#define DATA_RVA 0x992000
+#define DATA_SIZE 0xC4718
+#define DATA_DIFF_LINES 150
+#define DATA_DIFF_LINES_REST 40
+#define WORLD_RVA_PROBE 0x9D4F10
+#define WORLD_SIZE_PROBE 0x15000 // up to +0x14d38 and a little beyond
+static std::vector<BYTE> g_dataSnapshot;
+
+// A qword that looks like a user-mode heap pointer (each load allocates anew,
+// so pointers always differ - not state the simulation compares).
+static bool PointerLike(unsigned long long q)
+{
+    unsigned hi = (unsigned)(q >> 32);
+    return hi >= 0x1 && hi <= 0x7fff && (unsigned)q != 0;
+}
+
+struct DataDiffTotals {
+    int ranges, pointers, lines;
+    size_t bytes;
+};
+
+// Differing non-pointer qword runs of .data in [from, to), logged up to maxLines.
+static void ScanData(size_t from, size_t to, int maxLines, DataDiffTotals& t)
+{
+    const BYTE* now = g_exeBase + DATA_RVA;
+    const BYTE* was = g_dataSnapshot.data();
+    int lines = 0;
+    for (size_t i = from; i + 8 <= to;) {
+        unsigned long long a = *(const unsigned long long*)(was + i), b = *(const unsigned long long*)(now + i);
+        if (a == b) { i += 8; continue; }
+        if (PointerLike(a) && PointerLike(b)) { t.pointers++; i += 8; continue; }
+        size_t start = i;
+        i += 8;
+        while (i + 8 <= to) { // the run of differing, non-pointer qwords
+            unsigned long long x = *(const unsigned long long*)(was + i), y = *(const unsigned long long*)(now + i);
+            if (x == y || (PointerLike(x) && PointerLike(y))) break;
+            i += 8;
+        }
+        size_t len = i - start;
+        t.ranges++;
+        t.bytes += len;
+        if (lines < maxLines) {
+            char ha[3 * 16 + 1] = "", hb[3 * 16 + 1] = "";
+            for (size_t k = 0; k < len && k < 16; k++) {
+                _snprintf_s(ha + 3 * k, 4, _TRUNCATE, "%02x ", was[start + k]);
+                _snprintf_s(hb + 3 * k, 4, _TRUNCATE, "%02x ", now[start + k]);
+            }
+            unsigned rva = (unsigned)(DATA_RVA + start);
+            char where[32];
+            if (rva >= WORLD_RVA_PROBE && rva < WORLD_RVA_PROBE + WORLD_SIZE_PROBE)
+                _snprintf_s(where, sizeof(where), _TRUNCATE, "world+0x%X", rva - WORLD_RVA_PROBE);
+            else
+                _snprintf_s(where, sizeof(where), _TRUNCATE, "exe+0x%X", rva);
+            Logf("republicmp  PROBE:   .data %s (%zu bytes): run 1 %s| run 2 %s", where, len, ha, hb);
+            lines++;
+            t.lines++;
+        }
+    }
+}
+
+// The world object first (that is what the save restores), then the rest.
+static void CompareData()
+{
+    const size_t worldFrom = WORLD_RVA_PROBE - DATA_RVA, worldTo = worldFrom + WORLD_SIZE_PROBE;
+    DataDiffTotals world = {}, rest = {};
+    ScanData(worldFrom, worldTo, DATA_DIFF_LINES, world);
+    Logf("republicmp  PROBE: right after the load, the world object differs between the runs in %d range(s) / %zu byte(s), "
+         "besides %d heap pointer(s)", world.ranges, world.bytes, world.pointers);
+    ScanData(0, worldFrom, DATA_DIFF_LINES_REST, rest);
+    ScanData(worldTo, DATA_SIZE, DATA_DIFF_LINES_REST - rest.lines, rest);
+    Logf("republicmp  PROBE: the rest of .data differs in %d range(s) / %zu byte(s), besides %d heap pointer(s)%s",
+         rest.ranges, rest.bytes, rest.pointers, rest.ranges > rest.lines ? " (first ones listed above)" : "");
+}
+
 static void HookedLoadWorld(void)
 {
     // A probe run starts its generator epoch exactly at the load, so the
     // random numbers the load itself draws are the same in both runs.
     if (g_probeState == PROBE_WAIT_LOAD) {
+        DetPatches_Apply(); // main thread, nothing simulating: both runs start with them
         Determinism_Restart();
+        g_simDraws = 0;
+        g_simDrawHash = 1469598103934665603ull;
         g_runStep = 0;
+        for (unsigned int rva : kFrameCounters) {
+            Logf("republicmp  PROBE: frame counter exe+0x%X was %d - set to 0", rva, *(int*)(g_exeBase + rva));
+            *(int*)(g_exeBase + rva) = 0;
+        }
     }
     o_loadWorld();
     if (g_probeState == PROBE_WAIT_LOAD) {
         g_runStep = 0;
+        WriteGameSpeed(g_probeSpeed); // the first step already at the probe's speed
+        if (g_probeRun == 0) {
+            g_dataSnapshot.assign(g_exeBase + DATA_RVA, g_exeBase + DATA_RVA + DATA_SIZE);
+        } else if (g_dataSnapshot.size() == DATA_SIZE) {
+            CompareData();
+            std::vector<BYTE>().swap(g_dataSnapshot);
+        }
         InterlockedExchange(&g_probeState, PROBE_RUNNING);
     }
 }
@@ -338,18 +659,28 @@ static void RecordSample()
     if (g_sampleCount[run] >= PROBE_MAX_SAMPLES) return;
     ProbeSample& p = g_samples[run][g_sampleCount[run]];
     p.step = g_runStep;
-    if (StateHash_Compute(&p.s)) g_sampleCount[run]++;
+    p.draws = g_simDraws;
+    p.drawHash = g_simDrawHash;
+    p.population = DetPatches_LastPopulation();
+    if (!StateHash_Compute(&p.s)) return;
+    RecordDetail(run, g_sampleCount[run]);
+    g_sampleCount[run]++;
 }
 
 static void HookedSimStep(__int64 world)
 {
+    g_simThread = GetCurrentThreadId();
+    DetPatches_BeforeEarly(world);
+    g_inEarly = true;
     o_simStep(world);
+    g_inEarly = false;
     for (int i = 0; i < g_stepObserverCount; i++) g_stepObservers[i](); // also without the layer
     if (!g_active) return;
     g_stepCount++;
     if (g_probeState == PROBE_RUNNING) {
         if (g_runStep == 0) WriteGameSpeed(g_probeSpeed); // same speed in both runs from here on
         g_runStep++;
+        ProbeTrace_Step(g_probeRun, g_runStep);
         if (g_runStep % g_probeInterval == 0) RecordSample();
         if (g_runStep >= (unsigned long long)g_probeSteps) {
             WriteGameSpeed(0);
@@ -427,13 +758,14 @@ static void WriteRunLog(int run)
     _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\republicmp_probe_run%d.txt", dir, run + 1);
     FILE* f = nullptr;
     if (fopen_s(&f, path, "w") != 0 || !f) return;
-    fprintf(f, "step day year progress buildings vehicles citizens storage cargo production clock bld veh cit\n");
+    fprintf(f, "step day year progress buildings vehicles citizens storage cargo production clock bld veh cit "
+               "draws drawhash population\n");
     for (int i = 0; i < g_sampleCount[run]; i++) {
         const ProbeSample& p = g_samples[run][i];
-        fprintf(f, "%llu %d %d %.6f %d %d %d %.3f %.3f %.3f %016llx %016llx %016llx %016llx\n", p.step, p.s.day,
-                p.s.year, p.s.dayProgress, p.s.buildings, p.s.vehicles, p.s.citizens, p.s.storageTotal,
+        fprintf(f, "%llu %d %d %.6f %d %d %d %.3f %.3f %.3f %016llx %016llx %016llx %016llx %llu %016llx %d\n", p.step,
+                p.s.day, p.s.year, p.s.dayProgress, p.s.buildings, p.s.vehicles, p.s.citizens, p.s.storageTotal,
                 p.s.cargoTotal, p.s.productionTotal, p.s.hashClock, p.s.hashBuildings, p.s.hashVehicles,
-                p.s.hashCitizens);
+                p.s.hashCitizens, p.draws, p.drawHash, p.population);
     }
     fclose(f);
 }
@@ -444,15 +776,20 @@ static void CompareRuns()
     for (int i = 0; i < n; i++) {
         const StateSummary& a = g_samples[0][i].s;
         const StateSummary& b = g_samples[1][i].s;
-        if (StateHash_All(a) == StateHash_All(b)) continue;
-        char parts[96] = "";
+        const ProbeSample& pa = g_samples[0][i];
+        const ProbeSample& pb = g_samples[1][i];
+        bool drawsSame = pa.draws == pb.draws && pa.drawHash == pb.drawHash;
+        if (StateHash_All(a) == StateHash_All(b) && drawsSame && pa.population == pb.population) continue;
+        char parts[128] = "";
+        if (!drawsSame) strcat_s(parts, "random numbers ");
+        if (pa.population != pb.population) strcat_s(parts, "population ");
         if (a.hashClock != b.hashClock) strcat_s(parts, "clock/money ");
         if (a.hashBuildings != b.hashBuildings) strcat_s(parts, "buildings ");
         if (a.hashVehicles != b.hashVehicles) strcat_s(parts, "vehicles ");
         if (a.hashCitizens != b.hashCitizens) strcat_s(parts, "citizens ");
-        SetProbeStatus("DIFFERENT from step %llu (sample %d/%d): %s- vehicles %d/%d, citizens %d/%d, storage %.1f/%.1f",
-                       g_samples[0][i].step, i + 1, n, parts, a.vehicles, b.vehicles, a.citizens, b.citizens,
-                       a.storageTotal, b.storageTotal);
+        SetProbeStatus("DIFFERENT from step %llu (sample %d/%d): %s- draws %llu/%llu, vehicles %d/%d, citizens %d/%d, "
+                       "storage %.1f/%.1f", g_samples[0][i].step, i + 1, n, parts, pa.draws, pb.draws, a.vehicles,
+                       b.vehicles, a.citizens, b.citizens, a.storageTotal, b.storageTotal);
         return;
     }
     if (n == 0) SetProbeStatus("no samples recorded - was the world loaded?");
@@ -482,6 +819,7 @@ static DWORD WINAPI ProbeThread(LPVOID)
         // world+0xC turns on a pass sorted by distance to the local camera
         // (FUN_1400f7930 from FUN_140139a70) - worth knowing if runs differ.
         Logf("republicmp  PROBE: world+0xC = %d", (int)*(BYTE*)(g_exeBase + 0x9D4F10 + 0xC));
+        ResetDetail();
         Determinism_SetActive(true, PROBE_SEED);
         bool failed = false;
         for (g_probeRun = 0; g_probeRun < 2 && !failed; g_probeRun++) {
@@ -501,7 +839,11 @@ static DWORD WINAPI ProbeThread(LPVOID)
         }
         InterlockedExchange(&g_probeState, PROBE_IDLE);
         Determinism_SetActive(false, 0);
-        if (!failed) CompareRuns();
+        if (!failed) {
+            CompareRuns();
+            ProbeTrace_Finish();
+        }
+        ResetDetail();
     } while (false);
     InterlockedExchange(&g_probeState, PROBE_IDLE);
     if (g_active) Determinism_SetActive(false, 0);

@@ -143,12 +143,136 @@ bool StateHash_Compute(StateSummary* out)
             float age = *(float*)(c + CIT_AGE_OFFSET);
             MixFloat(out->hashCitizens, age);
             out->ageTotal += age;
-            Mix(out->hashCitizens, c + CIT_POS_OFFSET, 12);
+            // A citizen without a home, or just born, is not placed yet: its
+            // position bytes are whatever the heap held (the object is not
+            // zeroed when made).
+            if (home && age > 0.0f) Mix(out->hashCitizens, c + CIT_POS_OFFSET, 12);
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// Per-object records (probe)
+// ---------------------------------------------------------------------------
+
+#define BLD_TYPE_OFFSET 0x318
+#define BLD_POS_OFFSET 0x3A0
+#define TYPE_CATEGORY_OFFSET 0x360
+
+static long long ListCount(int listOffset)
+{
+    __try {
+        return Count(g_exeBase + WORLD_RVA + listOffset, 8);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return -1;
+    }
+}
+
+static bool FillBuildings(BuildingRecord* out, long long n)
+{
+    __try {
+        BYTE** bl = *(BYTE***)(g_exeBase + WORLD_RVA + WORLD_BUILDINGS_OFFSET);
+        for (long long i = 0; i < n; i++) {
+            BuildingRecord& r = out[i];
+            memset(&r, 0, sizeof(r));
+            BYTE* b = bl[i];
+            if (!b) { r.index = -1; r.category = -2; continue; }
+            r.index = *(int*)(b + BLD_INDEX_OFFSET);
+            BYTE* type = *(BYTE**)(b + BLD_TYPE_OFFSET);
+            r.category = type ? *(int*)(type + TYPE_CATEGORY_OFFSET) : -1;
+            memcpy(r.pos, b + BLD_POS_OFFSET, 12);
+            r.progress = *(float*)(b + BLD_PROGRESS_OFFSET);
+            r.produced = *(float*)(b + BLD_PRODUCED_OFFSET);
+            r.workers = (int)Count(b + BLD_WORKERS_OFFSET, 8);
+            unsigned long long h = 0xcbf29ce484222325ull;
+            double unused = 0;
+            BYTE* slots = *(BYTE**)(b + BLD_STORAGE_OFFSET);
+            long long ns = Count(b + BLD_STORAGE_OFFSET, BLD_STORAGE_SLOT_SIZE);
+            if (ns > 64) ns = 64;
+            for (long long s = 0; s < ns; s++) {
+                double amount = 0;
+                MixEntries(h, slots + s * BLD_STORAGE_SLOT_SIZE, amount);
+                if (s < RECORD_SLOTS) {
+                    r.slotEntries[s] = (int)Count(slots + s * BLD_STORAGE_SLOT_SIZE, ENTRY_SIZE);
+                    r.slotAmount[s] = (float)amount;
+                }
+            }
+            r.slots = (int)ns;
+            r.storage = h;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+    return true;
+}
+
+static bool FillCitizens(CitizenRecord* out, long long n)
+{
+    __try {
+        BYTE** cl = *(BYTE***)(g_exeBase + WORLD_RVA + WORLD_CITIZENS_OFFSET);
+        for (long long i = 0; i < n; i++) {
+            CitizenRecord& r = out[i];
+            memset(&r, 0, sizeof(r));
+            BYTE* c = cl[i];
+            if (!c) { r.home = -2; continue; }
+            BYTE* home = *(BYTE**)(c + CIT_HOME_OFFSET);
+            r.home = home ? *(int*)(home + BLD_INDEX_OFFSET) : -1;
+            r.age = *(float*)(c + CIT_AGE_OFFSET);
+            if (home && r.age > 0.0f) memcpy(r.pos, c + CIT_POS_OFFSET, 12); // not placed yet: left 0
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+    return true;
+}
+
+static bool FillVehicles(VehicleRecord* out, long long n)
+{
+    __try {
+        BYTE** vl = *(BYTE***)(g_exeBase + WORLD_RVA + WORLD_VEHICLES_OFFSET);
+        for (long long i = 0; i < n; i++) {
+            VehicleRecord& r = out[i];
+            memset(&r, 0, sizeof(r));
+            BYTE* v = vl[i];
+            if (!v) { r.index = -1; continue; }
+            r.index = *(int*)(v + VEH_INDEX_OFFSET);
+            memcpy(r.pos, v + VEH_POS_OFFSET, 12);
+            unsigned long long h = 0xcbf29ce484222325ull;
+            double unused = 0;
+            MixEntries(h, v + VEH_CARGO_OFFSET, unused);
+            r.cargo = h;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+    return true;
+}
+
+bool StateHash_VehicleRecords(std::vector<VehicleRecord>& out)
+{
+    long long n = ListCount(WORLD_VEHICLES_OFFSET);
+    if (n < 0) return false;
+    out.resize((size_t)n);
+    return n == 0 || FillVehicles(out.data(), n);
+}
+
+bool StateHash_BuildingRecords(std::vector<BuildingRecord>& out)
+{
+    long long n = ListCount(WORLD_BUILDINGS_OFFSET);
+    if (n < 0) return false;
+    out.resize((size_t)n);
+    return n == 0 || FillBuildings(out.data(), n);
+}
+
+bool StateHash_CitizenRecords(std::vector<CitizenRecord>& out)
+{
+    long long n = ListCount(WORLD_CITIZENS_OFFSET);
+    if (n < 0) return false;
+    out.resize((size_t)n);
+    return n == 0 || FillCitizens(out.data(), n);
 }
 
 unsigned long long StateHash_All(const StateSummary& s)

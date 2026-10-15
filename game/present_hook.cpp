@@ -7,6 +7,7 @@
 #include "../world_sync/terrain/terrain_hook.h"
 #include "../world_sync/buildings/demolish_hook.h"
 #include "session_patches.h"
+#include "../determinism/det_patches.h"
 #include "input_block.h"
 #include "../world_sync/buildings/build_sync.h"
 #include "../world_sync/networks/road_sync.h"
@@ -78,6 +79,7 @@ static HRESULT PresentFrame(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
 {
     g_presentCallCount++;
     SessionPatches_Tick(); // camera/frame-rate patches while connected (see session_patches.h)
+    DetPatches_Tick();     // determinism patches back once the probe ends (see det_patches.h)
     InputBlock_Tick();  // keep the game's mouse-button bytes clear while the join screen is up
     TerrainHook_Tick(); // flush last frame's terrain-edit log, F8 verbose toggle
     TerrainSync_Tick(); // send this frame's terrain edits, apply received ones (before roads/buildings)
