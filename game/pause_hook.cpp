@@ -29,7 +29,7 @@ static void HookedTimerStart(void* thisPtr)
 {
     void* caller = _ReturnAddress();
     g_startCount++;
-    Logf("wrsr_mp  PAUSE: C3D_TIMER::Start this=%p callerRVA=0x%llX (call #%lld)",
+    Logf("republicmp  PAUSE: C3D_TIMER::Start this=%p callerRVA=0x%llX (call #%lld)",
          thisPtr, CallerRva(caller), g_startCount);
     g_origStart(thisPtr);
 }
@@ -38,7 +38,7 @@ static void HookedTimerStop(void* thisPtr)
 {
     void* caller = _ReturnAddress();
     g_stopCount++;
-    Logf("wrsr_mp  PAUSE: C3D_TIMER::Stop this=%p callerRVA=0x%llX (call #%lld)",
+    Logf("republicmp  PAUSE: C3D_TIMER::Stop this=%p callerRVA=0x%llX (call #%lld)",
          thisPtr, CallerRva(caller), g_stopCount);
     g_origStop(thisPtr);
 }
@@ -47,7 +47,7 @@ static void HookedTimerMultiplyFPS(void* thisPtr, float mult)
 {
     void* caller = _ReturnAddress();
     g_multiplyFpsCount++;
-    Logf("wrsr_mp  PAUSE: C3D_TIMER::MultiplyFPS this=%p mult=%.3f callerRVA=0x%llX (call #%lld)",
+    Logf("republicmp  PAUSE: C3D_TIMER::MultiplyFPS this=%p mult=%.3f callerRVA=0x%llX (call #%lld)",
          thisPtr, mult, CallerRva(caller), g_multiplyFpsCount);
     g_origMultiplyFPS(thisPtr, mult);
 }
@@ -56,16 +56,16 @@ bool InstallPauseHooks()
 {
     bool okStart = PatchIat(g_exe, DLL_ENGINE, "?Start@C3D_TIMER@@QEAAXXZ",
                              (void*)HookedTimerStart, (void**)&g_origStart, "C3D_TIMER::Start");
-    Logf("wrsr_mp  PAUSE: hook Start installed: %d", okStart);
+    Logf("republicmp  PAUSE: hook Start installed: %d", okStart);
 
     bool okStop = PatchIat(g_exe, DLL_ENGINE, "?Stop@C3D_TIMER@@QEAAXXZ",
                             (void*)HookedTimerStop, (void**)&g_origStop, "C3D_TIMER::Stop");
-    Logf("wrsr_mp  PAUSE: hook Stop installed: %d", okStop);
+    Logf("republicmp  PAUSE: hook Stop installed: %d", okStop);
 
     bool okMultiplyFPS = PatchIat(g_exe, DLL_ENGINE, "?MultiplyFPS@C3D_TIMER@@QEAAXM@Z",
                                    (void*)HookedTimerMultiplyFPS, (void**)&g_origMultiplyFPS,
                                    "C3D_TIMER::MultiplyFPS");
-    Logf("wrsr_mp  PAUSE: hook MultiplyFPS installed: %d", okMultiplyFPS);
+    Logf("republicmp  PAUSE: hook MultiplyFPS installed: %d", okMultiplyFPS);
 
     return okStart && okStop && okMultiplyFPS;
 }

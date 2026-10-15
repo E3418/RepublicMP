@@ -231,7 +231,7 @@ static void FlushLocked()
     __try {
         char tool[64];
         ActiveToolName(tool, sizeof(tool));
-        Logf("wrsr_mp  TERRAIN frame=%llu t=%.1fms tool=%s buckets=%d",
+        Logf("republicmp  TERRAIN frame=%llu t=%.1fms tool=%s buckets=%d",
              g_frameAtSlots, NowMs(), tool, g_slotCount);
         for (int k = 0; k < g_slotCount; k++) {
             const AggSlot& s = g_slots[k];
@@ -239,7 +239,7 @@ static void FlushLocked()
             FormatArgs(first, sizeof(first), s.first);
             if (s.count > 1) FormatArgs(last, sizeof(last), s.last);
             else last[0] = 0;
-            Logf("wrsr_mp  TERRAIN   %-31s x%-4u caller=0x%llX %-28s tid=%lu depth(h=%ld m=%ld) remote=%ld first{%s}%s%s%s",
+            Logf("republicmp  TERRAIN   %-31s x%-4u caller=0x%llX %-28s tid=%lu depth(h=%ld m=%ld) remote=%ld first{%s}%s%s%s",
                  kMethodNames[s.method], s.count, s.caller, CallerLabel(s.caller), s.tid,
                  s.depthHeight, s.depthMask, s.remote, first,
                  s.count > 1 ? " last{" : "", last, s.count > 1 ? "}" : "");
@@ -261,7 +261,7 @@ static void Record(int method, void* returnAddress, const TerrainArgs& args)
         if (g_logMode == 2) {
             char buf[400];
             FormatArgs(buf, sizeof(buf), args);
-            Logf("wrsr_mp  TERRAIN #%lld frame=%llu t=%.2fms %s caller=0x%llX %s tid=%lu depth(h=%ld m=%ld) remote=%ld %s",
+            Logf("republicmp  TERRAIN #%lld frame=%llu t=%.2fms %s caller=0x%llX %s tid=%lu depth(h=%ld m=%ld) remote=%ld %s",
                  seq, frame, NowMs(), kMethodNames[method], caller, CallerLabel(caller),
                  GetCurrentThreadId(), g_depthHeight, g_depthMask, g_terrainApplyingRemote, buf);
             return;
@@ -592,7 +592,7 @@ bool InstallTerrainHooks()
     // Not hooked - only used to compare heights after a remote batch.
     g_heightOverPoint = (HeightOverPointFn)GetProcAddress(
         g_engine ? g_engine : GetModuleHandleA(DLL_ENGINE),"?CollisionTerrainHeightOverPoint@C3D_TERRAIN@@QEAAMVC3DVECTOR3@@@Z");
-    Logf("wrsr_mp  TERRAIN: CollisionTerrainHeightOverPoint %s", g_heightOverPoint ? "found" : "NOT FOUND (no height check)");
+    Logf("republicmp  TERRAIN: CollisionTerrainHeightOverPoint %s", g_heightOverPoint ? "found" : "NOT FOUND (no height check)");
 
     const TerrainHookDef defs[] = {
         {"?EditRaiseLower@C3D_TERRAIN@@QEAAXVC3DVECTOR3@@MMMM_N@Z",
@@ -637,7 +637,7 @@ bool InstallTerrainHooks()
         if (PatchIat(g_exe, DLL_ENGINE, defs[k].symbol, defs[k].detour, defs[k].original, defs[k].label))
             ok++;
 
-    Logf("wrsr_mp  TERRAIN: %d/%d hooks installed (log off; F8 cycles off -> per frame -> per call)", ok, total);
+    Logf("republicmp  TERRAIN: %d/%d hooks installed (log off; F8 cycles off -> per frame -> per call)", ok, total);
     return ok == total;
 }
 
@@ -650,7 +650,7 @@ void TerrainHook_Tick()
     if (keyIsDown && !s_keyWasDown) {
         long v = (g_logMode + 1) % 3;
         InterlockedExchange(&g_logMode, v);
-        Logf("wrsr_mp  TERRAIN: log %s", v == 0 ? "OFF" : v == 1 ? "aggregated per frame" : "verbose (one line per call)");
+        Logf("republicmp  TERRAIN: log %s", v == 0 ? "OFF" : v == 1 ? "aggregated per frame" : "verbose (one line per call)");
     }
     s_keyWasDown = keyIsDown;
 
