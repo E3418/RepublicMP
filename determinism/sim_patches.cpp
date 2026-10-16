@@ -518,8 +518,6 @@ static void HookedLate(__int64 world)
     } else {
         PrivateLate(world);
     }
-    }
-    if (step) *(__int64*)(world + 0xD428) = tool;
     *(float*)(world + AUTOSAVE_TIMER_OFFSET) = 0.0f;
     Determinism_AfterLate();
 }
@@ -719,13 +717,13 @@ void SimPatches_BeforeEarly(__int64 world)
     g_simThread = GetCurrentThreadId();
     if (g_on) RecountPopulation(world);
     g_inPhase = true;
+}
+
 void SimPatches_AfterEarly()
 {
     g_inPhase = false;
     g_visibleFresh = false; // the native pass may have removed buildings
 }
-
-void SimPatches_AfterEarly() { g_inPhase = false; }
 
 int SimPatches_LastPopulation() { return g_lastPopulation; }
 
@@ -848,6 +846,8 @@ static void DetPrepare(__int64 world)
     if (!g_on || world != (__int64)(g_exeBase + WORLD_RVA)) {
         original(world);
         return;
+    }
+    Determinism_BeforePrepare();
     // Keep the native tool for previews. Held frames have no Early pass,
     // so refresh the local preview list before Prepare.
     g_visibleFresh = false;
@@ -861,8 +861,6 @@ static void DetPrepare(__int64 world)
     }
     if (scope) Determinism_ToolScopeEnd();
     PrivateViewOut(kept);
-    original(world);
-    if (Determinism_IsStepFrame()) *(__int64*)(world + 0xD428) = tool;
 }
 
 // Late runs even at speed 0: 547ef0 clamps road speeds without time passing;
