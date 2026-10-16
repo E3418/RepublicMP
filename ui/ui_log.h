@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Ring buffer of everyday status lines (save sync), shown in the main window.
 #pragma once
 

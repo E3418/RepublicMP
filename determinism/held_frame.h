@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Presentation without advancing Early's entity groups (by SoylentGreed).
 #pragma once
 #include "tesmio_plugin.h"

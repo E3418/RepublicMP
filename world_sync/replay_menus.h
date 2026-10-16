@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // "Menus closed" for the length of a remote replay.
 //
 // world+0xfbc / +0xfbe / +0xfc3 are the game's menu-open flags: +0xfc3 is set

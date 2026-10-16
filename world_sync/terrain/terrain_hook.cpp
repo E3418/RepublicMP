@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // See terrain_hook.h. Every hook records the call, then calls the original
 // engine function (the IAT value from before the patch) with the arguments
 // unchanged - except a synced edit that terrain_sync asks to swallow (a
@@ -5,6 +6,8 @@
 // Recording never calls a hooked function and never lets an exception
 // escape into the game.
 #include "terrain_hook.h"
+#include "../../lockstep/commands.h"
+#include <vector>
 #include "../../game/window_focus.h"
 #include "terrain_sync.h"
 #include <intrin.h>
@@ -343,9 +346,21 @@ static SetHeightFn           o_SetTerrainHeight;
 // returns false when terrain_sync wants it swallowed; EndEdit hands an edit
 // that really ran locally to terrain_sync. Remote replays (g_terrainApplyingRemote)
 // always run and are never captured.
+struct LsTerrainEdit {
+    int method;
+    TerrainArgs args;
+};
+static std::vector<LsTerrainEdit> g_lsTerrain; // main thread (the tools run in the Late body)
+
 static bool BeginEdit(int method, void* returnAddress, TerrainArgs& x)
 {
     bool remote = g_terrainApplyingRemote != 0;
+    if (!remote && Commands_TakeLocal()) {
+        g_lsTerrain.push_back({ method, x });
+        x.suppressed = 1;
+        Record(method, returnAddress, x);
+        return false;
+    }
     x.suppressed = (!remote && TerrainSync_SuppressLocalEdits()) ? 1 : 0;
     Record(method, returnAddress, x);
     return !x.suppressed;
@@ -561,6 +576,34 @@ void TerrainHook_MaskClose(void* t)      { o_MaskClose(t); }
 
 typedef float (*HeightOverPointFn)(void*, const float*);
 static HeightOverPointFn g_heightOverPoint = nullptr;
+
+void TerrainHook_LockstepFlush()
+{
+    if (g_lsTerrain.empty()) return;
+    Commands_Submit(LS_CMD_TERRAIN, g_lsTerrain.data(), g_lsTerrain.size() * sizeof(LsTerrainEdit));
+    g_lsTerrain.clear();
+}
+
+bool TerrainHook_ApplyCommand(const void* data, size_t size)
+{
+    if (size % sizeof(LsTerrainEdit) != 0) return false;
+    const LsTerrainEdit* e = (const LsTerrainEdit*)data;
+    size_t n = size / sizeof(LsTerrainEdit);
+    void* terrain = TerrainHook_GetTerrain();
+    if (!terrain || !n) return false;
+    bool needMask = false;
+    for (size_t i = 0; i < n; i++) needMask |= e[i].method == TM_MASK;
+    bool needHeight = false;
+    for (size_t i = 0; i < n; i++) needHeight |= e[i].method != TM_MASK;
+    InterlockedIncrement(&g_terrainApplyingRemote);
+    if (needHeight) TerrainHook_HeightmapOpen(terrain);
+    if (needMask) TerrainHook_MaskOpen(terrain);
+    for (size_t i = 0; i < n; i++) TerrainHook_ApplyEdit(terrain, e[i].method, e[i].args);
+    if (needMask) TerrainHook_MaskClose(terrain);
+    if (needHeight) TerrainHook_HeightmapClose(terrain);
+    InterlockedDecrement(&g_terrainApplyingRemote);
+    return true;
+}
 
 bool TerrainHook_HeightAt(const float pos[3], float* outHeight)
 {

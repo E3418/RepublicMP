@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // See probe_trace.h.
 #include "probe_trace.h"
 #include <string.h>
@@ -75,9 +76,12 @@ static const Mask kVehicleMasks[] = {
     { 0x115C, 4 },    // interpolant of the render pass
     { 0x13D4, 4 },    // animation start
     { 0x13D8, 2 },    // visible now / last frame
-    { 0x13E0, 4 },    // camera distance
+    { 0x13DC, 0xC },  // camera distances: +13dc (GetZDistance at 66e2cb for every vehicle; its readers
+                      // store only sound, effects and the model LOD - SoylentGreed's camera-dependence.md),
+                      // +13e0, +13e4 (moved with the camera when the player built during a probe)
     { 0x142C, 4 },  { 0x1468, 4 }, { 0x153C, 4 }, { 0x16FC, 4 }, { 0x1768, 4 }, { 0x1A18, 4 }, // render words
     { 0x1878, 8 },    // sound object
+    { 0x18A4, 0x1C }, // sound levels the sound code (6a36f0, 6a480c, 6a7520) derives from the camera distance
     { 0x1958, 4 },    // sound volume
 };
 

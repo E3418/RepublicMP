@@ -1,0 +1,70 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Lockstep channel: one ordered TCP connection that carries the shared
+// simulation between the host and the player.
+//
+// Both PCs load the same save with the determinism layer on (session/
+// save_sync), so their simulations start equal; from there they stay equal
+// if both run the same ticks with the same commands between them:
+//
+//  - the host admits the ticks: when it runs tick T it sends GRANT(T, speed),
+//    and the player runs tick T only once that grant has arrived. The host
+//    stays at most LOCKSTEP_WINDOW ticks ahead of what the player reports
+//    (ACK), so the slower PC sets the pace;
+//  - the player's actions (lockstep/commands) go to the host (CMD); the host
+//    orders them with its own, makes each after its current tick and sends it
+//    on (CMDS, with that tick). TCP keeps the order: a command made after
+//    tick N always arrives before GRANT(N + 1), so the player makes it at the
+//    same point;
+//  - pause and speed are the host's: the player's keys and buttons are
+//    requests (PAUSE, SPEED), its state comes back for the buttons (STATE).
+//    A selected construction tool does not stop the ticks (it acts in a
+//    private tool scope);
+//  - every LOCKSTEP_HASH_TICKS ticks the player sends its state summary
+//    (HASH, determinism/state_hash) and the host compares it with its own;
+//    the first difference is reported.
+//
+// Received messages are queued by a receive thread and handled on the game
+// thread (LockstepNet_Poll, at the start of a frame). Sends come from the
+// game thread.
+#pragma once
+
+#include "tesmio_plugin.h"
+#include "../determinism/state_hash.h"
+
+#define LOCKSTEP_PORT 5560
+#define LOCKSTEP_WINDOW 10      // ticks the host may run ahead of the player
+#define LOCKSTEP_HASH_TICKS 60  // ticks between state comparisons
+
+void LockstepNet_Bind(const TsmHost* host);
+
+// Session thread. Blocks until connected, cancelled or timed out.
+bool LockstepNet_Host(DWORD timeoutMs, volatile bool* cancel);
+bool LockstepNet_Join(const char* hostIp, DWORD timeoutMs, volatile bool* cancel);
+void LockstepNet_Close();
+bool LockstepNet_IsConnected();
+bool LockstepNet_IsHost();
+// The first state difference found (host), or "".
+const char* LockstepNet_Desync();
+
+// Game thread, start of a frame: handles everything received.
+void LockstepNet_Poll();
+
+// Host (game thread).
+bool LockstepNet_MayRun(unsigned long long tick);
+void LockstepNet_Grant(unsigned long long tick, int speed);
+int LockstepNet_TakePauseToggles();
+int LockstepNet_TakeSpeedRequest(); // 0 = none
+void LockstepNet_SendState(bool paused, int speed);
+
+// Player (game thread).
+bool LockstepNet_TakeGrant(unsigned long long tick, int* speed);
+void LockstepNet_Ack(unsigned long long completed);
+void LockstepNet_SendPauseToggle();
+void LockstepNet_SendSpeed(int speed);
+// The host's pause and speed for the buttons; false until it sent them.
+bool LockstepNet_HostState(bool* paused, int* speed);
+
+// Both: commands (host: made after `afterTick`; player: to the host).
+void LockstepNet_SendCommand(int kind, unsigned long long afterTick, const void* data, size_t size);
+// Both, after tick `tick`: the state summary for the comparison.
+void LockstepNet_StateAfter(unsigned long long tick, const StateSummary& s);

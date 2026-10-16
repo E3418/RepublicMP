@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Money: the republic's two balances, plain doubles on the world object
 // (thisPtr = exe+0x9D4F10).
 //

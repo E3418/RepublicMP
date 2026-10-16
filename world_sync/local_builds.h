@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Local build detection: the two engine hooks that observe what the local
 // player builds and forward it to the sync modules.
 //
@@ -52,6 +53,10 @@ void HookedRoadCommit(__int64 manager,
 
 // Bracket every building-placement call (local or remote replay). Commits
 // made inside it are the building's own auto-connections and are not sent.
+// Lockstep: the building tool's placing press (sim_patches, 2cc37c). True if
+// it became a placement command - the game then reads it as not pressed.
+bool LocalBuilds_PlacementPress();
+
 void LocalBuilds_BeginBuildingPlacement();
 void LocalBuilds_EndBuildingPlacement();
 bool LocalBuilds_InBuildingPlacement();

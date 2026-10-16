@@ -1,8 +1,10 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // See settings_sync.h.
 #include "settings_sync.h"
 #include "../world_sync/citizens/citizen_destinations.h"
 #include "../world_sync/buildings/build_sync.h"
 #include "../ui/sync_block.h"
+#include "../lockstep/commands.h"
 #include <unordered_map>
 #include <vector>
 #include <math.h>
@@ -387,6 +389,175 @@ static void Scan(bool sendChanges)
         if (!it->second.seen) it = g_states.erase(it);
         else ++it;
     }
+}
+
+// ---------------------------------------------------------------------------
+// Lockstep (see settings_sync.h)
+// ---------------------------------------------------------------------------
+
+#define SET_PAY_RVA 0x160550 // FUN_140160550(world, building, rubles, dollars)
+#define STOP_RVA 0x160570    // FUN_140160570(world, building, 1)
+#define RESUME_RVA 0x161440  // FUN_140161440(world, building)
+#define BLD_PAY_OFFSET 0x608
+#define BLD_STOPPED_OFFSET 0x879
+
+struct LsBuilding {
+    BYTE* b;
+    int category;
+    float pos[3];
+    unsigned long long values[sizeof(kFields) / sizeof(kFields[0])];
+    unsigned hasMask;           // bit per field that applies and was readable
+    unsigned short pay;         // +608/+609
+    unsigned char stopped;      // +879
+    int slots;
+    int slotCount[MAX_SLOTS];
+    size_t slotAt;              // first float of slot 0 in g_lsSlotData
+};
+static std::vector<LsBuilding> g_lsBuildings;
+static std::vector<float> g_lsSlotData;
+static std::vector<BYTE*> g_lsList;
+
+static bool ReadConstruction(BYTE* b, unsigned short* pay, unsigned char* stopped)
+{
+    __try {
+        *pay = *(unsigned short*)(b + BLD_PAY_OFFSET);
+        *stopped = *(b + BLD_STOPPED_OFFSET);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+static void ReadLsBuilding(BYTE* b, LsBuilding& s)
+{
+    s.b = b;
+    s.hasMask = 0;
+    s.slots = 0;
+    if (!ReadIdentity(b, &s.category, s.pos)) return;
+    for (int f = 0; f < kFieldCount; f++)
+        if (FieldApplies(kFields[f], s.category) && ReadField(b, kFields[f], &s.values[f])) s.hasMask |= 1u << f;
+    if (!ReadConstruction(b, &s.pay, &s.stopped)) { s.pay = 0; s.stopped = 0; }
+    s.slots = SlotCount(b);
+    s.slotAt = g_lsSlotData.size();
+    for (int i = 0; i < s.slots; i++) {
+        float data[SETTINGS_MAX_SLOT_ENTRIES * 2];
+        int n = ReadSlot(b, i, data);
+        s.slotCount[i] = n < 0 ? -1 : n;
+        if (n > 0) g_lsSlotData.insert(g_lsSlotData.end(), data, data + n * 2);
+    }
+}
+
+void SettingsSync_LockstepBaseline()
+{
+    g_lsList.resize(200000);
+    int n = CopyBuildings(g_lsList.data(), (int)g_lsList.size());
+    g_lsBuildings.resize(n);
+    g_lsSlotData.clear();
+    for (int i = 0; i < n; i++) ReadLsBuilding(g_lsList[i], g_lsBuildings[i]);
+}
+
+static void SubmitSetting(const LsBuilding& s, int field, unsigned long long value, int slot, const float* data, int count)
+{
+    SettingWire w = {};
+    w.field = field;
+    w.category = s.category;
+    memcpy(w.pos, s.pos, sizeof(w.pos));
+    w.value = value;
+    w.slot = slot;
+    w.count = count;
+    if (data && count > 0) memcpy(w.data, data, count * 2 * sizeof(float));
+    Commands_Submit(LS_CMD_SETTING, &w, sizeof(w));
+}
+
+static void RawWrite(BYTE* p, const void* v, int size)
+{
+    __try {
+        memcpy(p, v, size);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+void SettingsSync_LockstepDetect()
+{
+    for (const LsBuilding& old : g_lsBuildings) {
+        if (!old.b) continue;
+        BYTE* b = old.b;
+        int category;
+        float pos[3];
+        // Gone or replaced since the baseline (a command may have demolished it).
+        if (!ReadIdentity(b, &category, pos) || category != old.category || memcmp(pos, old.pos, sizeof(pos)) != 0) continue;
+        for (int f = 0; f < kFieldCount; f++) {
+            if (!(old.hasMask & (1u << f))) continue;
+            unsigned long long v;
+            if (!ReadField(b, kFields[f], &v) || v == old.values[f]) continue;
+            SubmitSetting(old, f, v, 0, nullptr, 0);
+            BYTE* p = FieldAddress(b, kFields[f]);
+            if (p) RawWrite(p, &old.values[f], kFields[f].size);
+        }
+        unsigned short pay;
+        unsigned char stopped;
+        if (ReadConstruction(b, &pay, &stopped)) {
+            if (pay != old.pay) {
+                SubmitSetting(old, SETTINGS_FIELD_PAY, pay, 0, nullptr, 0);
+                RawWrite(b + BLD_PAY_OFFSET, &old.pay, 2);
+            }
+            if (stopped != old.stopped) {
+                SubmitSetting(old, SETTINGS_FIELD_STOP, stopped, 0, nullptr, 0);
+                RawWrite(b + BLD_STOPPED_OFFSET, &old.stopped, 1);
+            }
+        }
+        size_t at = old.slotAt;
+        for (int i = 0; i < old.slots; i++) {
+            int n = old.slotCount[i];
+            if (n < 0) continue;
+            float data[SETTINGS_MAX_SLOT_ENTRIES * 2];
+            int now = ReadSlot(b, i, data);
+            const float* before = g_lsSlotData.data() + at;
+            at += n > 0 ? n * 2 : 0;
+            if (now != n || n == 0 || memcmp(data, before, n * 2 * sizeof(float)) == 0) {
+                if (now != n && now >= 0)
+                    Logf("republicmp  SETTINGS: storage slot %d changed its resource list locally - not carried", i);
+                continue;
+            }
+            SubmitSetting(old, SETTINGS_FIELD_SLOT, 0, i, data, n);
+            WriteSlot(b, i, before, n);
+        }
+    }
+}
+
+typedef void (*SetPayFn)(__int64 world, __int64 bld, int rub, int usd);
+typedef void (*StopFn)(__int64 world, __int64 bld, int stop);
+
+static bool ApplyConstruction(BYTE* b, int field, unsigned long long value)
+{
+    __int64 world = (__int64)(g_exeBase + WORLD_RVA);
+    __try {
+        if (field == SETTINGS_FIELD_PAY)
+            ((SetPayFn)(g_exeBase + SET_PAY_RVA))(world, (__int64)b, (int)(value & 0xFF), (int)((value >> 8) & 0xFF));
+        else if (value)
+            ((StopFn)(g_exeBase + STOP_RVA))(world, (__int64)b, 1);
+        else
+            ((BuildingFn)(g_exeBase + RESUME_RVA))(world, (__int64)b);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// Applies one received setting; false if its building is not there (yet).
+static bool Apply(const SettingWire& w);
+
+bool SettingsSync_ApplyCommand(const SettingWire& w)
+{
+    if (w.field == SETTINGS_FIELD_PAY || w.field == SETTINGS_FIELD_STOP) {
+        BYTE* b = FindBuilding(w.pos, w.category);
+        bool ok = b && ApplyConstruction(b, w.field, w.value);
+        Logf("republicmp  SETTINGS: %s = %llu at (%.1f,%.1f) %s", w.field == SETTINGS_FIELD_PAY ? "pay rubles/dollars" : "stopped",
+             w.value, w.pos[0], w.pos[2], ok ? "applied" : "NOT applied");
+        return ok;
+    }
+    if (w.field == CITIZEN_DESTINATIONS_FIELD) return false;
+    return FindBuilding(w.pos, w.category) && Apply(w);
 }
 
 // Applies one received setting; false if its building is not there (yet).

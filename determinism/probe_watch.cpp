@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // See probe_watch.h.
 #include "probe_watch.h"
 #include <tlhelp32.h>

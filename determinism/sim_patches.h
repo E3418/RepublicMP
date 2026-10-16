@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Simulation patches: the rest of the camera, keyboard and frame-rate paths
 // inside the simulation, so two runs (two PCs) from the same save step the
 // same way. Active only together with the determinism layer (determinism.h:

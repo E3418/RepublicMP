@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 #include "debug_log.h"
 #include <windows.h>
 #include <mutex>

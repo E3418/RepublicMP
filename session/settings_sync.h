@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Settings sync: what players set in a building's window.
 //
 // Every SETTINGS_SCAN_INTERVAL_MS the buildings list is scanned for the
@@ -61,4 +62,19 @@ bool SettingsSync_ClickedRecently();
 // Debug: log which bytes of a building a click changes ("FIELD_DIFF"), to
 // find window settings that are not synced yet. Works without a session.
 void SettingsSync_SetFieldDiff(bool on);
+
+// Lockstep (lockstep/commands, main thread). Baseline records every watched
+// field, storage slot and - for construction sites - the window's pay and
+// stop flags (+608 rubles, +609 dollars, +879 stopped); Detect finds what the
+// interface or a tool changed since, puts the old value back on this PC and
+// hands each change over as a command (the same wire form as the replay
+// multiplayer). ApplyCommand makes one on every PC: the field written with
+// the window's own follow-up call, the pay flags through 160550(world,
+// building, rubles, dollars), the stop flag through 160570(world, building,
+// 1) or 161440(world, building). Citizen destination lists are not covered.
+#define SETTINGS_FIELD_PAY 2000
+#define SETTINGS_FIELD_STOP 2001
+void SettingsSync_LockstepBaseline();
+void SettingsSync_LockstepDetect();
+bool SettingsSync_ApplyCommand(const SettingWire& w);
 bool SettingsSync_GetFieldDiff();

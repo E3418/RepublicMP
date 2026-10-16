@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Multiplayer session: joining a player into the host's running game and
 // keeping track of whether that player is still there.
 //
@@ -85,6 +86,13 @@ void SaveSync_OnResyncAnnounced();
 // Per-frame (game thread, Present hook): sends a requested announcement -
 // build_sync only sends from the game thread.
 void SaveSync_Tick();
+
+// Host: run the next session in lockstep (both PCs simulate the same ticks;
+// lockstep/lockstep_net). The player follows the host's choice.
+void SaveSync_SetLockstep(bool on);
+bool SaveSync_GetLockstep();
+// The current session runs in lockstep.
+bool SaveSync_IsLockstepSession();
 
 SessionState SaveSync_GetState();
 bool SaveSync_IsBusy();     // any state but SESSION_IDLE

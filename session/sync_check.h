@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Sync check: how far the two independently simulated worlds have drifted.
 //
 // Both games take a state summary (determinism/state_hash) right after the first

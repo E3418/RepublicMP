@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Camera-independent building placement: an inline hook on FUN_140569d70,
 // the network collision query.
 //

@@ -1,9 +1,13 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // See sim_patches.h.
 #include "sim_patches.h"
+#include "../lockstep/commands.h"
+#include "../world_sync/local_builds.h"
 #include "determinism.h"
 #include <string.h>
 #include <limits.h>
 #include <vector>
+#include <unordered_set>
 
 #define WORLD_RVA 0x9D4F10
 
@@ -61,6 +65,9 @@ static const DetPatch kPatches[] = {
     { 0x14c6b5, 2, { 0x74, 0x6f }, { 0xeb, 0x6f }, "car building: Ctrl+I list cleanup" },
     { 0x1bd2ab, 2, { 0x74, 0x21 }, { 0xeb, 0x21 }, "depot: E+L+C slot word" },
     { 0xfa41, 2, { 0x74, 0x5a }, { 0xeb, 0x5a }, "render: debug calendar keys" },
+    // je (no tool) -> jmp: a selected building tool changed the arguments of
+    // the building pass's 10d950 (by SoylentGreed)
+    { 0x13cc19, 2, { 0x74, 0x1a }, { 0xeb, 0x1a }, "building pass: selected tool" },
 };
 #define PATCH_COUNT (sizeof(kPatches) / sizeof(kPatches[0]))
 
@@ -313,6 +320,173 @@ static void RecountPopulation(__int64 world)
 // Set while Early or Late runs.
 static volatile bool g_inPhase = false;
 static BYTE g_privateToolSearch[72] = {};
+// ---------------------------------------------------------------------------
+// This PC's own view for its tools
+// ---------------------------------------------------------------------------
+//
+// Two world vectors follow this PC's camera and interface: the search work
+// (+14478, see the interface searches below) and the visible buildings
+// (+11dc0): the Early building pass fills that list from the camera (13cec7,
+// 13d981), and the tools draw their yellow building hints from it. The
+// simulation sees every building off the camera (DetGetNode), so the shared
+// list stays empty - the placement reads it too (2bade0). Prepare, a held
+// Late and the tool handlers get private copies instead: the visible list is
+// made here from this PC's camera as the building pass would make it.
+#define VISIBLE_OFFSET 0x11DC0
+#define ENGINE_RVA 0x9941F0       // engine object: +ff8 models, +ee0 map quadtree
+#define FRAGMENT_IMPORT 0x86CFB8  // a model's fragment (called at 13ce39)
+#define BUILDINGS_BEGIN_RVA 0x9E6A18
+#define BUILDINGS_END_RVA 0x9E6A20
+static BYTE g_privateVisible[24] = {}; // a vector header: begin, end, capacity
+static bool g_visibleFresh = false;
+// The visible branch also gives a building its camera distance (+115c, from
+// C3D_CAMERA::GetZDistance at 13ce9c) and +115a = 1; the hints over the
+// buildings (30e653: a transformer's connection points) need a near
+// distance. The simulation keeps them off the camera (0 / 100000.0, its agent
+// level of detail); this PC's view gets the real ones.
+#define CAMERA_RVA 0x9E9C90
+#define NODE_POSITION_IMPORT 0x86C7B8 // C3D_NODE::GetPosition
+#define CAMERA_ZDISTANCE_IMPORT 0x86D008 // C3D_CAMERA::GetZDistance
+struct VisibleDistance {
+    BYTE* building;
+    float distance;
+};
+struct VisibleKept {
+    BYTE* building;
+    BYTE visible;
+    float distance;
+};
+static std::vector<VisibleDistance> g_visibleDistance;
+static std::vector<VisibleKept> g_visibleKept;
+
+static void FillPrivateVisible()
+{
+    typedef void (*PushFn)(void* vector, void* value);
+    typedef BYTE* (*FragmentFn)(void* models, int model, int variant);
+    PushFn push = (PushFn)(g_exeBase + 0xB0E90);
+    FragmentFn fragment = *(FragmentFn*)(g_exeBase + FRAGMENT_IMPORT);
+    GetNodeFn getNode = *(GetNodeFn*)(g_exeBase + GETNODE_IMPORT);
+    typedef void* (*PositionFn)(void* node, float* out);
+    typedef float (*ZDistanceFn)(void* camera, float* position);
+    PositionFn position = *(PositionFn*)(g_exeBase + NODE_POSITION_IMPORT);
+    ZDistanceFn zDistance = *(ZDistanceFn*)(g_exeBase + CAMERA_ZDISTANCE_IMPORT);
+    memcpy(g_privateVisible + 8, g_privateVisible, 8); // end = begin
+    g_visibleDistance.clear();
+    __try {
+        BYTE* engine = *(BYTE**)(g_exeBase + ENGINE_RVA);
+        BYTE** it = *(BYTE***)(g_exeBase + BUILDINGS_BEGIN_RVA);
+        BYTE** end = *(BYTE***)(g_exeBase + BUILDINGS_END_RVA);
+        for (; engine && it && it < end; ++it) {
+            BYTE* b = *it;
+            if (!b) continue;
+            BYTE* type = *(BYTE**)(b + 0x318);
+            bool visible = false;
+            if (type) {
+                BYTE* f = fragment(*(void**)(engine + 0xFF8), *(int*)(type + 0x410), *(int*)(b + 0x5F4));
+                BYTE* node = f ? (BYTE*)getNode(*(void**)(engine + 0xEE0), *(int*)(f + 0x3C)) : nullptr;
+                visible = node && node[0x25];
+                if (visible) {
+                    float at[4] = {};
+                    position(b + 0x320, at);
+                    g_visibleDistance.push_back({ b, zDistance(g_exeBase + CAMERA_RVA, at) });
+                }
+            } else {
+                BYTE* render = *(BYTE**)(b + 0x5D0);
+                visible = render && render[0x178];
+            }
+            if (visible) push(g_privateVisible, &b);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+// The visible list is swapped in once per phase: a tool stub inside a tick's
+// Late finds it there already. Late reads it outside the tools as well (from
+// 30e578: the hints drawn over the visible buildings - connection points,
+// construction state); with the empty list on a tick's frame and this PC's
+// list on the others, those hints blinked and lines and pipes could not be
+// connected. So every Late, a tick's included, runs with this PC's list; the
+// building removal (162f40) takes a building out of whichever list is in.
+static BYTE g_sharedVisible[24];
+static bool g_visibleIn = false;
+
+static bool VisibleIn()
+{
+    if (g_visibleIn) return false;
+    if (!g_visibleFresh) {
+        FillPrivateVisible();
+        g_visibleFresh = true;
+    }
+    BYTE* world = g_exeBase + WORLD_RVA;
+    memcpy(g_sharedVisible, world + VISIBLE_OFFSET, sizeof(g_sharedVisible));
+    memcpy(world + VISIBLE_OFFSET, g_privateVisible, sizeof(g_privateVisible));
+    g_visibleKept.clear();
+    for (const VisibleDistance& d : g_visibleDistance) {
+        g_visibleKept.push_back({ d.building, d.building[0x115A], *(float*)(d.building + 0x115C) });
+        d.building[0x115A] = 1;
+        *(float*)(d.building + 0x115C) = d.distance;
+    }
+    g_visibleIn = true;
+    return true;
+}
+
+static void VisibleOut(bool swapped)
+{
+    if (!swapped) return;
+    BYTE* world = g_exeBase + WORLD_RVA;
+    // Put the simulation's values back on the buildings still listed (one the
+    // phase removed was taken out of the list and is gone).
+    BYTE** listed = *(BYTE***)(world + VISIBLE_OFFSET);
+    BYTE** listedEnd = *(BYTE***)(world + VISIBLE_OFFSET + 8);
+    std::unordered_set<BYTE*> still(listed, listedEnd);
+    for (const VisibleKept& k : g_visibleKept) {
+        if (!still.count(k.building)) continue;
+        k.building[0x115A] = k.visible;
+        *(float*)(k.building + 0x115C) = k.distance;
+    }
+    g_visibleKept.clear();
+    memcpy(g_privateVisible, world + VISIBLE_OFFSET, sizeof(g_privateVisible));
+    memcpy(world + VISIBLE_OFFSET, g_sharedVisible, sizeof(g_sharedVisible));
+    g_visibleIn = false;
+}
+
+struct PrivateView {
+    BYTE search[72];
+    bool visible;
+};
+
+static void PrivateViewIn(PrivateView& kept)
+{
+    BYTE* world = g_exeBase + WORLD_RVA;
+    kept.visible = VisibleIn();
+    memcpy(kept.search, world + 0x14478, sizeof(kept.search));
+    memcpy(world + 0x14478, g_privateToolSearch, sizeof(kept.search));
+}
+
+static void PrivateViewOut(const PrivateView& kept)
+{
+    BYTE* world = g_exeBase + WORLD_RVA;
+    memcpy(g_privateToolSearch, world + 0x14478, sizeof(kept.search));
+    memcpy(world + 0x14478, kept.search, sizeof(kept.search));
+    VisibleOut(kept.visible);
+}
+
+// A held frame's Late body runs this PC's tools: what they change outside the
+// hooks is found around it and becomes commands (lockstep/commands).
+static void PrivateLate(__int64 world)
+{
+    PrivateView kept;
+    PrivateViewIn(kept);
+    Commands_LateBegin();
+    {
+        Determinism_PrivateScope privateRng(true);
+        g_inPhase = true;
+        o_late(world);
+        g_inPhase = false;
+    }
+    Commands_LateEnd();
+    PrivateViewOut(kept);
+}
 
 static void HookedLate(__int64 world)
 {
@@ -320,29 +494,223 @@ static void HookedLate(__int64 world)
     if (!active) { o_late(world); return; }
     Determinism_BeforeLate();
     g_simThread = GetCurrentThreadId();
+    // No save on one PC alone in a lockstep session (DET-20): a save writes
+    // every vehicle and ages it (42cc70 -> 6c6770 -> 6c1bd0). The save window
+    // sets the word +14d35 and the body counts +14d38 down and saves; one that
+    // stays in the game is refused here, one that leaves it (+5030) is left
+    // alone, as that PC leaves the session. (by SoylentGreed)
+    if (Determinism_SessionRunning() && *(unsigned short*)(world + 0x14D35) && !*(int*)(world + 0x5030)) {
+        *(unsigned short*)(world + 0x14D35) = 0;
+        *(int*)(world + 0x14D38) = 0;
+        Logf("republicmp  LOCKSTEP: a save was refused - saving is not shared in a lockstep session yet");
+    }
     bool step = Determinism_IsStepFrame();
     *(float*)(world + AUTOSAVE_TIMER_OFFSET) = 0.0f;
     if (step) RecountPopulation(world);
-    // Step frames have no local tool; held previews search in private vectors.
+    // The tool stays selected on every frame. A tick's Late runs its handlers
+    // through the tool stubs below; a held Late is this PC's own altogether.
     // The render thread has finished here (105eb8). (by SoylentGreed)
-    __int64 tool = *(__int64*)(world + 0xD428);
-    if (step) *(__int64*)(world + 0xD428) = 0;
-    BYTE search[72];
-    memcpy(search, (void*)(world + 0x14478), sizeof(search));
-    if (!step) memcpy((void*)(world + 0x14478), g_privateToolSearch, sizeof(search));
-    {
-        Determinism_PrivateScope privateRng(!step);
+    if (step) {
+        bool visible = VisibleIn();
         g_inPhase = true;
         o_late(world);
         g_inPhase = false;
+        VisibleOut(visible);
+    } else {
+        PrivateLate(world);
     }
-    if (!step) {
-        memcpy(g_privateToolSearch, (void*)(world + 0x14478), sizeof(search));
-        memcpy((void*)(world + 0x14478), search, sizeof(search));
-    }
-    if (step) *(__int64*)(world + 0xD428) = tool;
     *(float*)(world + AUTOSAVE_TIMER_OFFSET) = 0.0f;
     Determinism_AfterLate();
+}
+
+// ---------------------------------------------------------------------------
+// Tool handlers in a tick's Late (312823..31496d)
+// ---------------------------------------------------------------------------
+//
+// Late compares the selected tool's build-menu name and calls its handler
+// every frame (one entry at 312823, one exit at 31496d). A handler drew from
+// the shared random stream and searched in the shared vectors (run 17, by
+// SoylentGreed), so every call in that stretch goes through a stub: on a
+// tick's frame it runs in a tool scope (private draws, the private search
+// vectors, its actions made commands and its other changes found as on a held
+// frame); otherwise it calls straight through. The calls to the name compare
+// 84f520 are left alone.
+static const unsigned kToolCalls[][2] = {
+    { 0x3128C1, 0x21C110 }, { 0x31294E, 0x214220 }, { 0x3129B8, 0x2BADE0 }, { 0x3129D8, 0x243570 },
+    { 0x3129FC, 0x2F94C0 }, { 0x312A1E, 0x3A8A70 }, { 0x312A45, 0x3A8A70 }, { 0x312A6E, 0x3A8A70 },
+    { 0x312A91, 0x3A8A70 }, { 0x312AB4, 0x3A8A70 }, { 0x312AD6, 0x32D240 }, { 0x312AF6, 0x3ABC90 },
+    { 0x312B16, 0x3ADF80 }, { 0x312B36, 0x3CCD70 }, { 0x312B58, 0x234A50 }, { 0x312B7F, 0x234A50 },
+    { 0x312BA8, 0x234A50 }, { 0x312BCB, 0x234A50 }, { 0x312BEE, 0x234A50 }, { 0x312C19, 0x235140 },
+    { 0x312C44, 0x235140 }, { 0x312C70, 0x235140 }, { 0x312C9A, 0x235140 }, { 0x312CBF, 0x235140 },
+    { 0x312CE4, 0x235140 }, { 0x312D0A, 0x235140 }, { 0x312D30, 0x235140 }, { 0x312D56, 0x235140 },
+    { 0x312D7C, 0x235140 }, { 0x312D9E, 0x235370 }, { 0x312DC0, 0x235370 }, { 0x312DE2, 0x235580 },
+    { 0x312E04, 0x235580 }, { 0x312E26, 0x238310 }, { 0x312E48, 0x238310 }, { 0x312E6D, 0x3CF6F0 },
+    { 0x312E97, 0x3CF6F0 }, { 0x312ED8, 0x3CF6F0 }, { 0x312EFE, 0x3CF6F0 }, { 0x312F23, 0x3CF6F0 },
+    { 0x312F4D, 0x3CF6F0 }, { 0x312F79, 0x3CF6F0 }, { 0x312F9F, 0x3CF6F0 }, { 0x312FC5, 0x3CF6F0 },
+    { 0x312FEB, 0x3CF6F0 }, { 0x313011, 0x3CF6F0 }, { 0x313037, 0x3D00F0 }, { 0x31305C, 0x3D00F0 },
+    { 0x313086, 0x3D00F0 }, { 0x3130AC, 0x3D00F0 }, { 0x3130D6, 0x3D00F0 }, { 0x313120, 0x3D00F0 },
+    { 0x313146, 0x3D00F0 }, { 0x313171, 0x3D00F0 }, { 0x3131A1, 0x3D00F0 }, { 0x3131D2, 0x3D00F0 },
+    { 0x3131FD, 0x3D00F0 }, { 0x31323E, 0x3D00F0 }, { 0x313264, 0x3D00F0 }, { 0x31328F, 0x3D00F0 },
+    { 0x3132BB, 0x3D00F0 }, { 0x3132E7, 0x3D00F0 }, { 0x31330E, 0x3D00F0 }, { 0x313335, 0x3D00F0 },
+    { 0x31335C, 0x3D00F0 }, { 0x313383, 0x3D00F0 }, { 0x3133AA, 0x3D00F0 }, { 0x3133D1, 0x3D00F0 },
+    { 0x3133F8, 0x3D00F0 }, { 0x31341F, 0x3D00F0 }, { 0x313446, 0x3D00F0 }, { 0x31346D, 0x3D00F0 },
+    { 0x313494, 0x3D00F0 }, { 0x3134BB, 0x3D00F0 }, { 0x3134E2, 0x3D00F0 }, { 0x313509, 0x3D00F0 },
+    { 0x313530, 0x3D00F0 }, { 0x313557, 0x3D00F0 }, { 0x31357D, 0x3D00F0 }, { 0x3135A8, 0x3D00F0 },
+    { 0x3135CE, 0x3D00F0 }, { 0x3135F4, 0x3D00F0 }, { 0x313614, 0x417A70 }, { 0x313634, 0x2B23B0 },
+    { 0x313656, 0x3C9A00 }, { 0x313663, 0x3CE5F0 }, { 0x31366F, 0x3CE650 }, { 0x313679, 0x4182D0 },
+    { 0x313683, 0x3CE1B0 }, { 0x3136A2, 0x4181D0 }, { 0x3136AC, 0x417D80 }, { 0x3136CF, 0x3AEC30 },
+    { 0x3136FE, 0x3AEC30 }, { 0x313724, 0x3AEC30 }, { 0x31375C, 0x3B0E60 }, { 0x313782, 0x3B0E60 },
+    { 0x3137A9, 0x3B0E60 }, { 0x3137CF, 0x3B0E60 }, { 0x313815, 0x3B12B0 }, { 0x313841, 0x3B12B0 },
+    { 0x313912, 0x3B12B0 }, { 0x313953, 0x3B3820 }, { 0x313979, 0x3B3820 }, { 0x31399F, 0x3B3820 },
+    { 0x3139C6, 0x3B3820 }, { 0x3139ED, 0x3B3820 }, { 0x313A14, 0x3B3820 }, { 0x313A3B, 0x3B3820 },
+    { 0x313A62, 0x3B3820 }, { 0x313A89, 0x3B3820 }, { 0x313AB0, 0x3B3820 }, { 0x313AD6, 0x3B3820 },
+    { 0x313B62, 0x3B4230 }, { 0x313B98, 0x3B8780 }, { 0x313BBE, 0x3B8780 }, { 0x313BE4, 0x3B8780 },
+    { 0x313C0B, 0x3B8780 }, { 0x313C32, 0x3B8780 }, { 0x313C59, 0x3B8780 }, { 0x313C80, 0x3B8780 },
+    { 0x313CA7, 0x3B8780 }, { 0x313CCD, 0x3B8780 }, { 0x313CF3, 0x3B8780 }, { 0x313D19, 0x3B8780 },
+    { 0x313D3F, 0x3B8780 }, { 0x313D65, 0x3BAED0 }, { 0x313D8B, 0x3BAED0 }, { 0x313DB1, 0x3BAED0 },
+    { 0x313DD8, 0x3BAED0 }, { 0x313DFE, 0x3BAED0 }, { 0x313E24, 0x3BAED0 }, { 0x313E4A, 0x3BAED0 },
+    { 0x313E70, 0x3BAED0 }, { 0x3140A5, 0x3D4730 }, { 0x31415F, 0x418F90 }, { 0x3141DF, 0x2B4A50 },
+    { 0x31422D, 0x2B2760 }, { 0x31424D, 0x2B18C0 }, { 0x31426F, 0x2B2DD0 }, { 0x314291, 0x2B2DD0 },
+    { 0x3142B1, 0x2B3C80 }, { 0x3142D1, 0x2B4680 }, { 0x3142F1, 0x2B6AB0 }, { 0x314356, 0x1D48A0 },
+    { 0x314376, 0x1DB1B0 }, { 0x314396, 0x1D51A0 }, { 0x3143B6, 0x1D6820 }, { 0x3143D6, 0x1D71C0 },
+    { 0x3143F6, 0x1D9980 }, { 0x314416, 0x1DA580 }, { 0x314436, 0x1D6CB0 }, { 0x314456, 0x1D8410 },
+    { 0x314476, 0x1D88A0 }, { 0x314496, 0x1DB9E0 }, { 0x3144B6, 0x1DBD40 }, { 0x3144D8, 0x3D6E70 },
+    { 0x3144F8, 0x3D6E70 }, { 0x314518, 0x3D6E70 }, { 0x314522, 0x2B8CE0 }, { 0x31452C, 0x2B4C60 },
+    { 0x31453C, 0x4184C0 }, { 0x314572, 0x3D68B0 }, { 0x314597, 0x3D68B0 }, { 0x3145BC, 0x3D68B0 },
+    { 0x3145E2, 0x3D68B0 }, { 0x314607, 0x3D68B0 }, { 0x31462D, 0x3D68B0 }, { 0x314653, 0x3D68B0 },
+    { 0x314679, 0x3D68B0 }, { 0x31469F, 0x3D68B0 }, { 0x3146C5, 0x3D68B0 }, { 0x3146E7, 0x3C85B0 },
+    { 0x314709, 0x3C85B0 }, { 0x31472C, 0x3CBFA0 }, { 0x31474F, 0x3CBFA0 }, { 0x314774, 0x3C9130 },
+    { 0x314799, 0x3C9130 }, { 0x3147BE, 0x3C9130 }, { 0x3147E3, 0x3C9130 }, { 0x314809, 0x3C9130 },
+    { 0x314829, 0x2B6F30 }, { 0x314849, 0x2B78B0 }, { 0x314869, 0x2B8780 }, { 0x314889, 0x216780 },
+    { 0x3148A9, 0x216970 }, { 0x3148CD, 0x5EEDF0 }, { 0x314913, 0x5F78D0 }, { 0x314930, 0x3CA560 },
+    { 0x31494D, 0x3CB0D0 }, { 0x31495E, 0x214530 }, { 0x314968, 0x213870 },
+};
+#define TOOL_CALL_COUNT (sizeof(kToolCalls) / sizeof(kToolCalls[0]))
+#define TOOL_STUB_SIZE 32
+
+static bool CallTo(unsigned int site, BYTE* target, unsigned char out[5]);
+static BYTE* g_toolStubs = nullptr;
+static unsigned __int64 g_toolTarget = 0, g_toolReturn = 0;
+static BYTE g_toolSaved[96] = {};
+static bool g_toolActed = false;
+static PrivateView g_toolKept;
+
+static void ToolEnter()
+{
+    g_toolActed = g_on && Determinism_IsStepFrame();
+    if (!g_toolActed) return;
+    Determinism_ToolScopeBegin();
+    PrivateViewIn(g_toolKept);
+    Commands_RecordMoney(); // the tick's own charges are not the tool's
+    Commands_LateBegin();
+}
+
+static void ToolLeave()
+{
+    if (!g_toolActed) return;
+    g_toolActed = false;
+    Commands_LateEnd();
+    PrivateViewOut(g_toolKept);
+    Determinism_ToolScopeEnd();
+}
+
+static BYTE* Emit(BYTE* p, const unsigned char* bytes, size_t n)
+{
+    memcpy(p, bytes, n);
+    return p + n;
+}
+
+static BYTE* EmitImm(BYTE* p, unsigned char rex, unsigned char op, unsigned __int64 v)
+{
+    *p++ = rex;
+    *p++ = op;
+    memcpy(p, &v, 8);
+    return p + 8;
+}
+
+// The common stub. Entered by jmp with the target in r11 and the caller's
+// return address on the stack: the target and the return are kept, the
+// argument registers saved around ToolEnter, the target called with the
+// caller's own stack, and the result saved around ToolLeave.
+static BYTE* EmitCommon(BYTE* p)
+{
+    static const unsigned char storeR11[] = { 0x4D, 0x89, 0x1A }; // mov [r10], r11
+    static const unsigned char popR11[] = { 0x41, 0x5B };         // pop r11
+    static const unsigned char saveArgs[] = {
+        0x49, 0x89, 0x0A, 0x49, 0x89, 0x52, 0x08, 0x4D, 0x89, 0x42, 0x10, 0x4D, 0x89, 0x4A, 0x18, // rcx rdx r8 r9
+        0xF3, 0x41, 0x0F, 0x7F, 0x42, 0x20, 0xF3, 0x41, 0x0F, 0x7F, 0x4A, 0x30,                   // xmm0 xmm1
+        0xF3, 0x41, 0x0F, 0x7F, 0x52, 0x40, 0xF3, 0x41, 0x0F, 0x7F, 0x5A, 0x50 };                 // xmm2 xmm3
+    static const unsigned char loadArgs[] = {
+        0x49, 0x8B, 0x0A, 0x49, 0x8B, 0x52, 0x08, 0x4D, 0x8B, 0x42, 0x10, 0x4D, 0x8B, 0x4A, 0x18,
+        0xF3, 0x41, 0x0F, 0x6F, 0x42, 0x20, 0xF3, 0x41, 0x0F, 0x6F, 0x4A, 0x30,
+        0xF3, 0x41, 0x0F, 0x6F, 0x52, 0x40, 0xF3, 0x41, 0x0F, 0x6F, 0x5A, 0x50 };
+    static const unsigned char subRsp[] = { 0x48, 0x83, 0xEC, 0x20 };
+    static const unsigned char callRax[] = { 0xFF, 0xD0 };
+    static const unsigned char addRsp[] = { 0x48, 0x83, 0xC4, 0x20 };
+    static const unsigned char callMemR10[] = { 0x41, 0xFF, 0x12 }; // call [r10]
+    static const unsigned char saveResult[] = { 0x49, 0x89, 0x02, 0xF3, 0x41, 0x0F, 0x7F, 0x42, 0x20 }; // rax, xmm0
+    static const unsigned char loadResult[] = { 0x49, 0x8B, 0x02, 0xF3, 0x41, 0x0F, 0x6F, 0x42, 0x20 };
+    static const unsigned char jmpMemR10[] = { 0x41, 0xFF, 0x22 }; // jmp [r10]
+    p = EmitImm(p, 0x49, 0xBA, (unsigned __int64)&g_toolTarget);
+    p = Emit(p, storeR11, sizeof(storeR11));
+    p = Emit(p, popR11, sizeof(popR11));
+    p = EmitImm(p, 0x49, 0xBA, (unsigned __int64)&g_toolReturn);
+    p = Emit(p, storeR11, sizeof(storeR11));
+    p = EmitImm(p, 0x49, 0xBA, (unsigned __int64)g_toolSaved);
+    p = Emit(p, saveArgs, sizeof(saveArgs));
+    p = Emit(p, subRsp, sizeof(subRsp));
+    p = EmitImm(p, 0x48, 0xB8, (unsigned __int64)&ToolEnter);
+    p = Emit(p, callRax, sizeof(callRax));
+    p = Emit(p, addRsp, sizeof(addRsp));
+    p = EmitImm(p, 0x49, 0xBA, (unsigned __int64)g_toolSaved);
+    p = Emit(p, loadArgs, sizeof(loadArgs));
+    p = EmitImm(p, 0x49, 0xBA, (unsigned __int64)&g_toolTarget);
+    p = Emit(p, callMemR10, sizeof(callMemR10));
+    p = EmitImm(p, 0x49, 0xBA, (unsigned __int64)g_toolSaved);
+    p = Emit(p, saveResult, sizeof(saveResult));
+    p = Emit(p, subRsp, sizeof(subRsp));
+    p = EmitImm(p, 0x48, 0xB8, (unsigned __int64)&ToolLeave);
+    p = Emit(p, callRax, sizeof(callRax));
+    p = Emit(p, addRsp, sizeof(addRsp));
+    p = EmitImm(p, 0x49, 0xBA, (unsigned __int64)g_toolSaved);
+    p = Emit(p, loadResult, sizeof(loadResult));
+    p = EmitImm(p, 0x49, 0xBA, (unsigned __int64)&g_toolReturn);
+    return Emit(p, jmpMemR10, sizeof(jmpMemR10));
+}
+
+static bool InstallToolStubs()
+{
+    for (size_t i = 0; i < TOOL_CALL_COUNT; i++) {
+        BYTE* call = g_exeBase + kToolCalls[i][0];
+        int rel = 0;
+        memcpy(&rel, call + 1, 4);
+        if (*call != 0xE8 || kToolCalls[i][0] + 5 + rel != kToolCalls[i][1]) {
+            Logf("republicmp  SIM_PATCHES: tool call at 0x%X differs - tool stubs not installed", kToolCalls[i][0]);
+            return false;
+        }
+    }
+    SIZE_T size = TOOL_STUB_SIZE * (TOOL_CALL_COUNT + 16);
+    g_toolStubs = AllocNear(g_exeBase + 0x312823, size);
+    if (!g_toolStubs) return false;
+    DWORD old;
+    VirtualProtect(g_toolStubs, size, PAGE_EXECUTE_READWRITE, &old);
+    BYTE* common = g_toolStubs + TOOL_STUB_SIZE * TOOL_CALL_COUNT;
+    EmitCommon(common);
+    for (size_t i = 0; i < TOOL_CALL_COUNT; i++) {
+        static const unsigned char jmpR10[] = { 0x41, 0xFF, 0xE2 };
+        BYTE* p = g_toolStubs + TOOL_STUB_SIZE * i;
+        p = EmitImm(p, 0x49, 0xBB, (unsigned __int64)(g_exeBase + kToolCalls[i][1])); // mov r11, target
+        p = EmitImm(p, 0x49, 0xBA, (unsigned __int64)common);                        // mov r10, common
+        Emit(p, jmpR10, sizeof(jmpR10));
+    }
+    VirtualProtect(g_toolStubs, size, PAGE_EXECUTE_READ, &old);
+    FlushInstructionCache(GetCurrentProcess(), g_toolStubs, size);
+    for (size_t i = 0; i < TOOL_CALL_COUNT; i++) {
+        unsigned char call[5];
+        if (!CallTo(kToolCalls[i][0], g_toolStubs + TOOL_STUB_SIZE * i, call)) return false;
+        Write(g_exeBase + kToolCalls[i][0], call, 5);
+    }
+    return true;
 }
 
 void SimPatches_BeforeEarly(__int64 world)
@@ -352,7 +720,11 @@ void SimPatches_BeforeEarly(__int64 world)
     g_inPhase = true;
 }
 
-void SimPatches_AfterEarly() { g_inPhase = false; }
+void SimPatches_AfterEarly()
+{
+    g_inPhase = false;
+    g_visibleFresh = false; // the tick may have removed buildings
+}
 
 int SimPatches_LastPopulation() { return g_lastPopulation; }
 
@@ -477,11 +849,21 @@ static void DetPrepare(__int64 world)
         return;
     }
     Determinism_BeforePrepare();
-    __int64 tool = *(__int64*)(world + 0xD428);
-    if (Determinism_IsStepFrame()) *(__int64*)(world + 0xD428) = 0;
-    Determinism_PrivateScope privateRng;
-    original(world);
-    if (Determinism_IsStepFrame()) *(__int64*)(world + 0xD428) = tool;
+    // Prepare keeps the tool on every frame: it prepares this PC's view (the
+    // build mode's highlights, the placement ghost), and hiding it on a tick's
+    // frame made every building and road blink while a tool was in hand. It
+    // sees this PC's own view (as a held Late does), made anew each frame.
+    g_visibleFresh = false;
+    PrivateView kept;
+    PrivateViewIn(kept);
+    bool scope = Determinism_IsStepFrame();
+    if (scope) Determinism_ToolScopeBegin();
+    {
+        Determinism_PrivateScope privateRng;
+        original(world);
+    }
+    if (scope) Determinism_ToolScopeEnd();
+    PrivateViewOut(kept);
 }
 
 // Late runs even at speed 0: 547ef0 clamps road speeds without time passing;
@@ -504,11 +886,82 @@ static void DetRoadWeather(void* world, unsigned long long init)
     if (!Determinism_IsActive() || Determinism_IsStepFrame())
         ((void (*)(void*, unsigned long long))(g_exeBase + 0x5CFEA0))(world, init);
 }
-static const unsigned kStepCalls[] = { 0x30E3AC, 0x30E3B8, 0x30E3C4, 0x30D9DD, 0x30D9E7 };
-static const unsigned kStepTargets[] = { 0x547EF0, 0x547EF0, 0x547EF0, 0x333BD0, 0x5CFEA0 };
+// Two more queues the Late body works off by frame, not by tick (30d6bc,
+// 30d6c4): 12fd80 drains the list at world+11fa0 with a budget of 1000 per
+// call, and 12ec40 counts world+11f80 up every frame and, every 20th, checks
+// the buildings queued in world+11f88 (12eab0 queues them with +ca0 = 1 when
+// a network or a building changes near them; 12e6d0 checks one, 12eba0
+// clears the flag). Both are empty most of the time, which is why held
+// frames looked harmless; after a construction command the PC with more
+// held frames worked the queues off first. On the save path (42cd57) 12fd80
+// stays native.
+static void DetBuildingLinks(void* world, unsigned long long all)
+{
+    if (!Determinism_IsActive() || Determinism_IsStepFrame())
+        ((void (*)(void*, unsigned long long))(g_exeBase + 0x12FD80))(world, all);
+}
+static void DetConnectionChecks(void* world)
+{
+    if (!Determinism_IsActive() || Determinism_IsStepFrame())
+        ((void (*)(void*))(g_exeBase + 0x12EC40))(world);
+}
+// The ground-paint queue world+130d0 (filled by 40eaa0 when roads and
+// buildings are built) is drained by 40ece0 at 3155f4 on every frame too: a
+// held frame painted the ground of the newest construction on this PC first,
+// and with commands captured those EditMask calls looked like a tool's.
+static void DetGroundPaint(void* world)
+{
+    if (!Determinism_IsActive() || Determinism_IsStepFrame())
+        ((void (*)(void*))(g_exeBase + 0x40ECE0))(world);
+}
+// The building windows (6f8cc0, 7fc880) show a construction cost every frame
+// through 1a48c0, whose 1a0570 starts with building +0x600 = +0x604 (1a0612).
+// The simulation reads +0x600 (15e18e, 168900), so an open window changed
+// what that building's construction charged on its PC only. The word is put
+// back when the call made it the copy. (by SoylentGreed)
+static float DetDisplayCost(void* world, BYTE* building, unsigned long long flag)
+{
+    typedef float (*CostFn)(void*, BYTE*, unsigned long long);
+    CostFn original = (CostFn)(g_exeBase + 0x1A48C0);
+    if (!Determinism_IsActive() || !building) return original(world, building, flag);
+    unsigned kept = 0;
+    __try {
+        kept = *(unsigned*)(building + 0x600);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return original(world, building, flag);
+    }
+    float r = original(world, building, flag);
+    __try {
+        unsigned now = *(unsigned*)(building + 0x600);
+        if (now != kept && now == *(unsigned*)(building + 0x604)) *(unsigned*)(building + 0x600) = kept;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return r;
+}
+// The building tool's placing press: 2bade0 reads the left press at 2cc37c
+// and places when the spot is valid. In lockstep that press becomes a
+// placement command instead (world_sync/local_builds), and the game reads it
+// as not pressed; every other read of the mouse in the tool stays real.
+#define PLACE_PRESS_SITE 0x2CC37C
+#define PLACE_PRESS_IMPORT 0x86C8B8 // C3D_INPUT::GetMouseLeftPress
+static const unsigned char kPlacePressOriginal[6] = { 0xff, 0x15, 0x36, 0x05, 0x5a, 0x00 };
+typedef bool (*PressFn)(void* input);
+
+static bool DetPlacePress(void* input)
+{
+    bool pressed = (*(PressFn*)(g_exeBase + PLACE_PRESS_IMPORT))(input);
+    if (pressed && Determinism_IsActive() && LocalBuilds_PlacementPress()) return false;
+    return pressed;
+}
+#define STEP_CALL_COUNT 16
+static const unsigned kStepCalls[STEP_CALL_COUNT] = { 0x30E3AC, 0x30E3B8, 0x30E3C4, 0x30D9DD, 0x30D9E7, 0x30D6BC, 0x30D6C4, 0x3155F4,
+                                                      0x6F91DF, 0x6F92C8, 0x6F940E, 0x6FA603, 0x6FA657, 0x7FCAE6, 0x7FCBDC, 0x7FCD00 };
+static const unsigned kStepTargets[STEP_CALL_COUNT] = { 0x547EF0, 0x547EF0, 0x547EF0, 0x333BD0, 0x5CFEA0, 0x12FD80, 0x12EC40, 0x40ECE0,
+                                                        0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0 };
+static const int kStepSlots[STEP_CALL_COUNT] = { 6, 6, 6, 7, 8, 9, 10, 11, 12, 12, 12, 12, 12, 12, 12, 12 }; // relay slot of each site
 static bool VerifyStepCalls()
 {
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < STEP_CALL_COUNT; i++) {
         BYTE* call = g_exeBase + kStepCalls[i];
         int rel = 0;
         memcpy(&rel, call + 1, 4);
@@ -544,45 +997,51 @@ bool SimPatches_Install()
                    memcmp(g_exeBase + SAPLING_LATE_CALL, kSaplingLateOriginal, 5) == 0 &&
                    memcmp(g_exeBase + FRAME_LOCK_SITE, kFrameLockOriginal, 6) == 0 &&
                    memcmp(g_exeBase + UI_ROUTINE_CALL, kUiCallOriginal, 5) == 0 &&
-                   memcmp(g_exeBase + PREPARE_CALL, kPrepareCallOriginal, 5) == 0 && VerifyStepCalls();
+                   memcmp(g_exeBase + PREPARE_CALL, kPrepareCallOriginal, 5) == 0 &&
+                   memcmp(g_exeBase + PLACE_PRESS_SITE, kPlacePressOriginal, 6) == 0 && VerifyStepCalls();
     bool relays = false;
     if (sitesOk) g_relay = AllocNear(g_exeBase, 4096);
     if (g_relay) {
         DWORD old;
-        VirtualProtect(g_relay, 144, PAGE_EXECUTE_READWRITE, &old);
-        void* targets[9] = { (void*)&DetGetNode, (void*)&DetSaplingRender, (void*)&DetSaplingLate, (void*)&DetFrameLock,
-                             (void*)&DetUiRoutine, (void*)&DetPrepare, (void*)&DetPieceSpeed, (void*)&DetWeather, (void*)&DetRoadWeather };
-        for (int i = 0; i < 9; i++) {
+        VirtualProtect(g_relay, 224, PAGE_EXECUTE_READWRITE, &old);
+        void* targets[14] = { (void*)&DetGetNode, (void*)&DetSaplingRender, (void*)&DetSaplingLate, (void*)&DetFrameLock,
+                              (void*)&DetUiRoutine, (void*)&DetPrepare, (void*)&DetPieceSpeed, (void*)&DetWeather, (void*)&DetRoadWeather,
+                              (void*)&DetBuildingLinks, (void*)&DetConnectionChecks, (void*)&DetGroundPaint, (void*)&DetDisplayCost,
+                              (void*)&DetPlacePress };
+        for (int i = 0; i < 14; i++) {
             BYTE* r = g_relay + i * 16;
             r[0] = 0xff; r[1] = 0x25; r[2] = r[3] = r[4] = r[5] = 0;
             memcpy(r + 6, &targets[i], 8);
         }
-        VirtualProtect(g_relay, 144, PAGE_EXECUTE_READ, &old);
-        FlushInstructionCache(GetCurrentProcess(), g_relay, 144);
-        unsigned char getNode[6], render[5], lateCall[5], frameLock[6], uiCall[5], prepareCall[5];
+        VirtualProtect(g_relay, 224, PAGE_EXECUTE_READ, &old);
+        FlushInstructionCache(GetCurrentProcess(), g_relay, 224);
+        unsigned char getNode[6], render[5], lateCall[5], frameLock[6], uiCall[5], prepareCall[5], placePress[6];
         getNode[0] = 0x90;
         frameLock[0] = 0x90;
+        placePress[0] = 0x90;
         if (CallTo(GETNODE_SITE + 1, g_relay, getNode + 1) && CallTo(SAPLING_RENDER_CALL, g_relay + 16, render) &&
             CallTo(SAPLING_LATE_CALL, g_relay + 32, lateCall) && CallTo(FRAME_LOCK_SITE + 1, g_relay + 48, frameLock + 1) &&
-            CallTo(UI_ROUTINE_CALL, g_relay + 64, uiCall) && CallTo(PREPARE_CALL, g_relay + 80, prepareCall)) {
+            CallTo(UI_ROUTINE_CALL, g_relay + 64, uiCall) && CallTo(PREPARE_CALL, g_relay + 80, prepareCall) &&
+            CallTo(PLACE_PRESS_SITE + 1, g_relay + 13 * 16, placePress + 1)) {
             Write(g_exeBase + GETNODE_SITE, getNode, 6);
             Write(g_exeBase + SAPLING_RENDER_CALL, render, 5);
             Write(g_exeBase + SAPLING_LATE_CALL, lateCall, 5);
             Write(g_exeBase + FRAME_LOCK_SITE, frameLock, 6);
             Write(g_exeBase + UI_ROUTINE_CALL, uiCall, 5);
             Write(g_exeBase + PREPARE_CALL, prepareCall, 5);
+            Write(g_exeBase + PLACE_PRESS_SITE, placePress, 6);
             relays = true;
-            for (int i = 0; i < 5; i++) {
+            for (int i = 0; i < STEP_CALL_COUNT; i++) {
                 unsigned char call[5];
-                int slot = i < 3 ? 6 : i + 4;
-                if (!CallTo(kStepCalls[i], g_relay + slot * 16, call)) { relays = false; break; }
+                if (!CallTo(kStepCalls[i], g_relay + kStepSlots[i] * 16, call)) { relays = false; break; }
                 Write(g_exeBase + kStepCalls[i], call, 5);
             }
         }
     }
-    Logf("republicmp  SIM_PATCHES: late hook %d, relays %d (building visibility, saplings, render before Early, interface searches, Prepare at speed 0)%s", late, relays,
-         sitesOk ? "" : " - unexpected bytes at a relay site");
-    return late && relays;
+    bool tools = relays && InstallToolStubs();
+    Logf("republicmp  SIM_PATCHES: late hook %d, relays %d (building visibility, saplings, render before Early, interface searches, Prepare at speed 0, window cost display, placing press), tool stubs %d (%d calls)%s",
+         late, relays, tools, (int)TOOL_CALL_COUNT, sitesOk ? "" : " - unexpected bytes at a relay site");
+    return late && relays && tools;
 }
 
 bool SimPatches_Apply()

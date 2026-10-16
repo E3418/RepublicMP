@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // IDXGISwapChain::Present hook - public interface.
 #pragma once
 

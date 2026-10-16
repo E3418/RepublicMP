@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Real input blocking for the sync screen (ui/sync_block).
 //
 // Swallowing window messages (game/imgui_hook) is not enough: the game reads
@@ -20,6 +21,12 @@
 
 void InputBlock_Bind(const TsmHost* host);
 bool InstallInputBlockHooks();
+
+// Lockstep commands (main thread): while a command is made, the keys and
+// bindings read up and the left button reads what the command wrote into the
+// button bytes, so this PC's own keyboard and mouse cannot change it.
+void InputBlock_BeginNeutral();
+void InputBlock_EndNeutral();
 
 // Per-frame (game thread, Present hook): clears the left-button bytes while
 // blocked and tracks the start/end of a block.

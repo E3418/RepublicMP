@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // See save_zip.h.
 #include "save_zip.h"
 #include "../third_party/miniz/miniz.h"

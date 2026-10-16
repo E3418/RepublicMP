@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // See view_list_scope.h.
 #include "view_list_scope.h"
 #include "networks/road_sync.h" // RoadSync_GetCategoryInfo (the network managers)

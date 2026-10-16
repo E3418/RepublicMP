@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Default host IP for the Connect field. Taken from the optional, gitignored
 // mp_config.h (see mp_config.h.example); empty when that file is absent - the
 // IP can always be typed in the main window.

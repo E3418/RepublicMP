@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // RepublicMP - TesmioLoader plugin entry points.
 #include "tesmio_plugin.h"
 #include "../world_sync/local_builds.h"

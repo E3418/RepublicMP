@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // See debug_window.h.
 #include "debug_window.h"
 #include "imgui.h"
@@ -169,6 +170,7 @@ void DebugWindow::Draw()
         ImGui::TextUnformatted("Determinism probe:");
         static int s_probeLength = 1;
         static bool s_probeFuzz = false;
+        static bool s_probeRecord = false;
         static const int kProbeSteps[] = { 600, 1800, 3600, 10800 };
         static const char* const kProbeLabels[] = { "600 ticks", "1800 ticks", "3600 ticks", "10800 ticks" };
         ImGui::BeginDisabled(Probe_IsRunning() || SaveSync_IsBusy());
@@ -176,8 +178,9 @@ void DebugWindow::Draw()
         ImGui::Combo("##probeLength", &s_probeLength, kProbeLabels, IM_ARRAYSIZE(kProbeLabels));
         ImGui::SameLine();
         if (ImGui::Button("Run probe"))
-            Probe_Start(kProbeSteps[s_probeLength], 30, s_probeFuzz);
+            Probe_Start(kProbeSteps[s_probeLength], 30, s_probeFuzz, s_probeRecord);
         ImGui::Checkbox("Fuzz held frames and speed", &s_probeFuzz);
+        ImGui::Checkbox("Build during run 1 (lockstep commands)", &s_probeRecord);
         ImGui::EndDisabled();
         ImGui::TextWrapped("Saves the game as 'mp_probe', then loads and simulates it twice and compares the "
                            "state after complete ticks. Fuzz holds 0-3 frames in run 2 and changes speed every 300 ticks. "
