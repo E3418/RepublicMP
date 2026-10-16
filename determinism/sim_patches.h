@@ -1,4 +1,4 @@
-// Determinism patches: the rest of the camera, keyboard and frame-rate paths
+// Simulation patches: the rest of the camera, keyboard and frame-rate paths
 // inside the simulation, so two runs (two PCs) from the same save step the
 // same way. Active only together with the determinism layer (determinism.h:
 // the probe now, a lockstep session later) - never in a 0.4 replay session,
@@ -32,6 +32,12 @@
 //   - saplings (9e4d, 30d9b2): a new planting entry starts growing in Late on
 //     the tick it appears, not on whichever rendered frame came next; the
 //     forest add itself stays on the render thread, queued.
+//   - render before Early (105df3): the frame waits for the render thread
+//     before it takes the renderer lock;
+//   - interface searches (482b52): the UI routine searches in vectors of
+//     its own, so it never changes the result pool the simulation picks from.
+//   - Prepare at speed 0 (105e56): the camera object no longer moves on its
+//     own while the game runs.
 // And the Late body (30d1a0):
 //   - population count world+0xc720 is recounted with the interface's rule
 //     before Early and before Late (the simulation reads it; the interface
@@ -43,20 +49,26 @@
 
 #include "tesmio_plugin.h"
 
-void DetPatches_Bind(const TsmHost* host);
+void SimPatches_Bind(const TsmHost* host);
 
 // Installs the call relays and the Late hook. Call once from TsmPluginStart.
-bool DetPatches_Install();
+bool SimPatches_Install();
 
 // Writes the byte patches and turns the relays on. Main thread, with the
 // simulation not running (the probe calls it right before a load).
-void DetPatches_Apply();
+void SimPatches_Apply();
 
 // Per frame (Present hook): puts the byte patches back once the layer is off.
-void DetPatches_Tick();
+void SimPatches_Tick();
 
 // Main thread, right before Early (determinism.cpp's step hook).
-void DetPatches_BeforeEarly(__int64 world);
+void SimPatches_BeforeEarly(__int64 world);
+// Main thread, right after Early.
+void SimPatches_AfterEarly();
 
 // For the probe log: the last population count written (-1 = never).
-int DetPatches_LastPopulation();
+int SimPatches_LastPopulation();
+
+// Main thread, at the start of a frame (determinism.cpp's timer Start hook):
+// while the patches are on, waits for the render thread's frame to finish.
+void SimPatches_WaitRender();

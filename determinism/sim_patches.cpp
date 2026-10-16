@@ -1,5 +1,5 @@
-// See det_patches.h.
-#include "det_patches.h"
+// See sim_patches.h.
+#include "sim_patches.h"
 #include "determinism.h"
 #include <string.h>
 #include <limits.h>
@@ -7,7 +7,7 @@
 
 #define WORLD_RVA 0x9D4F10
 
-void DetPatches_Bind(const TsmHost* host)
+void SimPatches_Bind(const TsmHost* host)
 {
     TsmBind(host);
 }
@@ -299,15 +299,18 @@ static void RecountPopulation(__int64 world)
     int* count = (int*)(world + POPULATION_OFFSET);
     if (!g_populationLogged) {
         g_populationLogged = true;
-        Logf("republicmp  DET_PATCHES: population - the game's %d, recounted %d of %d citizens listed", *count, n, listed);
+        Logf("republicmp  SIM_PATCHES: population - the game's %d, recounted %d of %d citizens listed", *count, n, listed);
     }
     if (n < 0) {
-        if (InterlockedIncrement(&g_populationFaults) <= 3) Logf("republicmp  DET_PATCHES: population recount faulted");
+        if (InterlockedIncrement(&g_populationFaults) <= 3) Logf("republicmp  SIM_PATCHES: population recount faulted");
         return;
     }
     *count = n;
     g_lastPopulation = n;
 }
+
+// Set while Early or Late runs.
+static volatile bool g_inPhase = false;
 
 static void HookedLate(__int64 world)
 {
@@ -316,16 +319,21 @@ static void HookedLate(__int64 world)
         *(float*)(world + AUTOSAVE_TIMER_OFFSET) = 0.0f;
         RecountPopulation(world);
     }
+    g_inPhase = true;
     o_late(world);
+    g_inPhase = false;
 }
 
-void DetPatches_BeforeEarly(__int64 world)
+void SimPatches_BeforeEarly(__int64 world)
 {
     g_simThread = GetCurrentThreadId();
     if (g_on) RecountPopulation(world);
+    g_inPhase = true;
 }
 
-int DetPatches_LastPopulation() { return g_lastPopulation; }
+void SimPatches_AfterEarly() { g_inPhase = false; }
+
+int SimPatches_LastPopulation() { return g_lastPopulation; }
 
 // ---------------------------------------------------------------------------
 // Render thread before Early (frame loop 105df3)
@@ -350,16 +358,93 @@ static const unsigned char kFrameLockOriginal[6] = { 0xff, 0x15, 0xff, 0x79, 0x7
 typedef void (WINAPI* EnterCsFn)(LPCRITICAL_SECTION);
 static volatile LONG g_renderWaitTimeouts = 0;
 
+// The frame already waits at its very start (the timer Start hook, see
+// SimPatches_WaitRender): the frame loop rescales the game timer there, and
+// the interface on the render thread reads it (PowerTime) for its own
+// countdowns. The wait here then returns at once; it stays for safety.
+void SimPatches_WaitRender()
+{
+    if (!g_on) return;
+    BYTE* renderer = *(BYTE**)(g_exeBase + RENDERER_RVA);
+    HANDLE finished = renderer ? *(HANDLE*)(renderer + RENDERER_FINISHED) : nullptr;
+    if (finished && WaitForSingleObject(finished, RENDER_WAIT_MS) == WAIT_TIMEOUT &&
+        InterlockedIncrement(&g_renderWaitTimeouts) <= 3)
+        Logf("republicmp  SIM_PATCHES: the render thread took over %d ms - frame went on without it", RENDER_WAIT_MS);
+}
+
 static void DetFrameLock(LPCRITICAL_SECTION cs)
 {
-    if (g_on) {
-        BYTE* renderer = *(BYTE**)(g_exeBase + RENDERER_RVA);
-        HANDLE finished = renderer ? *(HANDLE*)(renderer + RENDERER_FINISHED) : nullptr;
-        if (finished && WaitForSingleObject(finished, RENDER_WAIT_MS) == WAIT_TIMEOUT &&
-            InterlockedIncrement(&g_renderWaitTimeouts) <= 3)
-            Logf("republicmp  DET_PATCHES: the render thread took over %d ms - frame went on without it", RENDER_WAIT_MS);
-    }
+    SimPatches_WaitRender();
     (*(EnterCsFn*)(g_exeBase + FRAME_LOCK_IMPORT))(cs);
+}
+
+// ---------------------------------------------------------------------------
+// Interface searches (UI routine, render thread, 482b52)
+// ---------------------------------------------------------------------------
+//
+// The game's search routine (424430) keeps its work and results in three
+// vectors of the world (+14478 / +14490 / +144a8). The interface (317db0,
+// called by the render thread at 482b52 under the renderer lock) searches
+// there too, and the simulation's chooser (420350) draws a random number and
+// picks only when the result pool is not empty - so what the interface last
+// searched decided a vehicle's next target. While the layer is on, the
+// interface searches in vectors of its own: the world's three headers are
+// swapped for private ones around the call and put back. The renderer lock
+// and the render wait before Early keep the simulation out meanwhile.
+// (by SoylentGreed)
+
+#define UI_ROUTINE_RVA 0x317DB0
+#define UI_ROUTINE_CALL 0x482B52
+#define SEARCH_WORKSPACE_OFFSET 0x14478
+#define SEARCH_WORKSPACE_SIZE 72 // three vector headers {begin, end, capacity}
+static const unsigned char kUiCallOriginal[5] = { 0xe8, 0x59, 0x52, 0xe9, 0xff };
+static BYTE g_privateSearch[SEARCH_WORKSPACE_SIZE] = {};
+static volatile LONG g_uiEnclosed = 0;
+
+static __int64 DetUiRoutine(void* world)
+{
+    typedef __int64 (*UiFn)(void*);
+    UiFn original = (UiFn)(g_exeBase + UI_ROUTINE_RVA);
+    if (!g_on || (BYTE*)world != g_exeBase + WORLD_RVA) return original(world);
+    BYTE* shared = (BYTE*)world + SEARCH_WORKSPACE_OFFSET;
+    BYTE saved[SEARCH_WORKSPACE_SIZE];
+    memcpy(saved, shared, sizeof(saved));
+    memcpy(shared, g_privateSearch, sizeof(saved));
+    __int64 r = original(world);
+    memcpy(g_privateSearch, shared, sizeof(saved));
+    memcpy(shared, saved, sizeof(saved));
+    InterlockedIncrement(&g_uiEnclosed);
+    return r;
+}
+
+// ---------------------------------------------------------------------------
+// Prepare at speed 0 (frame loop 105e56)
+// ---------------------------------------------------------------------------
+//
+// Prepare (3d85a0) is this PC's view preparation; its camera object (14250)
+// moves only while the game runs (142ef tests world+5a4) and is timed with
+// PowerTime, so the camera drifted on its own and the paths that still read
+// the camera followed. While the layer is on, Prepare runs with the speed
+// word at 0 and gets it back right after. (by SoylentGreed)
+
+#define PREPARE_RVA 0x3D85A0
+#define PREPARE_CALL 0x105E56
+#define WORLD_SPEED_OFFSET 0x5A4
+static const unsigned char kPrepareCallOriginal[5] = { 0xe8, 0x45, 0x27, 0x2d, 0x00 };
+
+static void DetPrepare(__int64 world)
+{
+    typedef void (*PrepareFn)(__int64);
+    PrepareFn original = (PrepareFn)(g_exeBase + PREPARE_RVA);
+    if (!g_on || world != (__int64)(g_exeBase + WORLD_RVA)) {
+        original(world);
+        return;
+    }
+    int* speed = (int*)(world + WORLD_SPEED_OFFSET);
+    int was = *speed;
+    *speed = 0;
+    original(world);
+    if (*speed == 0) *speed = was; // the interface may have changed it meanwhile: keep that
 }
 
 // ---------------------------------------------------------------------------
@@ -379,7 +464,7 @@ static bool CallTo(unsigned int site, BYTE* target, unsigned char out[5])
     return true;
 }
 
-bool DetPatches_Install()
+bool SimPatches_Install()
 {
     bool late = InstallInlineHook(g_exeBase + LATE_RVA, (void*)&HookedLate, (void**)&o_late,
                                   kLateExpect, sizeof(kLateExpect), "republicmp late body");
@@ -387,43 +472,49 @@ bool DetPatches_Install()
     bool sitesOk = memcmp(g_exeBase + GETNODE_SITE, kGetNodeOriginal, 6) == 0 &&
                    memcmp(g_exeBase + SAPLING_RENDER_CALL, kSaplingRenderOriginal, 5) == 0 &&
                    memcmp(g_exeBase + SAPLING_LATE_CALL, kSaplingLateOriginal, 5) == 0 &&
-                   memcmp(g_exeBase + FRAME_LOCK_SITE, kFrameLockOriginal, 6) == 0;
+                   memcmp(g_exeBase + FRAME_LOCK_SITE, kFrameLockOriginal, 6) == 0 &&
+                   memcmp(g_exeBase + UI_ROUTINE_CALL, kUiCallOriginal, 5) == 0 &&
+                   memcmp(g_exeBase + PREPARE_CALL, kPrepareCallOriginal, 5) == 0;
     bool relays = false;
     if (sitesOk) g_relay = AllocNear(g_exeBase, 4096);
     if (g_relay) {
         DWORD old;
-        VirtualProtect(g_relay, 64, PAGE_EXECUTE_READWRITE, &old);
-        void* targets[4] = { (void*)&DetGetNode, (void*)&DetSaplingRender, (void*)&DetSaplingLate, (void*)&DetFrameLock };
-        for (int i = 0; i < 4; i++) {
+        VirtualProtect(g_relay, 96, PAGE_EXECUTE_READWRITE, &old);
+        void* targets[6] = { (void*)&DetGetNode, (void*)&DetSaplingRender, (void*)&DetSaplingLate, (void*)&DetFrameLock,
+                             (void*)&DetUiRoutine, (void*)&DetPrepare };
+        for (int i = 0; i < 6; i++) {
             BYTE* r = g_relay + i * 16;
             r[0] = 0xff; r[1] = 0x25; r[2] = r[3] = r[4] = r[5] = 0;
             memcpy(r + 6, &targets[i], 8);
         }
-        VirtualProtect(g_relay, 64, PAGE_EXECUTE_READ, &old);
-        FlushInstructionCache(GetCurrentProcess(), g_relay, 64);
-        unsigned char getNode[6], render[5], lateCall[5], frameLock[6];
+        VirtualProtect(g_relay, 96, PAGE_EXECUTE_READ, &old);
+        FlushInstructionCache(GetCurrentProcess(), g_relay, 96);
+        unsigned char getNode[6], render[5], lateCall[5], frameLock[6], uiCall[5], prepareCall[5];
         getNode[0] = 0x90;
         frameLock[0] = 0x90;
         if (CallTo(GETNODE_SITE + 1, g_relay, getNode + 1) && CallTo(SAPLING_RENDER_CALL, g_relay + 16, render) &&
-            CallTo(SAPLING_LATE_CALL, g_relay + 32, lateCall) && CallTo(FRAME_LOCK_SITE + 1, g_relay + 48, frameLock + 1)) {
+            CallTo(SAPLING_LATE_CALL, g_relay + 32, lateCall) && CallTo(FRAME_LOCK_SITE + 1, g_relay + 48, frameLock + 1) &&
+            CallTo(UI_ROUTINE_CALL, g_relay + 64, uiCall) && CallTo(PREPARE_CALL, g_relay + 80, prepareCall)) {
             Write(g_exeBase + GETNODE_SITE, getNode, 6);
             Write(g_exeBase + SAPLING_RENDER_CALL, render, 5);
             Write(g_exeBase + SAPLING_LATE_CALL, lateCall, 5);
             Write(g_exeBase + FRAME_LOCK_SITE, frameLock, 6);
+            Write(g_exeBase + UI_ROUTINE_CALL, uiCall, 5);
+            Write(g_exeBase + PREPARE_CALL, prepareCall, 5);
             relays = true;
         }
     }
-    Logf("republicmp  DET_PATCHES: late hook %d, relays %d (building visibility, saplings, render before Early)%s", late, relays,
+    Logf("republicmp  SIM_PATCHES: late hook %d, relays %d (building visibility, saplings, render before Early, interface searches, Prepare at speed 0)%s", late, relays,
          sitesOk ? "" : " - unexpected bytes at a relay site");
     return late && relays;
 }
 
-void DetPatches_Apply()
+void SimPatches_Apply()
 {
     if (g_on || g_refused) return;
     for (size_t i = 0; i < PATCH_COUNT; i++) {
         if (!BytesAre(kPatches[i], kPatches[i].original)) {
-            Logf("republicmp  DET_PATCHES: unexpected bytes at 0x%X (%s) - none applied", kPatches[i].rva,
+            Logf("republicmp  SIM_PATCHES: unexpected bytes at 0x%X (%s) - none applied", kPatches[i].rva,
                  kPatches[i].what);
             g_refused = true;
             return;
@@ -433,12 +524,14 @@ void DetPatches_Apply()
     g_populationLogged = false;
     g_populationFaults = 0;
     g_lastPopulation = -1;
+    memset(g_privateSearch, 0, sizeof(g_privateSearch)); // each run's interface starts with empty vectors (the old ones leak)
+    g_uiEnclosed = 0;
     g_on = true;
-    Logf("republicmp  DET_PATCHES: %d applied (vehicle visibility and placement, sign zones, follow camera, "
+    Logf("republicmp  SIM_PATCHES: %d applied (vehicle visibility and placement, sign zones, follow camera, "
          "debug keys) + building visibility, saplings, population count, autosave hold", (int)PATCH_COUNT);
 }
 
-void DetPatches_Tick()
+void SimPatches_Tick()
 {
     if (!g_on || Determinism_IsActive()) return;
     g_on = false;
@@ -447,5 +540,5 @@ void DetPatches_Tick()
     AcquireSRWLockExclusive(&g_saplingLock);
     g_saplingQueue.clear(); // the loads that follow rebuild the forest from the list anyway
     ReleaseSRWLockExclusive(&g_saplingLock);
-    Logf("republicmp  DET_PATCHES: restored");
+    Logf("republicmp  SIM_PATCHES: restored (%ld interface frame(s) searched in their own vectors)", g_uiEnclosed);
 }
