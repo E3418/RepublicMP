@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // RepublicMP version and wire-protocol number.
 //
 // REPUBLICMP_VERSION: MAJOR.FEATURE.PATCH (see README.md's Versioning section).
@@ -9,4 +10,4 @@
 #pragma once
 
 #define REPUBLICMP_VERSION "0.4.3"
-#define REPUBLICMP_PROTOCOL 18
+#define REPUBLICMP_PROTOCOL 20

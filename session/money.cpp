@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // See money.h.
 #include "money.h"
 #include "../ui/sync_block.h"

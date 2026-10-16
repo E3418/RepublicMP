@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Session patches: small code patches that take the camera and the frame
 // rate out of the simulation while two players are connected, so both PCs
 // run the same branch. Each one is checked against the original bytes first

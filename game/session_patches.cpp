@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // See session_patches.h.
 #include "session_patches.h"
 #include "../world_sync/buildings/build_sync.h" // BuildSync_IsConnected
@@ -66,9 +67,12 @@ static BYTE* g_gateRelay = nullptr;
 
 static void CitizenInitGate(void* owner, void* citizen)
 {
-    if (GetCurrentThreadId() == g_simThreadId &&
-        (!Determinism_IsActive() || Determinism_IsStepFrame()))
-        ((CitizenInitFn)(g_exeBase + CITIZEN_INIT_RVA))(owner, citizen);
+    // With the layer on, its own step test (the main thread on a step frame):
+    // g_simThreadId is only known after the first tick, and a player who
+    // joined from the main menu had none yet, so its first tick refused the
+    // initializations the host's made.
+    bool allowed = Determinism_IsActive() ? Determinism_IsStepFrame() : GetCurrentThreadId() == g_simThreadId;
+    if (allowed) ((CitizenInitFn)(g_exeBase + CITIZEN_INIT_RVA))(owner, citizen);
 }
 
 static void OnSimStep()

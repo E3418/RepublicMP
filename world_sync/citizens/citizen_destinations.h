@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Citizens' destination lists: where a home's (or a bus stop's) workers,
 // students, passengers and tourists go - building +0xf18 / +0xf30 / +0xf48 /
 // +0xf60, vectors of 16-byte entries (share, flags, target building). The

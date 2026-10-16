@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 #include "held_frame.h"
 #include "determinism.h"
 #include <vector>

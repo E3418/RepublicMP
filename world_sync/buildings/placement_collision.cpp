@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // See placement_collision.h.
 #include "placement_collision.h"
 #include <intrin.h>

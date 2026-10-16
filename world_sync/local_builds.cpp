@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // See local_builds.h.
 #include "local_builds.h"
 #include "../game/present_hook.h"
@@ -8,6 +9,8 @@
 #include "view_list_scope.h"
 #include "buildings/demolish_hook.h" // DemolishHook_InDemolish
 #include "../ui/sync_block.h"
+#include "../lockstep/commands.h"
+#include "../determinism/determinism.h"
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -333,21 +336,18 @@ static bool FillUpgradePiece(__int64 seg, RoadSyncUpgradePiece* p)
 // point range (+0x3d0 == 0), or every segment of the pathfound list the
 // commit walks (+0x3f0[+0x3d8], same filter as FUN_140518a80 lines 349-414).
 // Caller wraps in __try.
-static void CaptureUpgrade(__int64 manager, int category)
+static bool FillUpgrade(__int64 manager, int category, RoadSyncUpgradeMsg& m)
 {
-    if (InterlockedCompareExchange(&g_upgradePending, 0, 0) != 0) return;
-
-    RoadSyncUpgradeMsg m = {};
     m.category = category;
     m.newType = *(int*)(manager + MGR_TYPE_OFFSET);
     m.newVariant = *(int*)(manager + MGR_VARIANT_OFFSET);
     m.flag5c4 = *(int*)(manager + MGR_FLAG_5C4_OFFSET);
-    if (m.newType >= TOOL_TYPE_DEMOLISH_MIN) return;
+    if (m.newType >= TOOL_TYPE_DEMOLISH_MIN) return false;
     int dirFlag = *(int*)(manager + MGR_UPG_DIR_OFFSET);
 
     if (*(unsigned char*)(manager + MGR_UPG_MULTI_OFFSET) == 0) {
         RoadSyncUpgradePiece& p = m.pieces[0];
-        if (!FillUpgradePiece(*(__int64*)(manager + MGR_UPG_SEGMENT_OFFSET), &p)) return;
+        if (!FillUpgradePiece(*(__int64*)(manager + MGR_UPG_SEGMENT_OFFSET), &p)) return false;
         p.rangeStart = *(int*)(manager + MGR_UPG_RANGE_START_OFFSET);
         p.rangeEnd = *(int*)(manager + MGR_UPG_RANGE_END_OFFSET);
         p.oldType = *(int*)(manager + MGR_UPG_OLD_TYPE_OFFSET);
@@ -358,7 +358,7 @@ static void CaptureUpgrade(__int64 manager, int category)
         int idx = *(int*)(manager + MGR_UPG_PATH_INDEX_OFFSET);
         char* listBegin = *(char**)(manager + MGR_UPG_PATHS_BEGIN_OFFSET);
         char* listEnd = *(char**)(manager + MGR_UPG_PATHS_END_OFFSET);
-        if (idx < 0 || !listBegin || idx >= (int)((listEnd - listBegin) / 0x18)) return;
+        if (idx < 0 || !listBegin || idx >= (int)((listEnd - listBegin) / 0x18)) return false;
         __int64* segIt = *(__int64**)(listBegin + idx * 0x18);
         __int64* segEnd = *(__int64**)(listBegin + idx * 0x18 + 8);
         __int64 segs[ROAD_SYNC_MAX_UPGRADE_PIECES];
@@ -393,8 +393,14 @@ static void CaptureUpgrade(__int64 manager, int category)
         }
         m.pieceCount = n;
     }
-    if (m.pieceCount < 1) return;
+    return m.pieceCount >= 1;
+}
 
+static void CaptureUpgrade(__int64 manager, int category)
+{
+    if (InterlockedCompareExchange(&g_upgradePending, 0, 0) != 0) return;
+    RoadSyncUpgradeMsg m = {};
+    if (!FillUpgrade(manager, category, m)) return;
     g_upgradeCapture = m;
     MemoryBarrier();
     InterlockedExchange(&g_upgradePending, 1);
@@ -743,6 +749,50 @@ static int g_demolishRunCount = 0;
 static int g_demolishDiffGone = 0, g_demolishDiffNew = 0, g_demolishDiffSegs = 0;
 static bool g_demolishDiffOverflow = false, g_demolishDiffOk = false;
 
+// Lockstep (lockstep/commands): the local tool's commit becomes a command and
+// is not made here - every PC makes it through the replay at the next tick
+// boundary, this one included. The same three kinds as the capture above: a
+// demolition with terrain_demolish (a cut the hook cannot read - the cursor on
+// a hovered node - is refused, on every PC alike), an upgrade, or a segment.
+// A commit the engine marked invalid builds nothing anywhere. True when the
+// commit was taken (the original is then not called).
+static RoadSyncMsg g_commandSegment; // ~48 KB: main thread only
+static bool TakeCommitAsCommand(__int64 manager, int category)
+{
+    __try {
+        if (IsDemolishToolActive()) {
+            RoadSyncDemolishMsg m = {};
+            __int64 thisPtr = GetPlacementManagerThisPtr();
+            m.category = category;
+            m.cursor[0] = *(float*)(thisPtr + CURSOR_X_OFFSET);
+            m.cursor[1] = *(float*)(thisPtr + CURSOR_Y_OFFSET);
+            m.cursor[2] = *(float*)(thisPtr + CURSOR_Z_OFFSET);
+            m.hasRange = ReadDemolishRange(manager, m.rangeA, m.rangeB) ? 1 : 0;
+            m.pieceCount = m.hasRange ? 0 : ReadDemolishPieces(manager, m.pieces, 8);
+            if (m.hasRange || m.pieceCount > 0) Commands_Submit(LS_CMD_NET_DEMOLISH, &m, sizeof(m));
+            else NoteCommitSkip(category, "lockstep: demolition on a hovered node is not carried yet", -1, -1, -1);
+            return true;
+        }
+        if (*(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) != 0) {
+            RoadSyncUpgradeMsg m = {};
+            if (FillUpgrade(manager, category, m)) {
+                m.mode = BuildMode_Read();
+                Commands_Submit(LS_CMD_UPGRADE, &m, sizeof(m));
+            }
+            return true;
+        }
+        memset(&g_commandSegment, 0, sizeof(g_commandSegment));
+        if (FillSegment(manager, category, g_commandSegment.seg)) {
+            g_commandSegment.mode = BuildMode_Read();
+            Commands_Submit(LS_CMD_SEGMENT, &g_commandSegment, sizeof(g_commandSegment));
+        }
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        NoteCommitSkip(category, "lockstep: exception reading the commit - not made", -1, -1, -1);
+        return true;
+    }
+}
+
 // Entry of FUN_140518a80. Captures tool commits, then always runs the
 // original unchanged.
 void HookedRoadCommit(__int64 manager,
@@ -751,6 +801,16 @@ void HookedRoadCommit(__int64 manager,
                       unsigned __int64 p6, unsigned __int64 p7)
 {
     int category = RoadSync_CategoryForManager(GetPlacementManagerThisPtr(), manager);
+    if (category >= 0 && p2 == 0 && Commands_TakeLocal() && !RoadSync_IsApplyingSegment() &&
+        !DemolishHook_InDemolish() && InterlockedCompareExchange(&g_buildingPlacementDepth, 0, 0) == 0 &&
+        TakeCommitAsCommand(manager, category))
+        return;
+    // With the determinism layer on (lockstep, probe) the replay channels are
+    // not used: what the simulation commits itself is not captured for them.
+    if (Determinism_IsActive()) {
+        g_origRoadCommit(manager, p2, p3, p4, p5, p6, p7);
+        return;
+    }
     // Tool wrappers always commit with p2 == 0; replays of remote work are
     // never echoed back.
     // Commits inside a demolition are its own side effects - the demolition
@@ -921,13 +981,75 @@ void LocalBuilds_Tick()
 
     FlushCommitCaptures();
 
-    if (InterlockedExchange(&g_debugSpawnPending, 0) != 0)
+    // A placement on this PC alone: not with the determinism layer on.
+    if (InterlockedExchange(&g_debugSpawnPending, 0) != 0 && !Determinism_IsActive())
         RunDebugSpawn(thisPtr);
 }
 
 // ---------------------------------------------------------------------------
 // Building placement hook
 // ---------------------------------------------------------------------------
+
+// Lockstep (lockstep/commands): the building tool runs with the real mouse,
+// so the game itself decides what a press is: levelling the ground (2cb6aa,
+// held: the timer +d2bc), an error, the interface's (2bade0 returns at once
+// while a menu is open). Only the press that would place - the left-press
+// read at 2cc37c with the placement valid (world+11a10 == -1) - is taken here
+// (LocalBuilds_PlacementPress, through sim_patches): it reads "not pressed"
+// for the game and becomes a placement command that every PC makes at the
+// next tick boundary (BuildSync_ApplyPlacementCommand). The inputs are the
+// ones the replay multiplayer sends.
+static __int64 g_placeWorld = 0;
+static char* g_placeType = nullptr;
+static unsigned __int64 g_placeParam5 = 0;
+static bool g_placeOpen = false;
+
+static void PlacementAsCommand(__int64 param_1, char* param_2, char param_3, char param_4,
+                               unsigned __int64 param_5, unsigned int param_6, char param_7, char param_8)
+{
+    void** vecBeginPtr = (void**)((uintptr_t)g_exeBase + VEC_BUILDINGS_BEGIN_RVA);
+    void** vecEndPtr = (void**)((uintptr_t)g_exeBase + VEC_BUILDINGS_END_RVA);
+    long long before = BuildingCount(*vecBeginPtr, *vecEndPtr);
+    g_placeWorld = param_1;
+    g_placeType = param_2;
+    g_placeParam5 = param_5;
+    g_placeOpen = true;
+    LocalBuilds_BeginBuildingPlacement();
+    __try {
+        g_origUniversal(param_1, param_2, param_3, param_4, param_5, param_6, param_7, param_8);
+    } __finally {
+        LocalBuilds_EndBuildingPlacement();
+        g_placeOpen = false;
+    }
+    if (BuildingCount(*vecBeginPtr, *vecEndPtr) != before)
+        Logf("republicmp  LOCKSTEP: the building tool placed a building here by itself - not covered, the PCs will differ");
+}
+
+bool LocalBuilds_PlacementPress()
+{
+    if (!g_placeOpen || !Commands_TakeLocal()) return false;
+    __int64 world = g_placeWorld;
+    BuildSyncMsg msg = {};
+    __try {
+        if (*(int*)(world + 0x11A10) != -1) return false; // not a valid place: the game shows why
+        char typeName[64];
+        SafeReadCStringDirect(g_placeType, typeName, sizeof(typeName));
+        if (!LooksLikeValidType(typeName)) return false;
+        msg.kind = BUILD_SYNC_KIND_PLACE;
+        msg.mode = BuildMode_Read();
+        msg.cursorX = msg.x = *(float*)(world + CURSOR_X_OFFSET);
+        msg.cursorY = msg.y = *(float*)(world + CURSOR_Y_OFFSET);
+        msg.cursorZ = msg.z = *(float*)(world + CURSOR_Z_OFFSET);
+        msg.cursorRot = *(float*)(world + CURSOR_YAW_OFFSET);
+        msg.param5 = (unsigned long long)g_placeParam5;
+        msg.mirrored = *(unsigned char*)(world + MIRROR_EFFECTIVE_OFFSET) != 0;
+        strncpy_s(msg.typeName, typeName, _TRUNCATE);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+    Commands_Submit(LS_CMD_PLACE, &msg, sizeof(msg));
+    return true;
+}
 
 // Entry of FUN_1402bade0. Runs the original, and if it created buildings,
 // sends the placement (see local_builds.h).
@@ -937,6 +1059,14 @@ void HookedUniversal(__int64 param_1, char* param_2, char param_3, char param_4,
 {
     // Placements are refused while the save-sync block screen is up.
     if (SyncBlock_IsActive()) return;
+    if (Commands_TakeLocal() && !BuildSync_IsApplyingRemote()) {
+        PlacementAsCommand(param_1, param_2, param_3, param_4, param_5, param_6, param_7, param_8);
+        return;
+    }
+    if (Determinism_IsActive()) { // no replay channels (see HookedRoadCommit)
+        g_origUniversal(param_1, param_2, param_3, param_4, param_5, param_6, param_7, param_8);
+        return;
+    }
 
     g_universalCallCount++;
 

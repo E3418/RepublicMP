@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // See input_block.h.
 #include "input_block.h"
 #include "../ui/sync_block.h"
@@ -14,6 +15,13 @@ static bool Blocked()
 {
     return SyncBlock_IsActive();
 }
+
+static volatile LONG g_neutral = 0;
+void InputBlock_BeginNeutral() { InterlockedIncrement(&g_neutral); }
+void InputBlock_EndNeutral() { InterlockedDecrement(&g_neutral); }
+static bool Neutral() { return g_neutral != 0; }
+static bool HeldByte() { return *(g_exeBase + LMB_HELD_RVA) != 0; }
+static bool PressedByte() { return *(g_exeBase + LMB_JUST_PRESSED_RVA) != 0; }
 
 // Cursor position (GetMouseSolid / GetMouseSolidWithInvZoom) at the moment
 // the block started; returned instead of the live one while blocked.
@@ -41,31 +49,31 @@ static AxisValueFn o_AxisValue;
 static VecFn o_MouseRelative, o_MouseSolid, o_MouseSolidInvZoom;
 
 #define BOOL_NOARG_HOOK(name, orig) \
-    static bool name(void* self) { bool r = orig(self); return Blocked() ? false : r; }
+    static bool name(void* self) { bool r = orig(self); return Blocked() || Neutral() ? false : r; }
 
-BOOL_NOARG_HOOK(H_LeftPress, o_LeftPress)
-BOOL_NOARG_HOOK(H_LeftPressAOff, o_LeftPressAOff)
-BOOL_NOARG_HOOK(H_LeftDown, o_LeftDown)
+static bool H_LeftPress(void* self) { bool r = o_LeftPress(self); return Neutral() ? PressedByte() : Blocked() ? false : r; }
+static bool H_LeftPressAOff(void* self) { bool r = o_LeftPressAOff(self); return Neutral() ? PressedByte() : Blocked() ? false : r; }
+static bool H_LeftDown(void* self) { bool r = o_LeftDown(self); return Neutral() ? HeldByte() : Blocked() ? false : r; }
 BOOL_NOARG_HOOK(H_RightPress, o_RightPress)
 BOOL_NOARG_HOOK(H_RightPressAOff, o_RightPressAOff)
 BOOL_NOARG_HOOK(H_RightDown, o_RightDown)
 BOOL_NOARG_HOOK(H_MiddleDown, o_MiddleDown)
 
-static bool H_KeyDown(void* self, int key)       { bool r = o_KeyDown(self, key); return Blocked() ? false : r; }
-static bool H_KeyPress(void* self, int key)      { bool r = o_KeyPress(self, key); return Blocked() ? false : r; }
-static bool H_ButtonDown(void* self, char* fn)   { bool r = o_ButtonDown(self, fn); return Blocked() ? false : r; }
-static bool H_ButtonPress(void* self, char* fn)  { bool r = o_ButtonPress(self, fn); return Blocked() ? false : r; }
+static bool H_KeyDown(void* self, int key)       { bool r = o_KeyDown(self, key); return Blocked() || Neutral() ? false : r; }
+static bool H_KeyPress(void* self, int key)      { bool r = o_KeyPress(self, key); return Blocked() || Neutral() ? false : r; }
+static bool H_ButtonDown(void* self, char* fn)   { bool r = o_ButtonDown(self, fn); return Blocked() || Neutral() ? false : r; }
+static bool H_ButtonPress(void* self, char* fn)  { bool r = o_ButtonPress(self, fn); return Blocked() || Neutral() ? false : r; }
 
 static float H_AxisValue(void* self, char* fn, int* out, float a, float b)
 {
     float r = o_AxisValue(self, fn, out, a, b);
-    return Blocked() ? 0.0f : r;
+    return Blocked() || Neutral() ? 0.0f : r;
 }
 
 static float* H_MouseRelative(void* self, float* out)
 {
     float* r = o_MouseRelative(self, out);
-    if (Blocked()) out[0] = out[1] = out[2] = 0.0f;
+    if (Blocked() || Neutral()) out[0] = out[1] = out[2] = 0.0f;
     return r;
 }
 

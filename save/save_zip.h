@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Zip/unzip an entire save folder, using vendored miniz.
 #pragma once
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Ring buffer of verbose sync status lines, shown in the Debug window.
 // Same shape as ui_log.h.
 #pragma once

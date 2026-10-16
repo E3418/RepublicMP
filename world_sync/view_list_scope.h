@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Same "camera-visible" edges on both PCs for one command.
 //
 // Every network object (world+0xf7a0 roads, +0xf968 footpaths, ... - the

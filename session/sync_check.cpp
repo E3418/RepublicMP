@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // See sync_check.h.
 #include "sync_check.h"
 #include "../world_sync/buildings/build_sync.h"

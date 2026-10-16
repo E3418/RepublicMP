@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Dear ImGui overlay rendered from the IDXGISwapChain::Present hook.
 #pragma once
 

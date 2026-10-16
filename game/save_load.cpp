@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // See save_load.h.
 #include "save_load.h"
 #include <string.h>

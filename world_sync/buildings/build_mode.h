@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Construction mode of the small build window: pay with rubles, pay with
 // dollars, or realistic construction - plus two more settings the placement
 // copies into each new building. All four are ints on the world object

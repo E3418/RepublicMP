@@ -1,5 +1,7 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // See road_sync.h for the overall design.
 #include "road_sync.h"
+#include "../../lockstep/commands.h"
 #include "../../transport/network.h"
 #include "../../ui/debug_log.h"
 #include "../local_builds.h" // LocalBuilds_IsToolDragActive, g_origRoadCommit
@@ -1969,6 +1971,76 @@ static void ApplyUpgradeAndAck(const RoadSyncUpgradeMsg& up)
 }
 
 // ---------------------------------------------------------------------------
+// Lockstep commands (see road_sync.h)
+// ---------------------------------------------------------------------------
+
+// The PC that drew the segment did not make its commit, so its tool still
+// shows the finished drag; the game's own preview cleanup (542a30) clears it
+// before the replay starts a drag of its own on the same manager. Skipped
+// while the local player is dragging again.
+static void ClearCommandPreview(int category)
+{
+    const RoadSyncCategoryInfo* info = RoadSync_GetCategoryInfo(category);
+    if (!info) return;
+    __try {
+        __int64 thisPtr = GetWorldThisPtr();
+        __int64 manager = *(__int64*)(thisPtr + info->managerOffset);
+        if (manager && *(char*)(thisPtr + TOOL_DRAG_ACTIVE_OFFSET) == 0)
+            ((ManagerResetFn)((uintptr_t)g_exe + MANAGER_RESET_RVA))(manager, manager + MANAGER_RESET_STATE_OFFSET);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+void RoadSync_CancelLocalDrag()
+{
+    __try {
+        __int64 thisPtr = GetWorldThisPtr();
+        if (*(char*)(thisPtr + TOOL_DRAG_ACTIVE_OFFSET) == 0) return;
+        for (int c = 0; c < ROAD_SYNC_CATEGORY_COUNT; c++) {
+            __int64 manager = *(__int64*)(thisPtr + g_categories[c].managerOffset);
+            if (manager) ((ManagerResetFn)((uintptr_t)g_exe + MANAGER_RESET_RVA))(manager, manager + MANAGER_RESET_STATE_OFFSET);
+        }
+        *(char*)(thisPtr + TOOL_DRAG_ACTIVE_OFFSET) = 0;
+        Logf("republicmp  ROAD_SYNC: the local drag was cancelled for a lockstep command");
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+bool RoadSync_ApplyCommandSegment(const RoadSyncMsg& msg)
+{
+    const RoadSyncSegment& seg = msg.seg;
+    ClearCommandPreview(seg.category);
+    if (SegmentBetweenNodesExists(seg)) {
+        Logf("republicmp  ROAD_SYNC: command %s already exists between these nodes - skipped", CategoryName(seg.category));
+        return false;
+    }
+    BuildMode mine = BuildMode_Read();
+    BuildMode_Write(msg.mode);
+    bool engineAccepted = false;
+    bool ok = ApplySegment(seg, &engineAccepted);
+    BuildMode_Write(mine);
+    return ok && engineAccepted;
+}
+
+bool RoadSync_ApplyCommandUpgrade(const RoadSyncUpgradeMsg& msg)
+{
+    ClearCommandPreview(msg.category);
+    BuildMode mine = BuildMode_Read();
+    BuildMode_Write(msg.mode);
+    int applied = ApplyUpgrade(msg);
+    BuildMode_Write(mine);
+    Logf("republicmp  ROAD_SYNC: command upgrade %s applied %d/%d piece(s)", CategoryName(msg.category), applied, msg.pieceCount);
+    return applied == msg.pieceCount;
+}
+
+bool RoadSync_ApplyCommandDemolish(const RoadSyncDemolishMsg& msg)
+{
+    bool removed = false;
+    bool ok = msg.pieceCount > 0 ? ApplyDemolishPieces(msg, &removed) : ApplyDemolish(msg, &removed);
+    return ok && removed;
+}
+
+// ---------------------------------------------------------------------------
 // Factory connection direction (game thread only, see RoadSyncDirectionMsg)
 // ---------------------------------------------------------------------------
 
@@ -2158,6 +2230,24 @@ static __int64 PlanStartCommon(bool exceptGroup, void* ret, __int64 network, uns
                                unsigned char rubles, __int64 count, __int64 group)
 {
     PlanStartFn orig = exceptGroup ? g_origPlanStartExcept : g_origPlanStart;
+    // Lockstep: the button press becomes a command, made on every PC.
+    if (Commands_TakeLocal() && InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0 &&
+        (exceptGroup ? IsUiCall(ret, kPlanStartExceptUiReturns, sizeof(kPlanStartExceptUiReturns) / sizeof(kPlanStartExceptUiReturns[0]))
+                     : IsUiCall(ret, kPlanStartUiReturns, sizeof(kPlanStartUiReturns) / sizeof(kPlanStartUiReturns[0])))) {
+        int lsCategory = RoadSync_CategoryForManager(GetWorldThisPtr(), network);
+        if (lsCategory >= 0) {
+            RoadSyncPlanStartMsg m = {};
+            m.category = lsCategory;
+            m.exceptGroup = exceptGroup ? 1 : 0;
+            m.dollars = dollars ? 1 : 0;
+            m.rubles = rubles ? 1 : 0;
+            m.count = (int)count;
+            m.group = (int)group;
+            m.mode = BuildMode_Read();
+            Commands_Submit(LS_CMD_PLAN_START, &m, sizeof(m));
+            return 0;
+        }
+    }
     bool capture = g_connected && InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0 &&
                    (exceptGroup ? IsUiCall(ret, kPlanStartExceptUiReturns, sizeof(kPlanStartExceptUiReturns) / sizeof(kPlanStartExceptUiReturns[0]))
                                 : IsUiCall(ret, kPlanStartUiReturns, sizeof(kPlanStartUiReturns) / sizeof(kPlanStartUiReturns[0])));
@@ -2345,6 +2435,30 @@ static int CountPlannedPieces(__int64 world)
 
 static __int64 HookedGroupTool(__int64 world, int mode)
 {
+    // Lockstep: the commit frame becomes a command; this PC drops its drag
+    // mark instead of committing, so the next frame does not commit again.
+    if (Commands_TakeLocal() && InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0) {
+        GroupToolState s;
+        bool commit = false;
+        __try {
+            BYTE* w = (BYTE*)world;
+            ReadGroupToolState(world, s);
+            commit = !w[0xfbc] && !w[0xfbe] && !w[0xfc3] && !s.down && s.drag;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            commit = false;
+        }
+        if (!commit) return g_origGroupTool(world, mode);
+        RoadSyncGroupToolMsg m = {};
+        m.category = ROAD_SYNC_GROUP_TOOL_CATEGORY;
+        m.mode = mode;
+        memcpy(m.box, s.box, sizeof(m.box));
+        memcpy(m.cursor, s.cursor, sizeof(m.cursor));
+        m.yaw = s.yaw;
+        m.buildMode = BuildMode_Read();
+        Commands_Submit(LS_CMD_GROUP_TOOL, &m, sizeof(m));
+        *(unsigned char*)(world + WORLD_GROUP_DRAG_OFFSET) = 0;
+        return 0;
+    }
     if (!g_connected || InterlockedCompareExchange(&g_applyingSegment, 0, 0) != 0)
         return g_origGroupTool(world, mode);
 
@@ -2449,6 +2563,57 @@ static void ApplyGroupToolAndAck(const RoadSyncGroupToolMsg& m)
          m.seq, m.mode, BuildMode_Describe(m.buildMode, theirs, sizeof(theirs)), ok ? "applied" : "THREW",
          started, m.started, ok && started != m.started ? " (DIFFERENT)" : "");
     SendAck(m.seq, m.category, ok, 1);
+}
+
+bool RoadSync_ApplyCommandPlanStart(const RoadSyncPlanStartMsg& msg)
+{
+    ApplyPlanStartAndAck(msg); // the ack goes nowhere without the replay channel
+    return true;
+}
+
+bool RoadSync_ApplyCommandGroupTool(const RoadSyncGroupToolMsg& msg)
+{
+    ReplayUiScope menus;
+    ApplyGroupToolAndAck(msg);
+    return true;
+}
+
+static std::unordered_map<__int64, int> g_lsDirections;
+
+void RoadSync_LockstepDirectionsBaseline()
+{
+    g_lsDirections.clear();
+    int n = ReadFactoryDirections();
+    for (int i = 0; i < n; i++) {
+        g_lsDirections[g_dirSnapshot[i].seg] = g_dirSnapshot[i].direction;
+    }
+}
+
+void RoadSync_LockstepDirectionsDetect()
+{
+    int n = ReadFactoryDirections();
+    for (int i = 0; i < n; i++) {
+        const DirSnapshot& s = g_dirSnapshot[i];
+        auto old = g_lsDirections.find(s.seg);
+        if (old == g_lsDirections.end() || old->second == s.direction) continue;
+        RoadSyncDirectionMsg m = {};
+        m.category = ROAD_SYNC_CATEGORY_FACTORYCONN;
+        m.piece = s.piece;
+        m.direction = s.direction;
+        Commands_Submit(LS_CMD_DIRECTION, &m, sizeof(m));
+        RoadSyncDirectionMsg back = m; // this PC's own segment, as it was
+        back.direction = old->second;
+        int local = 0;
+        ApplyDirection(back, &local);
+    }
+}
+
+bool RoadSync_ApplyCommandDirection(const RoadSyncDirectionMsg& msg)
+{
+    int local = 0;
+    bool ok = ApplyDirection(msg, &local) != 0;
+    Logf("republicmp  ROAD_SYNC: command direction %d %s", msg.direction, ok ? "applied" : "NOT applied - connection not found");
+    return ok;
 }
 
 void RoadSync_Tick()

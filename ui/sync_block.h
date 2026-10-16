@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Full-screen block shown while a player joins (host: from the moment a
 // player connects until that player's world is loaded; client: from Connect
 // until loaded). It greys the screen and shows which step the join is in -

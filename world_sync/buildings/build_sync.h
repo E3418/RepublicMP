@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Build sync: network replication of building placements and demolitions.
 //
 // Sending side: world_sync/networks/local_builds.cpp's placement hook sends one
@@ -137,6 +138,12 @@ void BuildSync_SendSetting(const SettingWire& w);
 
 // True while a remote placement or demolition is being replayed.
 bool BuildSync_IsApplyingRemote();
+
+// Lockstep commands (lockstep/commands): a placement or a demolition made on
+// every PC at a tick boundary, the clicking PC included. Main thread. True
+// when the engine made it.
+bool BuildSync_ApplyPlacementCommand(const BuildSyncMsg& msg);
+bool BuildSync_ApplyDemolishCommand(const BuildSyncMsg& msg);
 
 // Per-frame (game thread, Present hook): sends queued placements and applies
 // received ones once the world is loaded.

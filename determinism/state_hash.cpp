@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // See state_hash.h.
 #include "state_hash.h"
 #include <string.h>

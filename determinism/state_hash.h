@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // State hash: a compact fingerprint of the simulation, per subsystem.
 //
 // Used two ways:

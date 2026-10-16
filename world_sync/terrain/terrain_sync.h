@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Terrain sync: network replication of every heightmap / mask edit.
 //
 // What travels

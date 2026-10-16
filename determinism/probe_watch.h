@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Determinism probe: hardware write watch on a few words.
 //
 // The step trace says which word of which object splits first and at which

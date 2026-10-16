@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Hooks IDXGISwapChain::Present by patching its vtable slot (shared across
 // all swap chains in the DirectX runtime), so it fires every frame
 // regardless of what the local player is doing.

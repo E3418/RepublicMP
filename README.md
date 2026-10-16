@@ -151,6 +151,72 @@ reporting a problem, attach the logs of both players.
 
 ### Unreleased
 
+- **Native building update restored for command sessions**: building
+  visibility and the visible-building list again come from the game's own
+  Early pass, as in the replay multiplayer. Removed the whole-render wrapper
+  and unsuccessful visibility diagnostic. The existing Prepare/Late preview
+  scope stays for camera movement and new buildings on held frames, where
+  Early does not run. Ordered placement still uses the native click frame;
+  tick admission and command ordering are retained. The isolated simulation
+  probe keeps its off-screen policy (by SoylentGreed). This rollback needs an
+  in-game building/connection test and does not establish determinism between
+  different cameras in command sessions. Previous probe results do not cover
+  this restored building path.
+
+Lockstep sessions (experimental): **Lockstep** next to Host makes the next
+session run both games in lockstep. The host saves, the player receives
+and loads the save, then the host loads the same save too, both with the
+determinism layer on, and from there both run the same ticks: the host
+admits them (at most 10 ticks ahead of the player) and the player runs a
+tick only once the host granted it. Building, drag tools (roads, rails,
+pipes, power lines and the rest, upgrades, network demolition) and
+building demolition are commands the host orders and both games make
+after the same tick. Pause and speed are the host's; the player's keys
+and buttons are requests. While either player has a construction tool
+open, no tick runs. Every 60 ticks the player's state summary is compared
+with the host's, and the first difference is shown in the RepublicMP
+window. The lockstep connection uses TCP port 5560 on the host.
+
+Also carried as commands: building window settings and storage slots, the
+construction window's pay with rubles / dollars and stop, starting planned
+construction, the group construction tools, factory connection directions,
+and terrain edits. Changes made outside the hooks (the interface, or a tool
+inside a held frame) are found by comparing with a record taken at the end
+of the frame and before the Late body, put back on the PC that made them
+and sent as commands; money such an action paid travels as a balance
+change. While a command is made, this PC's keys read up and its own drag is
+cancelled. Saving inside a lockstep session is refused (a save ages every
+vehicle on that PC), F9's test building is off, and the player waits in the
+Esc menu. Tools whose actions are not carried yet (vehicle and line picks,
+worker relocation, pavements, buoys, Christmas lights, trees, junction and
+merge tools, Go there) are put away when selected. Not carried yet:
+vehicle purchases, lines and routes, research, citizen destinations, world
+settings and the remaining window actions - they act on one PC only.
+Re-sync is not available in a lockstep session.
+
+Lockstep, step 3 (first part, awaiting the in-game probe): player actions
+become commands. While the determinism layer runs, the building tool, the
+commit of every drag tool (roads, rails, pipes, power lines and the rest,
+their upgrades, and network demolition with the demolition tool) and
+building demolition do not act on the frame they are made. They become
+commands, made at the start of the next frame, before its tick, through the
+replays of the replay multiplayer - on the clicking PC as well. A building
+is placed by the building tool's own click frame, which lays its access
+roads; when that builds nothing, by the replay's call, without them. Ticks
+wait while a tool is selected (tool hold, by SoylentGreed).
+
+The Late body also works off two queues by frame instead of by tick: the
+buildings to re-check after a network or building change near them, and
+the building links list. Held frames ran them too, so after a construction
+command the PC with more held frames finished first; they now run on step
+frames only. Probe traces no longer count vehicle camera distances and the
+sound levels derived from them.
+
+- **Build during run 1** in the Debug window (off by default): the player
+  builds while probe run 1 runs; the commands are recorded with the tick they
+  were made after, and run 2 makes them again after the same ticks with no
+  input. Both runs must stay identical.
+
 Lockstep, step 2: the active determinism layer admits whole ticks - the
 probe with held frames and speed changes matches for 10,800 ticks (run 2
 held 16,096 frames, run 1 none). Held frames draw entities and guarded
@@ -362,4 +428,6 @@ changes.
 
 ## License
 
-[MIT](LICENSE)
+[GPL-3.0-only](LICENSE) for everything after the tag `v0.4.3-mit`. Versions up
+to that tag were published under the MIT License and stay under it.
+TesmioLoader, which loads this plugin, is GPL-3.0 as well.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // See terrain_sync.h for the overall design.
 #include "terrain_sync.h"
 #include "../../transport/network.h"

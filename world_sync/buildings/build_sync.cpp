@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // See build_sync.h for the overall design.
 #include "build_sync.h"
 #include "../../transport/network.h"
@@ -1055,6 +1056,117 @@ static bool ApplyOneRemoteDemolish(__int64 thisPtr, const BuildSyncMsg& msg)
          msg.demolishArgs[3] & 0xff, msg.demolishArgs[4] & 0xff,
          !ok ? "THREW" : stillListed ? "applied - building STILL in the list (demolition site?)" : "applied - building removed");
     return ok;
+}
+
+// ---------------------------------------------------------------------------
+// Lockstep commands (see build_sync.h)
+// ---------------------------------------------------------------------------
+//
+// The placement is the building tool's own click frame: 2bade0 as the tool
+// calls it (param_4 = 0, param_8 = 0) with the button pressed this frame and
+// the clicking PC's cursor, yaw and mirror. param_4 = 0 is what lays the
+// building's access roads (the loop over the type's connection points at
+// type+0x2f8, 2bb563), so each PC's engine routes the same roads itself;
+// param_4 = 1 (the replay above) skips them. The no-click call with param_4 =
+// 0, param_8 = 1 (4e4cb0's second branch) returned before validating
+// anything (result -1,-1,0), as the click path reads the mouse. When the
+// click frame builds nothing, the replay's call places the building without
+// its roads - the same outcome on every PC either way. No rotation is written
+// afterwards: every PC smooths the same yaw input alike.
+
+#define LMB_HELD_RVA 0xA54E90         // byte: left mouse button held
+#define LMB_JUST_PRESSED_RVA 0xA54E91 // byte: pressed this frame
+
+bool BuildSync_ApplyPlacementCommand(const BuildSyncMsg& msg)
+{
+    __int64 thisPtr = GetPlacementManagerThisPtr();
+    bool placed = false;
+    __try {
+        float* cursor = (float*)(thisPtr + CURSOR_X_OFFSET);
+        float* cursorCopy = (float*)(thisPtr + CURSOR_COPY_OFFSET);
+        float* yaw = (float*)(thisPtr + CURSOR_YAW_OFFSET);
+        unsigned char* mirror = (unsigned char*)(thisPtr + MIRROR_TOGGLE_OFFSET);
+        unsigned char* held = (unsigned char*)((uintptr_t)g_exe + LMB_HELD_RVA);
+        unsigned char* pressed = (unsigned char*)((uintptr_t)g_exe + LMB_JUST_PRESSED_RVA);
+        __int64* selected = (__int64*)(thisPtr + SELECTED_ENTRY_OFFSET);
+        float savedCursor[3] = { cursor[0], cursor[1], cursor[2] };
+        float savedCopy[3] = { cursorCopy[0], cursorCopy[1], cursorCopy[2] };
+        float savedYaw = *yaw;
+        unsigned char savedMirror = *mirror, savedHeld = *held, savedPressed = *pressed;
+        __int64 savedSelected = *selected;
+        // This PC's open menus would make the placement return at once
+        // (replay_menus.h); they read closed for the call.
+        unsigned char* menus = (unsigned char*)thisPtr;
+        unsigned char savedMenus[REPLAY_UI_FLAG_COUNT];
+        for (int i = 0; i < REPLAY_UI_FLAG_COUNT; i++) savedMenus[i] = menus[kReplayUiFlagOffsets[i]];
+        BuildMode mine = BuildMode_Read();
+        char typeName[64];
+        strncpy_s(typeName, msg.typeName, _TRUNCATE);
+        __try {
+            cursor[0] = cursorCopy[0] = msg.cursorX;
+            cursor[1] = cursorCopy[1] = msg.cursorY;
+            cursor[2] = cursorCopy[2] = msg.cursorZ;
+            *yaw = msg.cursorRot;
+            *mirror = msg.mirrored ? 1 : 0;
+            *held = 0;
+            *pressed = 0;
+            BuildMode_Write(msg.mode);
+            memset(g_replayEntry, 0, sizeof(g_replayEntry));
+            memcpy(g_replayEntry, typeName, strnlen(typeName, 63));
+            *selected = (__int64)g_replayEntry;
+            for (int i = 0; i < REPLAY_UI_FLAG_COUNT; i++) menus[kReplayUiFlagOffsets[i]] = 0;
+            SnapshotBeforePlacement();
+            bool scoped = ViewListScope_Begin(msg.cursorX - PLACE_SCOPE_MARGIN, msg.cursorZ - PLACE_SCOPE_MARGIN,
+                                              msg.cursorX + PLACE_SCOPE_MARGIN, msg.cursorZ + PLACE_SCOPE_MARGIN);
+            LocalBuilds_BeginBuildingPlacement();
+            InterlockedIncrement(&g_applyingRemote);
+            const int* result = (const int*)(thisPtr + PLACEMENT_RESULT_OFFSET);
+            int clickResult[3] = { 0, 0, 0 };
+            int newCount = 0;
+            float delta = 0.0f;
+            bool withRoads = false;
+            __try {
+                *pressed = 1;
+                g_origUniversal(thisPtr, typeName, 0, 0, msg.param5, 0xffffffff, 0, 0);
+                *pressed = 0;
+                memcpy(clickResult, result, sizeof(clickResult));
+                placed = withRoads = PickMainNewObject(msg.cursorX, msg.cursorZ, &newCount, &delta) != nullptr;
+                if (!placed) {
+                    SnapshotBeforePlacement();
+                    g_origUniversal(thisPtr, typeName, 0, 1, msg.param5, 0xffffffff, 0, 1);
+                    placed = PickMainNewObject(msg.cursorX, msg.cursorZ, &newCount, &delta) != nullptr;
+                }
+            } __finally {
+                *pressed = 0;
+                InterlockedDecrement(&g_applyingRemote);
+                LocalBuilds_EndBuildingPlacement();
+                if (scoped) ViewListScope_End();
+            }
+            char modeText[96];
+            Logf("republicmp  BUILD_SYNC: command placement type=[%s] pay=%s cursor=(%.2f,%.2f,%.2f) - %s (objects %d, click result %d,%d,%d, result %d,%d,%d)",
+                 typeName, BuildMode_Describe(msg.mode, modeText, sizeof(modeText)), msg.cursorX, msg.cursorY, msg.cursorZ,
+                 withRoads ? "placed by the click frame" : placed ? "placed by the replay call, without access roads" : "refused by the engine",
+                 newCount, clickResult[0], clickResult[1], clickResult[2], result[0], result[1], result[2]);
+        } __finally {
+            cursor[0] = savedCursor[0]; cursor[1] = savedCursor[1]; cursor[2] = savedCursor[2];
+            cursorCopy[0] = savedCopy[0]; cursorCopy[1] = savedCopy[1]; cursorCopy[2] = savedCopy[2];
+            *yaw = savedYaw;
+            *mirror = savedMirror;
+            *held = savedHeld;
+            *pressed = savedPressed;
+            *selected = savedSelected;
+            for (int i = 0; i < REPLAY_UI_FLAG_COUNT; i++) menus[kReplayUiFlagOffsets[i]] = savedMenus[i];
+            BuildMode_Write(mine);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Logf("republicmp  BUILD_SYNC: <exception making a placement command>");
+    }
+    return placed;
+}
+
+bool BuildSync_ApplyDemolishCommand(const BuildSyncMsg& msg)
+{
+    return ApplyOneRemoteDemolish(GetPlacementManagerThisPtr(), msg);
 }
 
 // A received placement/demolition waiting to be applied.

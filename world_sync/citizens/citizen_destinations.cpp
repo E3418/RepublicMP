@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // See citizen_destinations.h.
 #include "citizen_destinations.h"
 #include "../buildings/build_sync.h"

@@ -1,9 +1,12 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // See demolish_hook.h.
 #include "demolish_hook.h"
 #include "../local_builds.h"          // LocalBuilds_InBuildingPlacement
 #include "../terrain/terrain_hook.h"          // g_terrainApplyingRemote
 #include "build_sync.h"     // BuildSync_SendDemolish, BuildSync_IsApplyingRemote
 #include "../networks/road_sync.h"      // RoadSync_IsApplyingSegment
+#include "../../lockstep/commands.h"
+#include "../../determinism/determinism.h"
 #include <intrin.h>
 #pragma intrinsic(_ReturnAddress)
 
@@ -95,6 +98,30 @@ static void Capture(__int64 thisPtr, __int64 building, const unsigned long long 
     }
 }
 
+// Lockstep (lockstep/commands): a local demolition becomes a command and is
+// not made here; every PC demolishes the building at the next tick boundary
+// (BuildSync_ApplyDemolishCommand finds it by position and category, as the
+// replay does). True when it was taken.
+static bool DemolishAsCommand(__int64 thisPtr, __int64 building, const unsigned long long args[5])
+{
+    BuildSyncMsg msg = {};
+    __try {
+        if (thisPtr != (__int64)(g_exeBase + WORLD_THIS_RVA) || !building || !IsInBuildingsVector(building))
+            return false;
+        const float* p = (const float*)(building + OBJ_POS_OFFSET);
+        msg.kind = BUILD_SYNC_KIND_DEMOLISH;
+        msg.x = p[0];
+        msg.y = p[1];
+        msg.z = p[2];
+        msg.demolishCategory = BuildingCategory(building);
+        for (int k = 0; k < 5; k++) msg.demolishArgs[k] = args[k];
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+    Commands_Submit(LS_CMD_DEMOLISH, &msg, sizeof(msg));
+    return true;
+}
+
 static void HookedDemolish(__int64 thisPtr, __int64 building,
                            unsigned long long p3, unsigned long long p4,
                            unsigned long long p5, unsigned long long p6,
@@ -108,7 +135,12 @@ static void HookedDemolish(__int64 thisPtr, __int64 building,
     if (depth == 1 && !LocalBuilds_InBuildingPlacement() && !BuildSync_IsApplyingRemote() &&
         !RoadSync_IsApplyingSegment() && g_terrainApplyingRemote == 0) {
         unsigned long long args[5] = { p3, p4, p5, p6, p7 };
-        Capture(thisPtr, building, args, ret);
+        if (Commands_TakeLocal() && DemolishAsCommand(thisPtr, building, args)) {
+            InterlockedDecrement(&g_depth);
+            return;
+        }
+        // The replay channels are not used with the determinism layer on.
+        if (!Determinism_IsActive()) Capture(thisPtr, building, args, ret);
     }
 
     g_origDemolish(thisPtr, building, p3, p4, p5, p6, p7);

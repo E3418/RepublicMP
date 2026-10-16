@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 #include "imgui_hook.h"
 #include "window_focus.h"
 #include "../ui/main_menu.h"

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Determinism probe: a step-by-step trace of the simulation objects.
 //
 // The probe's samples (every 30 steps) only say that an object differs, and

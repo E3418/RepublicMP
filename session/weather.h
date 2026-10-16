@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Weather: the host owns it.
 //
 // The whole weather state is one block on the world object (thisPtr =

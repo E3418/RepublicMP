@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Game pause/speed control: a plain int at a fixed address.
 //
 // thisPtr+0x5a4 (exe+0x9D54B4): 0 = paused, 1 = x1, 2.. = faster. The main

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Triggers the game's own save and load actions by writing the same memory
 // its menus write; the game's main loop performs the actual I/O on its next
 // frame. No engine code is called, so these are safe from any thread.

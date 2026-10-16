@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Building demolition detection: an inline hook on FUN_140168730, the
 // engine's "demolish this building" function.
 //

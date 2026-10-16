@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Simulation patches: the rest of the camera, keyboard and frame-rate paths
 // inside the simulation, so two runs (two PCs) from the same save step the
 // same way. Active only together with the determinism layer (determinism.h:
@@ -27,8 +28,8 @@
 //
 // Call relays (installed at start, behaving natively while the layer is off):
 //   - building visibility (13ce50): the building pass's GetNode answers an
-//     off-screen node on the simulation thread, so +115a/+115c and the agent
-//     lists that follow them are the same everywhere;
+//     off-screen node for the isolated probe; command sessions keep the
+//     native building view and need camera-independence validation;
 //   - saplings (9e4d, 30d9b2): a new planting entry starts growing in Late on
 //     the tick it appears, not on whichever rendered frame came next; the
 //     forest add itself stays on the render thread, queued.

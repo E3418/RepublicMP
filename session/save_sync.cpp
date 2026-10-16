@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // See save_sync.h.
 #include "save_sync.h"
 #include "../core/version.h"
@@ -11,6 +12,8 @@
 #include "../world_sync/buildings/build_sync.h"
 #include "../world_sync/networks/road_sync.h"
 #include "../world_sync/terrain/terrain_sync.h"
+#include "../determinism/determinism.h"
+#include "../lockstep/lockstep_net.h"
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -69,6 +72,12 @@ static volatile bool g_resyncAnnounced = false; // client: the host announced on
 static volatile bool g_resyncing = false;
 static volatile int g_autoResyncMinutes = 0;
 static volatile ULONGLONG g_lastWorldSentTick = 0; // host: when the player last got the world
+// Lockstep: both PCs load the sent save with the determinism layer on and run
+// the same ticks (lockstep/lockstep_net) instead of the live sync channels.
+// The host chooses; the player follows the host's hello.
+static volatile bool g_lockstepChosen = false;
+static volatile bool g_lockstep = false; // the current session's mode
+#define LOCKSTEP_CONNECT_TIMEOUT_MS 180000 // the host loads the world again before it listens
 static const char* const kResyncReason = "re-sync";
 
 static void SetState(SessionState s) { g_state = s; }
@@ -155,6 +164,7 @@ struct SessionHello {
     int protocol;      // REPUBLICMP_PROTOCOL
     char version[16];  // REPUBLICMP_VERSION
     unsigned int dllCrc;
+    int lockstep;      // host: the session runs in lockstep
 };
 
 // Step reports in both directions after the hello.
@@ -195,6 +205,7 @@ static void MakeHello(SessionHello* h)
     h->protocol = REPUBLICMP_PROTOCOL;
     strncpy_s(h->version, REPUBLICMP_VERSION, _TRUNCATE);
     h->dllCrc = SaveSync_GetLocalDllCrc();
+    h->lockstep = g_lockstepChosen ? 1 : 0;
 }
 
 // Compares the peer's hello with ours; fills why on a mismatch.
@@ -233,6 +244,8 @@ static void ResetChannels()
     BuildSync_Reset();
     RoadSync_Reset();
     TerrainSync_Reset();
+    LockstepNet_Close();
+    Determinism_EndSession();
 }
 
 static void StartChannelsHost()
@@ -316,8 +329,25 @@ static bool AnnounceResync()
 // channels are reconnected (host listens again, client retries) and the
 // session ends only if they are not back within CHANNEL_RECONNECT_TIMEOUT_MS.
 // Messages that were in flight on a dropped channel are lost.
+// Lockstep: the one channel; a state difference is reported, not repaired.
+static const char* MonitorLockstep()
+{
+    bool reported = false;
+    while (LockstepNet_IsConnected()) {
+        if (g_disconnectRequested) return nullptr;
+        const char* desync = LockstepNet_Desync();
+        if (desync[0] && !reported) {
+            reported = true;
+            SaveStatus("[LOCKSTEP] %s", desync);
+        }
+        Sleep(200);
+    }
+    return g_disconnectRequested ? nullptr : "the lockstep connection closed";
+}
+
 static const char* MonitorLiveSession(bool client)
 {
+    if (g_lockstep) return MonitorLockstep();
     static char s_why[160];
     ULONGLONG downSince = 0;
     ULONGLONG lastTry = 0;
@@ -583,6 +613,29 @@ static bool RunHostJoin(SOCKET sock)
         }
         if (!ready) break;
 
+        // 7. Lockstep: this PC loads the same save, then the channel connects.
+        if (g_lockstep) {
+            HostStep(sock, 7, "Loading the shared world");
+            if (!Determinism_BeginSession(true)) {
+                SetSessionError("lockstep is not available - see the log (determinism layer)");
+                break;
+            }
+            TriggerLoadSave(liveSaveName);
+            if (!WaitForLoadToFinish(0, &g_disconnectRequested) || !Determinism_SessionRunning()) {
+                if (!g_disconnectRequested) SetSessionError("loading the shared world failed");
+                ResetChannels();
+                break;
+            }
+            HostStep(sock, 7, "Waiting for the player's lockstep connection");
+            if (!LockstepNet_Host(LOCKSTEP_CONNECT_TIMEOUT_MS, &g_disconnectRequested)) {
+                if (!g_disconnectRequested) SetSessionError("the player's lockstep connection didn't arrive - TCP port %d must reach the host", LOCKSTEP_PORT);
+                ResetChannels();
+                break;
+            }
+            joined = true;
+            break;
+        }
+
         // 7. Live sync channels.
         HostStep(sock, 7, "Starting live sync");
         StartChannelsHost();
@@ -648,6 +701,7 @@ static void RunHostSession()
         SaveStatus(rejoin ? "[HOST] %s is back - re-syncing, both games are paused until it is loaded"
                           : "[HOST] %s is joining - both games are paused until it is loaded", peer);
 
+        g_lockstep = g_lockstepChosen;
         bool joined = RunHostJoin(sock);
         rejoin = false;
         g_resyncing = false;
@@ -752,6 +806,8 @@ static bool RunClientJoin(bool rejoin)
             SaveStatus("[CLIENT] join refused: %s", why);
             break;
         }
+        g_lockstep = theirs.lockstep != 0;
+        if (g_lockstep) SaveStatus("[CLIENT] the host runs this session in lockstep");
 
         // 2-3. The host saves and packs; its steps arrive as messages.
         ClientStep(2, "Waiting for the host - saving the world");
@@ -803,6 +859,11 @@ static bool RunClientJoin(bool rejoin)
         char receivedSaveName[MAX_PATH] = {};
         _snprintf_s(receivedSaveName, sizeof(receivedSaveName), _TRUNCATE, "%s%s",
                     SAVE_SYNC_CLIENT_STAGING_NAME, SAVE_SYNC_RECEIVED_SUFFIX);
+        if (g_lockstep && !Determinism_BeginSession(false)) {
+            SetSessionError("lockstep is not available - see the log (determinism layer)");
+            SendMsg(sock, MSG_ABORT, 0, -1, "lockstep is not available on the player");
+            break;
+        }
         TriggerLoadSave(receivedSaveName);
         if (!WaitForLoadToFinish(0, &g_disconnectRequested, JoinHostGone, &sock)) {
             if (g_disconnectRequested) SendMsg(sock, MSG_ABORT, 0, -1, "the player cancelled while loading");
@@ -811,6 +872,20 @@ static bool RunClientJoin(bool rejoin)
         }
 
         // 7. Ready -> the host starts listening on the channels; connect them.
+        if (g_lockstep) {
+            ClientStep(7, "Waiting for the host to load the shared world");
+            SendMsg(sock, MSG_READY, 7, -1, "");
+            if (!Determinism_SessionRunning()) {
+                SetSessionError("loading the shared world failed");
+                break;
+            }
+            if (!LockstepNet_Join(g_targetIp, LOCKSTEP_CONNECT_TIMEOUT_MS, &g_disconnectRequested)) {
+                if (!g_disconnectRequested) SetSessionError("couldn't open the lockstep connection to %s:%d", g_targetIp, LOCKSTEP_PORT);
+                break;
+            }
+            joined = true;
+            break;
+        }
         ClientStep(7, "Starting live sync");
         SendMsg(sock, MSG_READY, 7, -1, "");
         if (!WaitForChannels(true)) {
@@ -1018,6 +1093,9 @@ void SaveSync_Tick()
 }
 
 SessionState SaveSync_GetState() { return g_state; }
+void SaveSync_SetLockstep(bool on) { g_lockstepChosen = on; }
+bool SaveSync_GetLockstep() { return g_lockstepChosen; }
+bool SaveSync_IsLockstepSession() { return g_lockstep && g_state != SESSION_IDLE; }
 bool SaveSync_IsBusy()           { return g_state != SESSION_IDLE; }
 bool SaveSync_IsHostRole()       { return g_isHost; }
 ULONGLONG SaveSync_GetSessionAgeMs() { return g_state == SESSION_IDLE ? 0 : GetTickCount64() - g_sessionStartTick; }

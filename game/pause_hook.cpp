@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // See pause_hook.h. Logs the caller address (_ReturnAddress()) of each
 // hooked call, to help locate the calling code in Ghidra by RVA.
 #include "pause_hook.h"

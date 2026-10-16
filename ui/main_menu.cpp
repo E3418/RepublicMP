@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // See main_menu.h.
 #include "main_menu.h"
 #include "debug_window.h"
@@ -5,6 +6,7 @@
 #include "sync_block.h"
 #include "../game/imgui_hook.h" // g_imguiVisible - "Hide menu" button
 #include "../session/save_sync.h"
+#include "../lockstep/lockstep_net.h"
 #include "../world_sync/buildings/build_sync.h"
 #include "../world_sync/networks/road_sync.h"
 #include "../world_sync/terrain/terrain_sync.h"
@@ -209,6 +211,12 @@ static void SessionButtons(std::string& hostIp)
         ImGui::SameLine();
         ImGui::SetNextItemWidth(-1);
         ImGui::InputText("##hostIp", &hostIp);
+        bool lockstep = SaveSync_GetLockstep();
+        if (ImGui::Checkbox("Lockstep (experimental)", &lockstep)) SaveSync_SetLockstep(lockstep);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Host only: both games simulate the same ticks, so nothing drifts apart.\n"
+                              "Building, roads and demolition work; other actions are not carried yet.\n"
+                              "The game pauses for both while a construction tool is open.");
         if (!world) ImGui::TextColored(kGrey, "Host is available once a city is loaded.");
         return;
     }
@@ -223,6 +231,11 @@ static void SessionButtons(std::string& hostIp)
     ImGui::PopStyleColor(2);
     ImGui::TextColored(kGrey, host ? "Hosting - Connect is unavailable until you stop."
                                    : "In a session - Host is unavailable until you disconnect.");
+    if (SaveSync_IsLockstepSession()) {
+        const char* desync = LockstepNet_Desync();
+        if (desync[0]) ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.3f, 1.0f), "Lockstep: %s", desync);
+        else ImGui::TextColored(kGrey, "Lockstep session");
+    }
 }
 
 void MainMenu::Draw()

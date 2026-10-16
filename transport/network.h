@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Minimal blocking TCP transport shared by the sync modules: accept one
 // client, connect to a host, exchange fixed-size structs or whole files
 // (8-byte little-endian size, then the bytes). Only ever called from worker

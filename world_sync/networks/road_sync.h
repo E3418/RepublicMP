@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Road sync: network replication of every drag-built infrastructure tool
 // (roads, pipes, rails, footpaths, fences, power lines, conveyors, ...).
 //
@@ -363,3 +364,25 @@ const char* RoadSync_GetTargetIp();
 // True while this module is replaying a remote segment/upgrade, so the
 // commit hook does not echo it back.
 bool RoadSync_IsApplyingSegment();
+
+// Lockstep commands (lockstep/commands): the replays above, made on every PC
+// at a tick boundary, the PC that drew it included. One try each - a retry
+// on a later frame would land at another point of the simulation. Main
+// thread. True when the engine made it.
+bool RoadSync_ApplyCommandSegment(const RoadSyncMsg& msg);
+// Ends a drag the local player has under way (every tool manager's preview
+// cleared, the drag flag down) before a command uses the tools.
+void RoadSync_CancelLocalDrag();
+// Start planned construction (the interface's buttons) and the group tools'
+// commit frame become commands while commands are captured; made through the
+// replays above.
+bool RoadSync_ApplyCommandPlanStart(const RoadSyncPlanStartMsg& msg);
+bool RoadSync_ApplyCommandGroupTool(const RoadSyncGroupToolMsg& msg);
+// Factory connection directions (factoryconnection_oneway cycles one inline
+// in the Late body): Baseline records them, Detect puts a changed one back
+// and hands it over as a command; ApplyCommandDirection makes it.
+void RoadSync_LockstepDirectionsBaseline();
+void RoadSync_LockstepDirectionsDetect();
+bool RoadSync_ApplyCommandDirection(const RoadSyncDirectionMsg& msg);
+bool RoadSync_ApplyCommandUpgrade(const RoadSyncUpgradeMsg& msg);
+bool RoadSync_ApplyCommandDemolish(const RoadSyncDemolishMsg& msg);

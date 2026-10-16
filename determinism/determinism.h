@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Determinism layer and determinism probe.
 //
 // Goal: two machines that load the same save and run the same number of
@@ -73,7 +74,9 @@ void Determinism_AddStepObserver(StepObserverFn fn);
 
 // Probe control (UI). steps: complete ticks per run, interval: ticks between hashes.
 // Fuzz: run 2 inserts held frames; both runs change speed every 300 ticks.
-bool Probe_Start(int steps, int interval, bool fuzzFrames = false);
+// recordCommands: the player builds during run 1; the actions become commands
+// (lockstep/commands), and run 2 makes the recorded ones after the same ticks.
+bool Probe_Start(int steps, int interval, bool fuzzFrames = false, bool recordCommands = false);
 bool Probe_IsRunning();
 // Current state / last result, for the Debug window.
 const char* Probe_Status();
@@ -83,6 +86,21 @@ void Determinism_BeforePrepare();
 void Determinism_BeforeLate();
 void Determinism_AfterLate();
 bool Determinism_IsStepFrame();
+
+// This PC's own tool work on a tick's frame (Prepare, the tool handlers in
+// Late; determinism/sim_patches): random draws are private and the actions
+// become commands, as on a held frame (Determinism_InStepFrame is false).
+void Determinism_ToolScopeBegin();
+void Determinism_ToolScopeEnd();
+// Lockstep session (session/save_sync thread). BeginSession turns the layer on;
+// the next world load starts the shared simulation (both PCs load the same
+// save). EndSession turns it off again.
+bool Determinism_BeginSession(bool host);
+bool Determinism_SessionRunning();
+void Determinism_EndSession();
+// Any thread: a tick is being run in this frame (from Prepare to the end of
+// Late) - the early worker's calls included.
+bool Determinism_InStepFrame();
 // F10 queues a toggle; no speed word changes in the middle of a tick.
 bool Determinism_RequestPauseToggle();
 // Around the interface routine (render thread): it shows the speed the player

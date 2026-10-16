@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // See sync_block.h.
 #include "sync_block.h"
 #include "../session/game_speed.h" // EnsureGamePaused() re-assert, see SyncBlock_Draw

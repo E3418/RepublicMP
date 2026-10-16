@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // IAT hooks on C3D_TERRAIN: every heightmap / mask edit the exe asks
 // C3DDLL64 to make passes through here. Each call is logged with its caller
 // RVA and, for the edits that are synced, handed to world_sync/terrain/terrain_sync.
@@ -84,6 +85,16 @@ void TerrainHook_HeightmapOpen(void* terrain);
 void TerrainHook_HeightmapClose(void* terrain);
 void TerrainHook_MaskOpen(void* terrain);
 void TerrainHook_MaskClose(void* terrain);
+
+// Lockstep (lockstep/commands): while commands are captured, an edit a tool
+// makes on this PC is not made: it is collected, Flush (main thread, start of
+// a frame) hands the collected edits over as one command, and ApplyCommand
+// makes them on every PC through the original engine functions, inside the
+// heightmap (and mask) open/close - as a remote batch of the replay
+// multiplayer is applied. Edits the simulation or a command makes run as
+// usual.
+void TerrainHook_LockstepFlush();
+bool TerrainHook_ApplyCommand(const void* data, size_t size);
 
 // World-space terrain height under pos (CollisionTerrainHeightOverPoint).
 // Returns false if the engine function or terrain is unavailable.
