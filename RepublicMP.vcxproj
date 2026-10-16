@@ -180,6 +180,7 @@
     <ClCompile Include="game\present_hook.cpp" />
     <ClCompile Include="session\game_speed.cpp" />
     <ClCompile Include="determinism\state_hash.cpp" />
+    <ClCompile Include="determinism\held_frame.cpp" />
     <ClCompile Include="determinism\determinism.cpp" />
     <ClCompile Include="determinism\sim_patches.cpp" />
     <ClCompile Include="determinism\probe_trace.cpp" />
@@ -228,6 +229,7 @@
     <ClInclude Include="game\present_hook.h" />
     <ClInclude Include="session\game_speed.h" />
     <ClInclude Include="determinism\state_hash.h" />
+    <ClInclude Include="determinism\held_frame.h" />
     <ClInclude Include="determinism\determinism.h" />
     <ClInclude Include="determinism\sim_patches.h" />
     <ClInclude Include="determinism\probe_trace.h" />

@@ -204,6 +204,9 @@
     <ClCompile Include="third_party\imgui\backends\imgui_impl_dx11.cpp">
       <Filter>third_party\imgui\backends</Filter>
     </ClCompile>
+    <ClCompile Include="determinism\held_frame.cpp">
+      <Filter>determinism</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="world_sync\local_builds.h">
@@ -364,6 +367,9 @@
     </ClInclude>
     <ClInclude Include="third_party\imgui\backends\imgui_impl_dx11.h">
       <Filter>third_party\imgui\backends</Filter>
+    </ClInclude>
+    <ClInclude Include="determinism\held_frame.h">
+      <Filter>determinism</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

@@ -81,8 +81,25 @@ static const Mask kVehicleMasks[] = {
     { 0x1958, 4 },    // sound volume
 };
 
+// C3DDLL64 Start (fd3e0) writes the QPC start at +10; Stop (fd440)
+// writes QPC end/frequency at +18/+20 and decrements a warm-up count at +28.
+// H_timerStop replaces its derived FPS, so these wall/frame counters are
+// not the controlled timer. Keep all four simulation timer words in the trace.
+static const Mask kTimerMasks[] = { { 0x10, 0x18 }, { 0x28, 4 } };
+
 static const Mask kWorldMasks[] = {
     { 0xF60, 0x18 }, // mouse ray and cursor point
+    // Clocks the game advances on every rendered frame, paused or not, so
+    // their value follows the frame count, not the ticks: the ticker text
+    // scroll +117b8 (Late 30d344, PowerTime ignoring the pause; read only by
+    // the string copy at 332eb8), the shader time +13010 (30d372; read by
+    // the effect constants at 588991), the interface statistics refresh
+    // +c6c8..+c6dc (counted down by the interface at 31ad2c every 3 s of
+    // real time) and an interface window clock +d224 (4c4c62).
+    { 0x117B8, 4 },
+    { 0x13010, 4 },
+    { 0xC6C8, 0x18 },
+    { 0xD224, 4 },
 };
 
 // A list kind is a world vector of object pointers; a single kind is one
@@ -104,7 +121,7 @@ static const Kind kKinds[] = {
     { "building", 0x11B08, 0x1420, kBuildingMasks, (int)(sizeof(kBuildingMasks) / sizeof(Mask)), true, false, 0 },
     { "citizen", 0x126A8, 0x750, nullptr, 0, false, false, 0 },
     { "world", 0, 0x14800, kWorldMasks, (int)(sizeof(kWorldMasks) / sizeof(Mask)), false, true, WORLD_RVA },
-    { "timer", 0, 0x30, nullptr, 0, false, true, 0x9D4EE0 }, // C3D_TIMER the frame loop scales (PowerTime)
+    { "timer", 0, 0x30, kTimerMasks, (int)(sizeof(kTimerMasks) / sizeof(Mask)), false, true, 0x9D4EE0 }, // C3D_TIMER the frame loop scales (PowerTime)
     // Synthetic (no rva): how 832ae0 split the citizens this step - see CopyAgents.
     { "agents", 0, AGENTS_SIZE, nullptr, 0, false, true, 0 },
     // The order of the citizens in every vector of citizen pointers inside a
@@ -114,6 +131,8 @@ static const Kind kKinds[] = {
     { "vehicle lists", 0x12810, 0x1AD8, nullptr, 0, false, false, 0, true },
 };
 #define KIND_CITIZEN 2
+#define KIND_WORLD 3
+#define KIND_TIMER 4
 #define KINDS ((int)(sizeof(kKinds) / sizeof(kKinds[0])))
 
 // One object after a step, as one blob: the object's bytes (masks zeroed),
@@ -393,6 +412,33 @@ static std::vector<BYTE> g_stream;
 static std::vector<size_t> g_stepAt; // step (1-based) - 1 -> offset in g_stream
 static std::vector<Blob> g_last[KINDS];
 static bool g_full = false;
+static unsigned long long g_firstDifference = 0;
+static bool g_disk = false;
+static HANDLE g_traceFile = INVALID_HANDLE_VALUE;
+static unsigned long long g_fileEnd = 0;
+static std::vector<unsigned long long> g_fileAt;
+static std::vector<DWORD> g_fileSizes;
+void ProbeTrace_SetDisk(bool enabled) { g_disk = enabled; }
+
+static bool OpenTraceFile()
+{
+    wchar_t dir[MAX_PATH], name[MAX_PATH];
+    DWORD n = GetTempPathW(MAX_PATH, dir);
+    if (!n || n >= MAX_PATH || !GetTempFileNameW(dir, L"rmp", 0, name)) return false;
+    g_traceFile = CreateFileW(name, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
+                             FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+    if (g_traceFile == INVALID_HANDLE_VALUE) DeleteFileW(name);
+    return g_traceFile != INVALID_HANDLE_VALUE;
+}
+static bool TraceFileChunk(bool write, unsigned long long offset, DWORD bytes)
+{
+    LARGE_INTEGER pos; pos.QuadPart = offset;
+    if (!SetFilePointerEx(g_traceFile, pos, nullptr, FILE_BEGIN)) return false;
+    DWORD done = 0;
+    BOOL ok = write ? WriteFile(g_traceFile, g_stream.data(), bytes, &done, nullptr)
+                    : ReadFile(g_traceFile, g_stream.data(), bytes, &done, nullptr);
+    return ok && done == bytes;
+}
 
 static void Put(unsigned v)
 {
@@ -451,7 +497,7 @@ static unsigned Get(size_t& at)
 // Applies step `step`'s records to `mirror` (run 1 as it was after that step).
 static void Replay(unsigned long long step, std::vector<Blob>* mirror)
 {
-    size_t at = g_stepAt[(size_t)(step - 1)];
+    size_t at = g_disk ? 0 : g_stepAt[(size_t)(step - 1)];
     for (int ki = 0; ki < KINDS; ki++) {
         std::vector<Blob>& m = mirror[ki];
         unsigned n = Get(at);
@@ -753,6 +799,10 @@ static void Watch(int ki, unsigned long long step)
         for (size_t o = 0; o + 4 <= len; o += 4) {
             unsigned r1 = *(const unsigned*)(a.data() + o), r2 = *(const unsigned*)(b.data() + o);
             if (r1 == r2 || (o / 4 < noise.size() && noise[o / 4]) || InPointer(a, b, o)) continue;
+            // The world block and the timer also hold this PC's view, input
+            // and interface state: logged, but only the simulated kinds and
+            // the citizen split decide the result.
+            if (!g_firstDifference && ki != KIND_WORLD && ki != KIND_TIMER) g_firstDifference = step;
             if (g_watched[ki].count((unsigned)o)) continue;
             g_watched[ki][(unsigned)o] = true;
             if (g_watchLines[ki] >= WATCH_LINES) continue;
@@ -788,6 +838,9 @@ static void ForgetReusedAddresses(int ki)
 
 void ProbeTrace_Reset()
 {
+    if (g_traceFile != INVALID_HANDLE_VALUE) CloseHandle(g_traceFile);
+    g_traceFile = INVALID_HANDLE_VALUE;
+    g_fileAt.clear(); g_fileSizes.clear(); g_fileEnd = 0;
     std::vector<BYTE>().swap(g_stream);
     std::vector<size_t>().swap(g_stepAt);
     for (int ki = 0; ki < KINDS; ki++) {
@@ -801,6 +854,7 @@ void ProbeTrace_Reset()
         g_watchLines[ki] = 0;
     }
     g_full = g_reported = g_stopped = false;
+    g_firstDifference = 0;
     g_hotLines = 0;
     g_steps2 = 0;
 }
@@ -809,6 +863,14 @@ void ProbeTrace_Step(int run, unsigned long long step)
 {
     if (run == 0) {
         if (g_full) return;
+        if (g_disk) {
+            if (g_traceFile == INVALID_HANDLE_VALUE && !OpenTraceFile()) {
+                g_full = true;
+                Logf("republicmp  PROBE TRACE: temporary file could not be opened - trace incomplete");
+                return;
+            }
+            g_stream.clear();
+        }
         if (g_stream.size() > TRACE_BUDGET) {
             g_full = true;
             Logf("republicmp  PROBE TRACE: kept for the first %llu steps only (memory budget)", step - 1);
@@ -820,6 +882,16 @@ void ProbeTrace_Step(int run, unsigned long long step)
             std::vector<Blob> cur;
             CopyAll(ki, cur);
             Record(ki, cur);
+        }
+        if (g_disk) {
+            if (g_stream.size() > MAXDWORD || !TraceFileChunk(true, g_fileEnd, (DWORD)g_stream.size())) {
+                g_full = true;
+                Logf("republicmp  PROBE TRACE: temporary write failed - trace incomplete");
+                return;
+            }
+            g_fileAt.push_back(g_fileEnd);
+            g_fileSizes.push_back((DWORD)g_stream.size());
+            g_fileEnd += g_stream.size();
         }
         return;
     }
@@ -834,6 +906,16 @@ void ProbeTrace_Step(int run, unsigned long long step)
         g_stopped = true;
         return;
     }
+    if (g_disk) {
+        size_t i = (size_t)(step - 1);
+        if (i >= g_fileAt.size()) { g_stopped = true; return; }
+        g_stream.resize(g_fileSizes[i]);
+        if (!TraceFileChunk(false, g_fileAt[i], g_fileSizes[i])) {
+            g_stopped = true;
+            Logf("republicmp  PROBE TRACE: temporary read failed - trace incomplete");
+            return;
+        }
+    }
     g_steps2 = step;
     Replay(step, g_mirror);
     MapCitizens();
@@ -847,6 +929,7 @@ void ProbeTrace_Step(int run, unsigned long long step)
     if (step == 1)
         for (int ki = 0; ki < KINDS; ki++) LogNoise(ki);
     if (differing) {
+        if (!g_firstDifference) g_firstDifference = step;
         for (int ki = 0; ki < KINDS; ki++)
             if (!kKinds[ki].watch) Compare(ki, true, step);
         g_reported = true; // from here on every kind is watched to the end
@@ -854,10 +937,16 @@ void ProbeTrace_Step(int run, unsigned long long step)
     for (int ki = 0; ki < KINDS; ki++) g_prev[ki].swap(g_cur[ki]);
 }
 
+bool ProbeTrace_Complete(unsigned long long steps) { return !g_full && !g_stopped && g_steps2 == steps; }
+bool ProbeTrace_Different() { return g_firstDifference != 0; }
+unsigned long long ProbeTrace_FirstDifference() { return g_firstDifference; }
+
 void ProbeTrace_Finish()
 {
-    if (!g_reported)
-        Logf("republicmp  PROBE TRACE: vehicles, buildings and citizens identical after every one of %llu traced step(s)",
+    if (g_full || g_stopped)
+        Logf("republicmp  PROBE TRACE: incomplete, compared %llu steps", g_steps2);
+    else if (!g_firstDifference)
+        Logf("republicmp  PROBE TRACE: vehicles, buildings, citizens, lists and agents identical after every one of %llu traced step(s)",
              g_steps2);
     ProbeTrace_Reset();
 }

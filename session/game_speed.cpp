@@ -1,5 +1,6 @@
 // See game_speed.h.
 #include "game_speed.h"
+#include "../determinism/determinism.h"
 #include "../game/window_focus.h"
 #include "../ui/sync_block.h"
 #include "../world_sync/buildings/build_sync.h"
@@ -95,6 +96,7 @@ static const char* const kBoostNames[] = { "none", "Hyper", "Plaid" };
 
 void ForceTogglePause()
 {
+    if (Determinism_RequestPauseToggle()) return;
     int cur = ReadGameSpeed();
     if (cur == 0) {
         int restore = ReadGameSpeedSaved();

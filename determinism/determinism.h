@@ -63,15 +63,41 @@ void Determinism_Restart();
 // Simulation steps since the layer was last activated (main thread).
 unsigned long long Determinism_StepCount();
 
-// Called after every simulation step (main thread), whether or not the layer
+// Called after a complete tick (Early + Late) while active; after native Early otherwise.
+// Main thread, whether or not the layer
 // is active - for modules that sample or set state at a fixed point of the
 // step (session/sync_check, session/weather). Up to DETERMINISM_MAX_OBSERVERS.
 #define DETERMINISM_MAX_OBSERVERS 4
 typedef void (*StepObserverFn)(void);
 void Determinism_AddStepObserver(StepObserverFn fn);
 
-// Probe control (UI). steps: steps per run, interval: steps between hashes.
-bool Probe_Start(int steps, int interval);
+// Probe control (UI). steps: complete ticks per run, interval: ticks between hashes.
+// Fuzz: run 2 inserts held frames; both runs change speed every 300 ticks.
+bool Probe_Start(int steps, int interval, bool fuzzFrames = false);
 bool Probe_IsRunning();
 // Current state / last result, for the Debug window.
 const char* Probe_Status();
+
+// Frame admission and native phase boundaries. Only used while the layer is on.
+void Determinism_BeforePrepare();
+void Determinism_BeforeLate();
+void Determinism_AfterLate();
+bool Determinism_IsStepFrame();
+// F10 queues a toggle; no speed word changes in the middle of a tick.
+bool Determinism_RequestPauseToggle();
+// Around the interface routine (render thread): it shows the speed the player
+// asked for instead of the 0 the frame keeps outside Early; a key it handled
+// there becomes a request, the word goes back to 0 after it.
+void Determinism_UiSpeedBegin();
+void Determinism_UiSpeedEnd();
+void Determinism_PrivateBegin();
+void Determinism_PrivateEnd();
+void Determinism_SetPrivateWorker(DWORD thread);
+class Determinism_PrivateScope {
+    bool on_;
+public:
+    explicit Determinism_PrivateScope(bool on = true) : on_(on && Determinism_IsActive()) { if (on_) Determinism_PrivateBegin(); }
+    ~Determinism_PrivateScope() { if (on_) Determinism_PrivateEnd(); }
+    Determinism_PrivateScope(const Determinism_PrivateScope&) = delete;
+    Determinism_PrivateScope& operator=(const Determinism_PrivateScope&) = delete;
+};

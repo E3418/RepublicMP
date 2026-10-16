@@ -4,6 +4,7 @@
 #include "sim_patches.h"
 #include "probe_trace.h"
 #include "probe_watch.h"
+#include "held_frame.h"
 #include "../game/save_load.h"
 #include "../session/game_speed.h"
 #include "../session/save_sync.h" // SaveSync_IsBusy - no probe during a session
@@ -15,6 +16,7 @@
 #pragma intrinsic(_ReturnAddress)
 
 #define GAME_TIMER_RVA 0x9D4EE0
+#define FAST_FACTOR_RVA 0x909D5C
 #define SIM_STEP_RVA 0x30C790   // FUN_14030c790(world): one simulation step
 #define LOAD_WORLD_RVA 0x430FC0 // FUN_140430fc0(): loads the save named in the load globals
 
@@ -41,6 +43,7 @@ static const unsigned char kLoadWorldExpect[18] = {
 void Determinism_Bind(const TsmHost* host)
 {
     TsmBind(host);
+    HeldFrame_Bind(host);
 }
 
 // ---------------------------------------------------------------------------
@@ -54,7 +57,7 @@ static volatile unsigned long long g_stepCount = 0;
 static StepObserverFn g_stepObservers[DETERMINISM_MAX_OBSERVERS] = {};
 static int g_stepObserverCount = 0;
 static bool g_mathRedirected = false;
-// For the probe: the simulation thread's draws inside Early in this epoch
+// For the probe: the simulation thread's draws inside Early and Late in this epoch
 // (count and a hash of site and value) - a split shows here first. The
 // rest of the main thread's frame (camera, tools, interface) is left out.
 static volatile DWORD g_simThread = 0;
@@ -92,6 +95,12 @@ struct SiteCounters {
     std::unordered_map<unsigned, unsigned> calls;
 };
 static thread_local SiteCounters* t_sites = nullptr;
+static thread_local SiteCounters* t_privateSites = nullptr;
+static thread_local unsigned t_privateDepth = 0;
+static volatile LONG g_privateWorker = 0;
+void Determinism_PrivateBegin() { ++t_privateDepth; }
+void Determinism_PrivateEnd() { --t_privateDepth; }
+void Determinism_SetPrivateWorker(DWORD thread) { InterlockedExchange(&g_privateWorker, (LONG)thread); }
 
 static inline unsigned long long SplitMix(unsigned long long x)
 {
@@ -105,16 +114,20 @@ static inline unsigned long long SplitMix(unsigned long long x)
 static int SiteRand(void* returnAddress)
 {
     unsigned site = (unsigned)((BYTE*)returnAddress - g_exeBase);
-    if (!t_sites) t_sites = new SiteCounters{ 0, {} };
+    // Held presentation and UI can call the same native routines as a tick.
+    // Separate counters keep any number of local frames out of that stream.
+    bool privateDraw = t_privateDepth || GetCurrentThreadId() == (DWORD)g_privateWorker;
+    SiteCounters*& counters = privateDraw ? t_privateSites : t_sites;
+    if (!counters) counters = new SiteCounters{ 0, {} };
     LONG epoch = g_epoch;
-    if (t_sites->epoch != epoch) {
-        t_sites->calls.clear();
-        t_sites->epoch = epoch;
+    if (counters->epoch != epoch) {
+        counters->calls.clear();
+        counters->epoch = epoch;
     }
-    unsigned n = t_sites->calls[site]++;
+    unsigned n = counters->calls[site]++;
     unsigned long long x = SplitMix(g_seed ^ ((unsigned long long)site << 32) ^ n);
     int value = (int)((x >> 33) & 0x7FFF);
-    if (g_inEarly && !IsPresentationSite(site)) {
+    if (!privateDraw && g_inEarly && !IsPresentationSite(site)) {
         if (GetCurrentThreadId() == g_simThread) {
             g_simDraws++;
             g_simDrawHash = (g_simDrawHash ^ (((unsigned long long)site << 32) | (unsigned)value)) * 1099511628211ull;
@@ -338,11 +351,27 @@ typedef void (*LoadWorldFn)(void);
 static SimStepFn o_simStep;
 static LoadWorldFn o_loadWorld;
 
-enum ProbeState { PROBE_IDLE = 0, PROBE_WAIT_LOAD, PROBE_RUNNING, PROBE_RUN_DONE };
+enum ProbeState { PROBE_IDLE = 0, PROBE_WAIT_LOAD, PROBE_RUNNING, PROBE_RUN_DONE, PROBE_FAILED };
 static volatile LONG g_probeState = PROBE_IDLE;
 static volatile bool g_probeBusy = false;
 static int g_probeSteps = 0, g_probeInterval = 60, g_probeRun = 0;
 static int g_probeSpeed = 1;
+static bool g_probeFuzz = false;
+static bool g_frameStep = false, g_frameEarly = false, g_frameFault = false, g_haveStep = false;
+static bool g_framesReady = false, g_paused = false, g_buttonsArmed = false;
+static int g_tickSpeed = 1, g_requestedSpeed = 1;
+static unsigned g_holdsLeft = 0, g_menuFrames = 0;
+static unsigned long long g_holdCount[2] = {}, g_speedChanges[2] = {};
+static volatile LONG g_pauseRequests = 0;
+static unsigned g_tickTimer[4] = {}, g_uiTimer[4] = {};
+static LARGE_INTEGER g_frameClock = {}, g_frameFrequency = {};
+static double g_tickDebt = 0;
+// For the hang report: frames started and where the current one stands
+// (1 Prepare, 2 step Early, 3 held Early, 4 after Early, 5 Late, 6 after Late).
+static volatile unsigned long long g_frameBeats = 0;
+static volatile LONG g_framePhase = 0;
+static const int kSpeedSentinel = 0x52424E53;
+static void ResetFrames();
 static unsigned long long g_runStep = 0;
 
 struct ProbeSample {
@@ -658,7 +687,11 @@ static void HookedLoadWorld(void)
     // A probe run starts its generator epoch exactly at the load, so the
     // random numbers the load itself draws are the same in both runs.
     if (g_probeState == PROBE_WAIT_LOAD) {
-        SimPatches_Apply(); // main thread, nothing simulating: both runs start with them
+        if (!SimPatches_Apply()) {
+            InterlockedExchange(&g_probeState, PROBE_FAILED);
+            o_loadWorld();
+            return;
+        }
         Determinism_Restart();
         g_simDraws = 0;
         g_simDrawHash = 1469598103934665603ull;
@@ -671,7 +704,9 @@ static void HookedLoadWorld(void)
     o_loadWorld();
     if (g_probeState == PROBE_WAIT_LOAD) {
         EmptySearchPool();
+        SimPatches_ResetSearches();
         g_runStep = 0;
+        ResetFrames();
         WriteGameSpeed(g_probeSpeed); // the first step already at the probe's speed
         if (g_probeRun == 0) {
             g_dataSnapshot.assign(g_exeBase + DATA_RVA, g_exeBase + DATA_RVA + DATA_SIZE);
@@ -697,29 +732,188 @@ static void RecordSample()
     g_sampleCount[run]++;
 }
 
+// 105e56 prepares the view at speed 0. Early (30c790) alone raises the
+// native speed; UI writes are requests and Late always sees speed 0, with
+// the admitted tick's timer restored. (by SoylentGreed)
+static void ResetFrames()
+{
+    g_frameStep = g_frameEarly = g_frameFault = g_paused = g_buttonsArmed = false;
+    g_tickSpeed = g_requestedSpeed = g_probeSpeed > 1 ? 2 : 1;
+    g_holdsLeft = g_menuFrames = 0;
+    g_haveStep = false;
+    InterlockedExchange(&g_pauseRequests, 0);
+    g_tickDebt = 1.0;
+    QueryPerformanceCounter(&g_frameClock);
+    QueryPerformanceFrequency(&g_frameFrequency);
+}
+
+bool Determinism_IsStepFrame()
+{
+    return g_active && g_frameStep && GetCurrentThreadId() == g_simThread;
+}
+
+bool Determinism_RequestPauseToggle()
+{
+    if (!g_active) return false;
+    InterlockedIncrement(&g_pauseRequests);
+    return true;
+}
+
+static void TakeSpeedInput()
+{
+    int* speed = (int*)(g_exeBase + 0x9D54B4);
+    bool button = g_buttonsArmed && speed[2] != kSpeedSentinel;
+    // Esc's timer hold and its remembered-speed restore are not player
+    // pacing requests (105a90 / 317db0). (by SoylentGreed)
+    if (g_buttonsArmed && !g_menuFrames && (*speed || button)) {
+        if (button) {
+            g_paused = *speed == 0;
+            if (*speed > 0) g_requestedSpeed = *speed > 1 ? 2 : 1;
+        } else g_paused = !g_paused;
+    }
+    LONG toggles = InterlockedExchange(&g_pauseRequests, 0);
+    if (toggles & 1) g_paused = !g_paused;
+    *speed = 0;
+    speed[1] = g_requestedSpeed;
+    speed[2] = kSpeedSentinel;
+    g_buttonsArmed = true;
+}
+
+// The interface (317db0, render thread) draws the speed buttons from
+// world+5a4, which stays 0 outside Early: the pause button looked pressed
+// while the ticks ran. It runs between Late and the next frame start (the
+// render wait at timer Start), never during this frame's own speed handling.
+// A button click changes +5ac and is read by TakeSpeedInput as before; a
+// changed speed without it is the pause key, queued as a toggle. Speed
+// restores while the Esc menu closes are not requests.
+static int g_uiShown = 0;
+
+void Determinism_UiSpeedBegin()
+{
+    if (!g_active || !g_buttonsArmed) return;
+    g_uiShown = g_paused ? 0 : g_requestedSpeed;
+    *(int*)(g_exeBase + 0x9D54B4) = g_uiShown;
+}
+
+void Determinism_UiSpeedEnd()
+{
+    if (!g_active || !g_buttonsArmed) return;
+    int* speed = (int*)(g_exeBase + 0x9D54B4);
+    if (speed[2] != kSpeedSentinel) return;
+    if (*speed != g_uiShown && !g_menuFrames) InterlockedIncrement(&g_pauseRequests);
+    *speed = 0;
+}
+
+void Determinism_BeforePrepare()
+{
+    if (!g_active) return;
+    g_simThread = GetCurrentThreadId();
+    ++g_frameBeats;
+    g_framePhase = 1;
+    if (g_exeBase[GAME_TIMER_RVA + 13]) g_menuFrames = 30;
+    else if (g_menuFrames) --g_menuFrames;
+    TakeSpeedInput();
+    g_frameStep = g_frameEarly = false;
+    bool running = !g_probeBusy || g_probeState == PROBE_RUNNING;
+    BYTE* timer = g_exeBase + GAME_TIMER_RVA;
+    bool paused = g_paused || timer[13] != 0;
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    double elapsed = g_frameFrequency.QuadPart ? double(now.QuadPart - g_frameClock.QuadPart) / g_frameFrequency.QuadPart : 0;
+    g_frameClock = now;
+    // Pausing freezes admission, including any ticks still owed after a slow
+    // frame. Dropping that debt would make low-FPS pauses lose simulation time.
+    if (!g_probeBusy && !paused) g_tickDebt += elapsed * DETERMINISM_FIXED_FPS;
+    if (running && !paused && !g_frameFault) {
+        if (g_holdsLeft) --g_holdsLeft;
+        else if (g_probeBusy || g_tickDebt >= 1.0) {
+            g_frameStep = true;
+            if (!g_probeBusy) g_tickDebt -= 1.0;
+        }
+    }
+    int nextSpeed = g_probeBusy ? (g_probeFuzz ? 1 + int((g_runStep / 300) & 1) : g_probeSpeed) : g_requestedSpeed;
+    nextSpeed = nextSpeed > 1 ? 2 : 1;
+    if (g_frameStep && nextSpeed != g_tickSpeed && g_probeBusy) ++g_speedChanges[g_probeRun];
+    if (g_frameStep) g_tickSpeed = nextSpeed;
+    // Speed 2 scales the timer by the game's own factor (105db9: exe+909d5c,
+    // 0.345268), as the native loop would have done before this point.
+    *(float*)timer = DETERMINISM_FIXED_FPS * (g_tickSpeed == 2 ? *(float*)(g_exeBase + FAST_FACTOR_RVA) : 1.0f);
+    *(float*)(timer + 4) = DETERMINISM_FIXED_FPS;
+    *(int*)(timer + 8) = (int)DETERMINISM_FIXED_FPS;
+    timer[12] = g_frameStep ? 0 : 1;
+    memcpy(g_tickTimer, timer, sizeof(g_tickTimer));
+}
+
 static void HookedSimStep(__int64 world)
 {
-    if (g_active && g_probeState == PROBE_RUNNING && g_runStep == 0) ProbeWatch_Step(g_probeRun, 0, false);
-    g_simThread = GetCurrentThreadId();
+    if (!g_active) {
+        o_simStep(world);
+        for (int i = 0; i < g_stepObserverCount; i++) g_stepObservers[i]();
+        return;
+    }
+    // Prepare (input) may have written a speed key after the frame was
+    // admitted; take it as a request before the tick raises the speed.
+    TakeSpeedInput();
+    if (!g_frameStep) {
+        g_framePhase = 3;
+        if (g_probeState == PROBE_RUNNING) ++g_holdCount[g_probeRun];
+        if (!g_frameFault && g_probeState != PROBE_WAIT_LOAD && !HeldFrame_Draw(g_haveStep)) {
+            g_frameFault = true;
+            Logf("republicmp  PROBE: held presentation failed - no successful result can be reported");
+        }
+        g_framePhase = 4;
+        return;
+    }
+    if (g_probeState == PROBE_RUNNING && g_runStep == 0) ProbeWatch_Step(g_probeRun, 0, false);
+    g_framePhase = 2;
+    WriteGameSpeed(g_tickSpeed);
+    __int64 tool = *(__int64*)(world + 0xD428);
+    *(__int64*)(world + 0xD428) = 0;
     SimPatches_BeforeEarly(world);
     g_inEarly = true;
     o_simStep(world);
     g_inEarly = false;
     SimPatches_AfterEarly();
-    for (int i = 0; i < g_stepObserverCount; i++) g_stepObservers[i](); // also without the layer
+    *(__int64*)(world + 0xD428) = tool;
+    WriteGameSpeed(0);
+    *(int*)(g_exeBase + 0x9D54BC) = kSpeedSentinel;
+    memcpy(g_tickTimer, g_exeBase + GAME_TIMER_RVA, sizeof(g_tickTimer));
+    g_frameEarly = g_haveStep = true;
+    g_framePhase = 4;
+}
+
+void Determinism_BeforeLate()
+{
     if (!g_active) return;
-    g_stepCount++;
-    if (g_probeState == PROBE_RUNNING) {
-        if (g_runStep == 0) WriteGameSpeed(g_probeSpeed); // same speed in both runs from here on
-        g_runStep++;
-        ProbeTrace_Step(g_probeRun, g_runStep);
-        ProbeWatch_Step(g_probeRun, g_runStep, g_runStep >= (unsigned long long)g_probeSteps);
-        if (g_runStep % g_probeInterval == 0) RecordSample();
-        if (g_runStep >= (unsigned long long)g_probeSteps) {
-            WriteGameSpeed(0);
-            InterlockedExchange(&g_probeState, PROBE_RUN_DONE);
+    g_framePhase = 5;
+    TakeSpeedInput();
+    g_inEarly = g_frameStep;
+    memcpy(g_uiTimer, g_exeBase + GAME_TIMER_RVA, sizeof(g_uiTimer));
+    memcpy(g_exeBase + GAME_TIMER_RVA, g_tickTimer, sizeof(g_tickTimer));
+}
+
+void Determinism_AfterLate()
+{
+    if (!g_active) return;
+    g_framePhase = 6;
+    g_inEarly = false;
+    if (g_frameStep && g_frameEarly) {
+        ++g_stepCount;
+        for (int i = 0; i < g_stepObserverCount; i++) g_stepObservers[i]();
+        if (g_probeState == PROBE_RUNNING) {
+            ++g_runStep;
+            ProbeTrace_Step(g_probeRun, g_runStep);
+            ProbeWatch_Step(g_probeRun, g_runStep, g_runStep >= (unsigned long long)g_probeSteps);
+            if (g_runStep % g_probeInterval == 0) RecordSample();
+            // Independent of game RNG: run 1 holds none, run 2 holds 0..3.
+            if (g_probeFuzz && g_probeRun == 1) g_holdsLeft = (unsigned)(SplitMix(PROBE_SEED ^ g_runStep) & 3);
         }
     }
+    memcpy(g_exeBase + GAME_TIMER_RVA, g_uiTimer, sizeof(g_uiTimer));
+    g_frameStep = g_frameEarly = false;
+    // Publish completion only after the final Late and all frame cleanup.
+    if (g_probeState == PROBE_RUNNING && (g_frameFault || g_runStep >= (unsigned long long)g_probeSteps))
+        InterlockedExchange(&g_probeState, PROBE_RUN_DONE);
 }
 
 // ---------------------------------------------------------------------------
@@ -772,16 +966,31 @@ bool Determinism_Install()
     bool load = InstallInlineHook(g_exeBase + LOAD_WORLD_RVA, (void*)&HookedLoadWorld, (void**)&o_loadWorld,
                                   kLoadWorldExpect, sizeof(kLoadWorldExpect), "republicmp load world");
     Logf("republicmp  DETERMINISM: %d/12 imports redirected, sim step hook %d, load hook %d", ok, step, load);
-    return ok == 12 && step && load;
+    bool presentation = HeldFrame_Verify();
+    bool phases = SimPatches_Install();
+    g_framesReady = ok == 12 && step && load && presentation && phases;
+    Logf("republicmp  DETERMINISM: frame control ready %d (presentation %d, phases %d)", g_framesReady, presentation, phases);
+    return g_framesReady;
 }
 
 void Determinism_SetActive(bool active, unsigned long long seed)
 {
+    if (active && !g_framesReady) {
+        Logf("republicmp  DETERMINISM: activation refused - frame hooks are incomplete");
+        return;
+    }
     if (active) {
         RedirectMath();
         g_seed = seed;
         g_stepCount = 0;
         Determinism_Restart();
+    }
+    if (active) ResetFrames();
+    else if (g_active) {
+        WriteGameSpeed(0);
+        *(int*)(g_exeBase + 0x9D54B8) = g_requestedSpeed;
+        *(int*)(g_exeBase + 0x9D54BC) = 0;
+        g_buttonsArmed = false;
     }
     g_active = active;
     Logf("republicmp  DETERMINISM: %s (seed %016llx)", active ? "on" : "off", seed);
@@ -817,6 +1026,8 @@ static void WriteRunLog(int run)
     _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\republicmp_probe_run%d.txt", dir, run + 1);
     FILE* f = nullptr;
     if (fopen_s(&f, path, "w") != 0 || !f) return;
+    fprintf(f, "# complete ticks; fuzz=%d held_frames=%llu speed_changes=%llu\n", g_probeFuzz,
+            g_holdCount[run], g_speedChanges[run]);
     fprintf(f, "step day year progress buildings vehicles citizens storage cargo production clock bld veh cit "
                "draws drawhash population\n");
     for (int i = 0; i < g_sampleCount[run]; i++) {
@@ -831,6 +1042,19 @@ static void WriteRunLog(int run)
 
 static void CompareRuns()
 {
+    int expected = g_probeSteps / g_probeInterval;
+    if (g_sampleCount[0] != expected || g_sampleCount[1] != expected) {
+        SetProbeStatus("INCOMPLETE: expected %d samples, got %d/%d", expected, g_sampleCount[0], g_sampleCount[1]);
+        return;
+    }
+    if (g_probeFuzz && !ProbeTrace_Complete(g_probeSteps)) {
+        SetProbeStatus("INCOMPLETE: fuzz requires a trace of all %d ticks", g_probeSteps);
+        return;
+    }
+    if (ProbeTrace_Different()) {
+        SetProbeStatus("DIFFERENT from step %llu (per-tick trace; see PROBE TRACE)", ProbeTrace_FirstDifference());
+        return;
+    }
     int n = g_sampleCount[0] < g_sampleCount[1] ? g_sampleCount[0] : g_sampleCount[1];
     for (int i = 0; i < n; i++) {
         const StateSummary& a = g_samples[0][i].s;
@@ -855,11 +1079,84 @@ static void CompareRuns()
     else SetProbeStatus("IDENTICAL: both runs match at all %d samples (%llu steps)", n, g_samples[0][n - 1].step);
 }
 
+// Hang report: when the main thread has not started a frame for 10 s while
+// a run simulates, the probe thread logs where the main thread and the early
+// worker stand (module + offset per frame) and the frame phase. Once per hang.
+static void LogThreadStack(const char* what, DWORD tid)
+{
+    if (!tid || tid == GetCurrentThreadId()) return;
+    HANDLE t = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, tid);
+    if (!t) return;
+    char line[1024];
+    int len = _snprintf_s(line, sizeof(line), _TRUNCATE, "republicmp  PROBE HANG: %s thread %lu:", what, tid);
+    if (SuspendThread(t) != (DWORD)-1) {
+        CONTEXT c = {};
+        c.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+        if (GetThreadContext(t, &c)) {
+            for (int i = 0; i < 24 && c.Rip && len > 0 && len < (int)sizeof(line) - 64; i++) {
+                HMODULE m = nullptr;
+                char name[MAX_PATH] = "?";
+                if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                       (LPCSTR)c.Rip, &m) && m) {
+                    GetModuleFileNameA(m, name, sizeof(name));
+                    const char* slash = strrchr(name, '\\');
+                    if (slash) memmove(name, slash + 1, strlen(slash));
+                }
+                int n = _snprintf_s(line + len, sizeof(line) - len, _TRUNCATE, " %s+%llx", name,
+                                    (unsigned long long)(c.Rip - (DWORD64)m));
+                if (n <= 0) break;
+                len += n;
+                DWORD64 base = 0;
+                PRUNTIME_FUNCTION f = RtlLookupFunctionEntry(c.Rip, &base, nullptr);
+                if (!f) {
+                    if (!c.Rsp) break;
+                    c.Rip = *(DWORD64*)c.Rsp;
+                    c.Rsp += 8;
+                } else {
+                    PVOID data = nullptr;
+                    DWORD64 frame = 0;
+                    RtlVirtualUnwind(UNW_FLAG_NHANDLER, base, c.Rip, f, &c, &data, &frame, nullptr);
+                }
+            }
+        }
+        ResumeThread(t);
+    }
+    CloseHandle(t);
+    Logf("%s", line);
+}
+
+static void CheckHang(unsigned long long& lastBeat, ULONGLONG& beatAt, bool& reported)
+{
+    ULONGLONG now = GetTickCount64();
+    if (g_frameBeats != lastBeat || g_probeState != PROBE_RUNNING) {
+        lastBeat = g_frameBeats;
+        beatAt = now;
+        reported = false;
+        return;
+    }
+    if (reported || now - beatAt < 10000) return;
+    reported = true;
+    BYTE* timer = g_exeBase + GAME_TIMER_RVA;
+    Logf("republicmp  PROBE HANG: no frame for %llu ms - phase %ld, tick %llu, step %d, paused %d, holds %u, fault %d, timer %02x %02x",
+         now - beatAt, g_framePhase, g_runStep, g_frameStep, g_paused, g_holdsLeft, g_frameFault, timer[12], timer[13]);
+    LogThreadStack("main", g_simThread);
+    BYTE* worker = *(BYTE**)(g_exeBase + 0x995290);
+    if (worker) {
+        Logf("republicmp  PROBE HANG: worker stop %d done %d", worker[0x28], worker[0x59]);
+        LogThreadStack("worker", *(DWORD*)(worker + 0xC8));
+    }
+}
+
 static bool WaitState(LONG want, DWORD timeoutMs)
 {
     ULONGLONG start = GetTickCount64();
+    unsigned long long lastBeat = g_frameBeats;
+    ULONGLONG beatAt = start;
+    bool reported = false;
     while (g_probeState != want) {
+        if (g_probeState == PROBE_FAILED) return false;
         if (GetTickCount64() - start > timeoutMs) return false;
+        CheckHang(lastBeat, beatAt, reported);
         Sleep(50);
     }
     return true;
@@ -879,6 +1176,7 @@ static DWORD WINAPI ProbeThread(LPVOID)
         // (FUN_1400f7930 from FUN_140139a70) - worth knowing if runs differ.
         Logf("republicmp  PROBE: world+0xC = %d", (int)*(BYTE*)(g_exeBase + 0x9D4F10 + 0xC));
         ResetDetail();
+        ProbeTrace_SetDisk(g_probeFuzz);
         Determinism_SetActive(true, PROBE_SEED);
         bool failed = false;
         for (g_probeRun = 0; g_probeRun < 2 && !failed; g_probeRun++) {
@@ -886,14 +1184,17 @@ static DWORD WINAPI ProbeThread(LPVOID)
             SetProbeStatus("run %d/2: loading '%s'...", g_probeRun + 1, PROBE_SAVE_NAME);
             InterlockedExchange(&g_probeState, PROBE_WAIT_LOAD);
             TriggerLoadSave(PROBE_SAVE_NAME);
-            if (!WaitState(PROBE_RUNNING, 300000)) { SetProbeStatus("run %d: the load never happened", g_probeRun + 1); failed = true; break; }
-            SetProbeStatus("run %d/2: simulating %d steps - please don't touch anything", g_probeRun + 1, g_probeSteps);
+            if (!WaitState(PROBE_RUNNING, 300000)) { SetProbeStatus("run %d: load timed out or simulation patches refused (see log)", g_probeRun + 1); failed = true; break; }
+            SetProbeStatus("run %d/2: simulating %d ticks - Space/F10 may pause; avoid other actions", g_probeRun + 1, g_probeSteps);
             // Generous: the steps run at the game's own frame rate.
             if (!WaitState(PROBE_RUN_DONE, (DWORD)g_probeSteps * 1000 + 60000)) {
                 SetProbeStatus("run %d: timed out after %llu steps", g_probeRun + 1, g_runStep);
                 failed = true;
                 break;
             }
+            if (g_frameFault) { SetProbeStatus("run %d: held-frame guard failed", g_probeRun + 1); failed = true; break; }
+            Logf("republicmp  PROBE: run %d complete: %llu ticks, %llu held frames, %llu speed changes, fuzz %d",
+                 g_probeRun + 1, g_runStep, g_holdCount[g_probeRun], g_speedChanges[g_probeRun], g_probeFuzz);
             WriteRunLog(g_probeRun);
         }
         InterlockedExchange(&g_probeState, PROBE_IDLE);
@@ -911,15 +1212,19 @@ static DWORD WINAPI ProbeThread(LPVOID)
     return 0;
 }
 
-bool Probe_Start(int steps, int interval)
+bool Probe_Start(int steps, int interval, bool fuzzFrames)
 {
     if (g_probeBusy || SaveSync_IsBusy()) return false;
+    if (!g_framesReady) { SetProbeStatus("frame hooks unavailable - see startup log"); return false; }
     if (steps < interval || interval < 1 || steps / interval > PROBE_MAX_SAMPLES) return false;
     StateSummary s;
     if (!StateHash_Compute(&s)) {
         SetProbeStatus("load a game first");
         return false;
     }
+    g_probeFuzz = fuzzFrames;
+    memset(g_holdCount, 0, sizeof(g_holdCount));
+    memset(g_speedChanges, 0, sizeof(g_speedChanges));
     g_probeBusy = true;
     g_probeSteps = steps;
     g_probeInterval = interval;

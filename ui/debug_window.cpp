@@ -168,18 +168,20 @@ void DebugWindow::Draw()
         // --- Determinism probe (determinism/determinism) ---
         ImGui::TextUnformatted("Determinism probe:");
         static int s_probeLength = 1;
+        static bool s_probeFuzz = false;
         static const int kProbeSteps[] = { 600, 1800, 3600, 10800 };
-        static const char* const kProbeLabels[] = { "600 steps (~20 s)", "1800 steps (~1 min)",
-                                                    "3600 steps (~2 min)", "10800 steps (~6 min)" };
+        static const char* const kProbeLabels[] = { "600 ticks", "1800 ticks", "3600 ticks", "10800 ticks" };
         ImGui::BeginDisabled(Probe_IsRunning() || SaveSync_IsBusy());
         ImGui::SetNextItemWidth(170);
         ImGui::Combo("##probeLength", &s_probeLength, kProbeLabels, IM_ARRAYSIZE(kProbeLabels));
         ImGui::SameLine();
         if (ImGui::Button("Run probe"))
-            Probe_Start(kProbeSteps[s_probeLength], 30);
+            Probe_Start(kProbeSteps[s_probeLength], 30, s_probeFuzz);
+        ImGui::Checkbox("Fuzz held frames and speed", &s_probeFuzz);
         ImGui::EndDisabled();
         ImGui::TextWrapped("Saves the game as 'mp_probe', then loads and simulates it twice and compares the "
-                           "state. Don't touch the game while it runs. Not during a multiplayer session.");
+                           "state after complete ticks. Fuzz holds 0-3 frames in run 2 and changes speed every 300 ticks. "
+                           "Space/F10 may pause; avoid other actions. Not during a multiplayer session.");
         ImGui::TextWrapped("Result: %s", Probe_Status());
 
         ImGui::Spacing();

@@ -55,8 +55,8 @@ void SimPatches_Bind(const TsmHost* host);
 bool SimPatches_Install();
 
 // Writes the byte patches and turns the relays on. Main thread, with the
-// simulation not running (the probe calls it right before a load).
-void SimPatches_Apply();
+// simulation not running (the probe calls it right before a load). False refuses the probe.
+bool SimPatches_Apply();
 
 // Per frame (Present hook): puts the byte patches back once the layer is off.
 void SimPatches_Tick();
@@ -72,3 +72,5 @@ int SimPatches_LastPopulation();
 // Main thread, at the start of a frame (determinism.cpp's timer Start hook):
 // while the patches are on, waits for the render thread's frame to finish.
 void SimPatches_WaitRender();
+// After loading: retain private vector storage, discard entries from the previous city.
+void SimPatches_ResetSearches();

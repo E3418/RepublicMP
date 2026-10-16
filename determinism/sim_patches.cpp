@@ -215,6 +215,7 @@ static void AddToForest(const QueuedSapling* q, size_t n)
 // Late, at its growth call (rcx = world).
 static void DetSaplingLate(__int64 world)
 {
+    if (g_on && Determinism_IsActive() && !Determinism_IsStepFrame()) return;
     if (g_on && GetCurrentThreadId() == g_simThread && TreesLoaded()) StartSaplings(world);
     ((SaplingGrowthFn)(g_exeBase + SAPLING_GROWTH_RVA))(world);
 }
@@ -311,17 +312,37 @@ static void RecountPopulation(__int64 world)
 
 // Set while Early or Late runs.
 static volatile bool g_inPhase = false;
+static BYTE g_privateToolSearch[72] = {};
 
 static void HookedLate(__int64 world)
 {
-    if (g_on && world == (__int64)(g_exeBase + WORLD_RVA)) {
-        g_simThread = GetCurrentThreadId();
-        *(float*)(world + AUTOSAVE_TIMER_OFFSET) = 0.0f;
-        RecountPopulation(world);
+    bool active = g_on && Determinism_IsActive() && world == (__int64)(g_exeBase + WORLD_RVA);
+    if (!active) { o_late(world); return; }
+    Determinism_BeforeLate();
+    g_simThread = GetCurrentThreadId();
+    bool step = Determinism_IsStepFrame();
+    *(float*)(world + AUTOSAVE_TIMER_OFFSET) = 0.0f;
+    if (step) RecountPopulation(world);
+    // Step frames have no local tool; held previews search in private vectors.
+    // The render thread has finished here (105eb8). (by SoylentGreed)
+    __int64 tool = *(__int64*)(world + 0xD428);
+    if (step) *(__int64*)(world + 0xD428) = 0;
+    BYTE search[72];
+    memcpy(search, (void*)(world + 0x14478), sizeof(search));
+    if (!step) memcpy((void*)(world + 0x14478), g_privateToolSearch, sizeof(search));
+    {
+        Determinism_PrivateScope privateRng(!step);
+        g_inPhase = true;
+        o_late(world);
+        g_inPhase = false;
     }
-    g_inPhase = true;
-    o_late(world);
-    g_inPhase = false;
+    if (!step) {
+        memcpy(g_privateToolSearch, (void*)(world + 0x14478), sizeof(search));
+        memcpy((void*)(world + 0x14478), search, sizeof(search));
+    }
+    if (step) *(__int64*)(world + 0xD428) = tool;
+    *(float*)(world + AUTOSAVE_TIMER_OFFSET) = 0.0f;
+    Determinism_AfterLate();
 }
 
 void SimPatches_BeforeEarly(__int64 world)
@@ -367,9 +388,13 @@ void SimPatches_WaitRender()
     if (!g_on) return;
     BYTE* renderer = *(BYTE**)(g_exeBase + RENDERER_RVA);
     HANDLE finished = renderer ? *(HANDLE*)(renderer + RENDERER_FINISHED) : nullptr;
-    if (finished && WaitForSingleObject(finished, RENDER_WAIT_MS) == WAIT_TIMEOUT &&
-        InterlockedIncrement(&g_renderWaitTimeouts) <= 3)
-        Logf("republicmp  SIM_PATCHES: the render thread took over %d ms - frame went on without it", RENDER_WAIT_MS);
+    if (finished && WaitForSingleObject(finished, RENDER_WAIT_MS) == WAIT_TIMEOUT) {
+        if (InterlockedIncrement(&g_renderWaitTimeouts) <= 3)
+            Logf("republicmp  SIM_PATCHES: render took over %d ms - waiting before the next frame", RENDER_WAIT_MS);
+        // A slow/background render must not overlap a deterministic tick.
+        // The native wait at 105eb8 is unbounded too. (by SoylentGreed)
+        WaitForSingleObject(finished, INFINITE);
+    }
 }
 
 static void DetFrameLock(LPCRITICAL_SECTION cs)
@@ -401,6 +426,14 @@ static const unsigned char kUiCallOriginal[5] = { 0xe8, 0x59, 0x52, 0xe9, 0xff }
 static BYTE g_privateSearch[SEARCH_WORKSPACE_SIZE] = {};
 static volatile LONG g_uiEnclosed = 0;
 
+void SimPatches_ResetSearches()
+{
+    // The private buffers are not part of the loaded world. Keep capacity,
+    // but no pointer to a search result from the previous city. (by SoylentGreed)
+    for (BYTE* workspace : { g_privateSearch, g_privateToolSearch })
+        for (int i = 0; i < 3; i++) memcpy(workspace + i * 24 + 8, workspace + i * 24, 8);
+}
+
 static __int64 DetUiRoutine(void* world)
 {
     typedef __int64 (*UiFn)(void*);
@@ -410,7 +443,10 @@ static __int64 DetUiRoutine(void* world)
     BYTE saved[SEARCH_WORKSPACE_SIZE];
     memcpy(saved, shared, sizeof(saved));
     memcpy(shared, g_privateSearch, sizeof(saved));
+    Determinism_PrivateScope privateRng;
+    Determinism_UiSpeedBegin();
     __int64 r = original(world);
+    Determinism_UiSpeedEnd();
     memcpy(g_privateSearch, shared, sizeof(saved));
     memcpy(shared, saved, sizeof(saved));
     InterlockedIncrement(&g_uiEnclosed);
@@ -425,7 +461,7 @@ static __int64 DetUiRoutine(void* world)
 // moves only while the game runs (142ef tests world+5a4) and is timed with
 // PowerTime, so the camera drifted on its own and the paths that still read
 // the camera followed. While the layer is on, Prepare runs with the speed
-// word at 0 and gets it back right after. (by SoylentGreed)
+// word at 0; the frame controller raises it only for Early. (by SoylentGreed)
 
 #define PREPARE_RVA 0x3D85A0
 #define PREPARE_CALL 0x105E56
@@ -440,11 +476,45 @@ static void DetPrepare(__int64 world)
         original(world);
         return;
     }
-    int* speed = (int*)(world + WORLD_SPEED_OFFSET);
-    int was = *speed;
-    *speed = 0;
+    Determinism_BeforePrepare();
+    __int64 tool = *(__int64*)(world + 0xD428);
+    if (Determinism_IsStepFrame()) *(__int64*)(world + 0xD428) = 0;
+    Determinism_PrivateScope privateRng;
     original(world);
-    if (*speed == 0) *speed = was; // the interface may have changed it meanwhile: keep that
+    if (Determinism_IsStepFrame()) *(__int64*)(world + 0xD428) = tool;
+}
+
+// Late runs even at speed 0: 547ef0 clamps road speeds without time passing;
+// 333bd0 can roll weather with a zero timer, and 5cfea0 changes road wetness.
+// Only the admitted tick may run these calls; loading paths stay native.
+// The existing session patches already own citizen initialization and the
+// building FPS branches; those are not patched twice. (by SoylentGreed)
+static void DetPieceSpeed(void* network)
+{
+    if (!Determinism_IsActive() || Determinism_IsStepFrame())
+        ((void (*)(void*))(g_exeBase + 0x547EF0))(network);
+}
+static void DetWeather(void* world, unsigned long long init)
+{
+    if (!Determinism_IsActive() || Determinism_IsStepFrame())
+        ((void (*)(void*, unsigned long long))(g_exeBase + 0x333BD0))(world, init);
+}
+static void DetRoadWeather(void* world, unsigned long long init)
+{
+    if (!Determinism_IsActive() || Determinism_IsStepFrame())
+        ((void (*)(void*, unsigned long long))(g_exeBase + 0x5CFEA0))(world, init);
+}
+static const unsigned kStepCalls[] = { 0x30E3AC, 0x30E3B8, 0x30E3C4, 0x30D9DD, 0x30D9E7 };
+static const unsigned kStepTargets[] = { 0x547EF0, 0x547EF0, 0x547EF0, 0x333BD0, 0x5CFEA0 };
+static bool VerifyStepCalls()
+{
+    for (int i = 0; i < 5; i++) {
+        BYTE* call = g_exeBase + kStepCalls[i];
+        int rel = 0;
+        memcpy(&rel, call + 1, 4);
+        if (*call != 0xE8 || kStepCalls[i] + 5 + rel != kStepTargets[i]) return false;
+    }
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -474,21 +544,21 @@ bool SimPatches_Install()
                    memcmp(g_exeBase + SAPLING_LATE_CALL, kSaplingLateOriginal, 5) == 0 &&
                    memcmp(g_exeBase + FRAME_LOCK_SITE, kFrameLockOriginal, 6) == 0 &&
                    memcmp(g_exeBase + UI_ROUTINE_CALL, kUiCallOriginal, 5) == 0 &&
-                   memcmp(g_exeBase + PREPARE_CALL, kPrepareCallOriginal, 5) == 0;
+                   memcmp(g_exeBase + PREPARE_CALL, kPrepareCallOriginal, 5) == 0 && VerifyStepCalls();
     bool relays = false;
     if (sitesOk) g_relay = AllocNear(g_exeBase, 4096);
     if (g_relay) {
         DWORD old;
-        VirtualProtect(g_relay, 96, PAGE_EXECUTE_READWRITE, &old);
-        void* targets[6] = { (void*)&DetGetNode, (void*)&DetSaplingRender, (void*)&DetSaplingLate, (void*)&DetFrameLock,
-                             (void*)&DetUiRoutine, (void*)&DetPrepare };
-        for (int i = 0; i < 6; i++) {
+        VirtualProtect(g_relay, 144, PAGE_EXECUTE_READWRITE, &old);
+        void* targets[9] = { (void*)&DetGetNode, (void*)&DetSaplingRender, (void*)&DetSaplingLate, (void*)&DetFrameLock,
+                             (void*)&DetUiRoutine, (void*)&DetPrepare, (void*)&DetPieceSpeed, (void*)&DetWeather, (void*)&DetRoadWeather };
+        for (int i = 0; i < 9; i++) {
             BYTE* r = g_relay + i * 16;
             r[0] = 0xff; r[1] = 0x25; r[2] = r[3] = r[4] = r[5] = 0;
             memcpy(r + 6, &targets[i], 8);
         }
-        VirtualProtect(g_relay, 96, PAGE_EXECUTE_READ, &old);
-        FlushInstructionCache(GetCurrentProcess(), g_relay, 96);
+        VirtualProtect(g_relay, 144, PAGE_EXECUTE_READ, &old);
+        FlushInstructionCache(GetCurrentProcess(), g_relay, 144);
         unsigned char getNode[6], render[5], lateCall[5], frameLock[6], uiCall[5], prepareCall[5];
         getNode[0] = 0x90;
         frameLock[0] = 0x90;
@@ -502,6 +572,12 @@ bool SimPatches_Install()
             Write(g_exeBase + UI_ROUTINE_CALL, uiCall, 5);
             Write(g_exeBase + PREPARE_CALL, prepareCall, 5);
             relays = true;
+            for (int i = 0; i < 5; i++) {
+                unsigned char call[5];
+                int slot = i < 3 ? 6 : i + 4;
+                if (!CallTo(kStepCalls[i], g_relay + slot * 16, call)) { relays = false; break; }
+                Write(g_exeBase + kStepCalls[i], call, 5);
+            }
         }
     }
     Logf("republicmp  SIM_PATCHES: late hook %d, relays %d (building visibility, saplings, render before Early, interface searches, Prepare at speed 0)%s", late, relays,
@@ -509,15 +585,16 @@ bool SimPatches_Install()
     return late && relays;
 }
 
-void SimPatches_Apply()
+bool SimPatches_Apply()
 {
-    if (g_on || g_refused) return;
+    if (g_on) return true;
+    if (g_refused) return false;
     for (size_t i = 0; i < PATCH_COUNT; i++) {
         if (!BytesAre(kPatches[i], kPatches[i].original)) {
             Logf("republicmp  SIM_PATCHES: unexpected bytes at 0x%X (%s) - none applied", kPatches[i].rva,
                  kPatches[i].what);
             g_refused = true;
-            return;
+            return false;
         }
     }
     for (size_t i = 0; i < PATCH_COUNT; i++) Write(g_exeBase + kPatches[i].rva, kPatches[i].patch, kPatches[i].size);
@@ -529,6 +606,7 @@ void SimPatches_Apply()
     g_on = true;
     Logf("republicmp  SIM_PATCHES: %d applied (vehicle visibility and placement, sign zones, follow camera, "
          "debug keys) + building visibility, saplings, population count, autosave hold", (int)PATCH_COUNT);
+    return true;
 }
 
 void SimPatches_Tick()

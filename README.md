@@ -151,6 +151,30 @@ reporting a problem, attach the logs of both players.
 
 ### Unreleased
 
+Lockstep, step 2: the active determinism layer admits whole ticks - the
+probe with held frames and speed changes matches for 10,800 ticks (run 2
+held 16,096 frames, run 1 none). Held frames draw entities and guarded
+vehicles without running Early (vehicles that cannot be guarded are hidden
+for that frame); Prepare stays paused, and UI speed writes cannot change the
+tick already in flight. The fast speed uses the game's own timer factor. Late
+restores the tick timer; weather, road speed recovery and citizen
+initialization run only on step frames (by SoylentGreed).
+The current replay multiplayer and ordinary play keep their existing paths.
+
+- **Fuzz held frames and speed** in Debug is off by default. Run 1 has no
+  inserted holds; run 2 inserts 0-3 held frames between ticks. Both change
+  speed 1/2 every 300 ticks. Space/F10 pauses admission without changing this
+  schedule. Select 10,800 ticks to test the full run, including alt-tab.
+- Samples and the trace are taken after Late, so the last tick is complete.
+  Fuzz traces use a temporary file deleted on close and cover all requested
+  ticks instead of stopping at the memory budget. An incomplete trace or a
+  presentation guard failure cannot produce an IDENTICAL result. The world
+  block and the timer are logged but do not decide it: they also hold the
+  view, input and interface clocks that run on every rendered frame.
+- The speed buttons show the requested speed again (the pause button looked
+  pressed while the layer ran).
+
+
 Lockstep, step 1: the same save now simulates exactly the same twice on one
 PC - the determinism probe matches for 10,800 steps (citizens, vehicles,
 buildings, money, random numbers).

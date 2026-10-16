@@ -111,7 +111,6 @@ extern "C" __declspec(dllexport) int TsmPluginStart(void)
     // Fixed timer, call-site random numbers, pinned math - inactive until used.
     bool okDeterminism = Determinism_Install();
     Logf("republicmp  determinism layer: %d%s", okDeterminism, okDeterminism ? "" : " - the determinism probe is unavailable");
-    SimPatches_Install();
     SyncCheck_Install();
     Weather_Install();
 

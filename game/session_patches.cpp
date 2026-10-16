@@ -56,6 +56,8 @@ void SessionPatches_Bind(const TsmHost* host)
 // interface-only calls are nops in a session (they then read the value the
 // simulation set, or 0), and the call shared by the Late body and the
 // interface goes through a gate that lets only the simulation thread in.
+// With deterministic frames it also requires a step: held Late uses the same
+// thread but must not initialize a citizen before the next admitted tick.
 // (by SoylentGreed)
 
 typedef void (*CitizenInitFn)(void* owner, void* citizen);
@@ -64,7 +66,8 @@ static BYTE* g_gateRelay = nullptr;
 
 static void CitizenInitGate(void* owner, void* citizen)
 {
-    if (GetCurrentThreadId() == g_simThreadId)
+    if (GetCurrentThreadId() == g_simThreadId &&
+        (!Determinism_IsActive() || Determinism_IsStepFrame()))
         ((CitizenInitFn)(g_exeBase + CITIZEN_INIT_RVA))(owner, citizen);
 }
 

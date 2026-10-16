@@ -19,8 +19,14 @@ void ProbeTrace_Bind(const TsmHost* host);
 
 // Before run 1: drops everything kept.
 void ProbeTrace_Reset();
+// Fuzz runs spool deltas to a delete-on-close temporary file, so the trace
+// covers all requested ticks without raising its resident memory budget.
+void ProbeTrace_SetDisk(bool enabled);
+bool ProbeTrace_Complete(unsigned long long steps);
+bool ProbeTrace_Different();
+unsigned long long ProbeTrace_FirstDifference();
 
-// Main thread, right after simulation step `step` (1-based) of probe run
+// Main thread, after Early and Late of tick `step` (1-based) of probe run
 // `run` (0 or 1).
 void ProbeTrace_Step(int run, unsigned long long step);
 
