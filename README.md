@@ -149,6 +149,27 @@ reporting a problem, attach the logs of both players.
 
 ## Changelog
 
+### Unreleased
+
+Lockstep, step 1: the same save now simulates exactly the same twice on one
+PC - the determinism probe matches for 10,800 steps (citizens, vehicles,
+buildings, money, random numbers).
+
+- **Uninitialised memory**: the game leaves some fields of new objects unset
+  and reads them later (a citizen's activities, which feed its needs). They
+  held whatever an earlier game left in memory, so a city loaded after
+  playing another differed from a fresh start - and two PCs never agreed.
+  Every allocation of the game now comes zeroed, as in a fresh process. Always
+  active.
+- **Simulation patches** for the determinism layer: the interface's searches
+  no longer change which target a vehicle picks next, the camera object no
+  longer moves on its own while the game runs, and each frame waits for the
+  render thread before the simulation reads the game timer (by
+  SoylentGreed).
+- Determinism probe: a step-by-step trace of every vehicle, building and
+  citizen that shows the first word that differs and when; an optional
+  hardware write watch shows which game code wrote it.
+
 ### 0.4.3 (pre-release)
 
 Planned construction, the group tools and power lines now come out the same
