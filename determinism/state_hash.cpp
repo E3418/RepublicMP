@@ -27,6 +27,7 @@
 #define CIT_HOME_OFFSET 0x20
 #define CIT_AGE_OFFSET 0xD4
 #define CIT_POS_OFFSET 0x620
+#define CIT_PLACED_AGE 1.0f // a citizen in their first year may not be placed yet
 
 #define ENTRY_SIZE 0x10        // {Resource*, float amount, float}
 #define ENTRY_AMOUNT_OFFSET 0x08
@@ -143,10 +144,10 @@ bool StateHash_Compute(StateSummary* out)
             float age = *(float*)(c + CIT_AGE_OFFSET);
             MixFloat(out->hashCitizens, age);
             out->ageTotal += age;
-            // A citizen without a home, or just born, is not placed yet: its
-            // position bytes are whatever the heap held (the object is not
-            // zeroed when made).
-            if (home && age > 0.0f) Mix(out->hashCitizens, c + CIT_POS_OFFSET, 12);
+            // A citizen without a home, or in their first year, may not be
+            // placed yet: its position bytes are whatever the heap held (the
+            // object is not zeroed when made).
+            if (home && age >= CIT_PLACED_AGE) Mix(out->hashCitizens, c + CIT_POS_OFFSET, 12);
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
@@ -221,7 +222,7 @@ static bool FillCitizens(CitizenRecord* out, long long n)
             BYTE* home = *(BYTE**)(c + CIT_HOME_OFFSET);
             r.home = home ? *(int*)(home + BLD_INDEX_OFFSET) : -1;
             r.age = *(float*)(c + CIT_AGE_OFFSET);
-            if (home && r.age > 0.0f) memcpy(r.pos, c + CIT_POS_OFFSET, 12); // not placed yet: left 0
+            if (home && r.age >= CIT_PLACED_AGE) memcpy(r.pos, c + CIT_POS_OFFSET, 12); // not placed yet: left 0
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
