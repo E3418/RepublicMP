@@ -75,8 +75,8 @@
     <ClCompile Include="core\main.cpp">
       <Filter>core</Filter>
     </ClCompile>
-    <ClCompile Include="world_sync\networks\detect_spawn.cpp">
-      <Filter>world_sync\networks</Filter>
+    <ClCompile Include="world_sync\local_builds.cpp">
+      <Filter>world_sync</Filter>
     </ClCompile>
     <ClCompile Include="game\present_hook.cpp">
       <Filter>game</Filter>
@@ -99,10 +99,13 @@
     <ClCompile Include="determinism\determinism.cpp">
       <Filter>determinism</Filter>
     </ClCompile>
-    <ClCompile Include="determinism\det_patches.cpp">
+    <ClCompile Include="determinism\sim_patches.cpp">
       <Filter>determinism</Filter>
     </ClCompile>
     <ClCompile Include="determinism\probe_trace.cpp">
+      <Filter>determinism</Filter>
+    </ClCompile>
+    <ClCompile Include="determinism\probe_watch.cpp">
       <Filter>determinism</Filter>
     </ClCompile>
     <ClCompile Include="session\sync_check.cpp">
@@ -168,7 +171,7 @@
     <ClCompile Include="ui\main_menu.cpp">
       <Filter>ui</Filter>
     </ClCompile>
-    <ClCompile Include="ui\debugui.cpp">
+    <ClCompile Include="ui\debug_window.cpp">
       <Filter>ui</Filter>
     </ClCompile>
     <ClCompile Include="ui\ui_log.cpp">
@@ -203,8 +206,8 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="world_sync\networks\detect_spawn.h">
-      <Filter>world_sync\networks</Filter>
+    <ClInclude Include="world_sync\local_builds.h">
+      <Filter>world_sync</Filter>
     </ClInclude>
     <ClInclude Include="world_sync\terrain\terrain_hook.h">
       <Filter>world_sync\terrain</Filter>
@@ -224,7 +227,7 @@
     <ClInclude Include="world_sync\citizens\citizen_destinations.h">
       <Filter>world_sync\citizens</Filter>
     </ClInclude>
-    <ClInclude Include="world_sync\replay_ui.h">
+    <ClInclude Include="world_sync\replay_menus.h">
       <Filter>world_sync</Filter>
     </ClInclude>
     <ClInclude Include="game\input_block.h">
@@ -248,10 +251,13 @@
     <ClInclude Include="determinism\determinism.h">
       <Filter>determinism</Filter>
     </ClInclude>
-    <ClInclude Include="determinism\det_patches.h">
+    <ClInclude Include="determinism\sim_patches.h">
       <Filter>determinism</Filter>
     </ClInclude>
     <ClInclude Include="determinism\probe_trace.h">
+      <Filter>determinism</Filter>
+    </ClInclude>
+    <ClInclude Include="determinism\probe_watch.h">
       <Filter>determinism</Filter>
     </ClInclude>
     <ClInclude Include="session\money.h">
@@ -317,7 +323,7 @@
     <ClInclude Include="ui\main_menu.h">
       <Filter>ui</Filter>
     </ClInclude>
-    <ClInclude Include="ui\debugui.h">
+    <ClInclude Include="ui\debug_window.h">
       <Filter>ui</Filter>
     </ClInclude>
     <ClInclude Include="ui\ui_log.h">

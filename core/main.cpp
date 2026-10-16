@@ -1,6 +1,6 @@
 // RepublicMP - TesmioLoader plugin entry points.
 #include "tesmio_plugin.h"
-#include "../world_sync/networks/detect_spawn.h"
+#include "../world_sync/local_builds.h"
 #include "../game/present_hook.h"
 #include "../session/game_speed.h"
 #include "../session/money.h"
@@ -14,8 +14,9 @@
 #include "../game/input_block.h"
 #include "../determinism/state_hash.h"
 #include "../determinism/determinism.h"
-#include "../determinism/det_patches.h"
+#include "../determinism/sim_patches.h"
 #include "../determinism/probe_trace.h"
+#include "../determinism/probe_watch.h"
 #include "../save/save_zip.h"
 #include "../transport/network.h"
 #include "../session/save_sync.h"
@@ -38,7 +39,7 @@ extern "C" __declspec(dllexport) unsigned TsmPluginApiVersion(void)
 extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPluginInfo* info)
 {
     TsmBind(host);
-    DetectSpawn_Bind(host);
+    LocalBuilds_Bind(host);
     PresentHook_Bind(host);
     GameSpeed_Bind(host);
     Money_Bind(host);
@@ -58,8 +59,9 @@ extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPlugi
     InputBlock_Bind(host);
     StateHash_Bind(host);
     Determinism_Bind(host);
-    DetPatches_Bind(host);
+    SimPatches_Bind(host);
     ProbeTrace_Bind(host);
+    ProbeWatch_Bind(host);
     SyncCheck_Bind(host);
     Weather_Bind(host);
     SettingsSync_Bind(host);
@@ -109,7 +111,7 @@ extern "C" __declspec(dllexport) int TsmPluginStart(void)
     // Fixed timer, call-site random numbers, pinned math - inactive until used.
     bool okDeterminism = Determinism_Install();
     Logf("republicmp  determinism layer: %d%s", okDeterminism, okDeterminism ? "" : " - the determinism probe is unavailable");
-    DetPatches_Install();
+    SimPatches_Install();
     SyncCheck_Install();
     Weather_Install();
 

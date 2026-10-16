@@ -83,7 +83,7 @@
       <WarningLevel>Level3</WarningLevel>
       <!-- SDLCheck off: it flags strncpy as "unsafe" at compile time
            (error, not warning) - all our strncpy calls already bound the
-           buffer explicitly (outBufSize-1), see detect_spawn.cpp. -->
+           buffer explicitly (outBufSize-1), see local_builds.cpp. -->
       <SDLCheck>false</SDLCheck>
       <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;_USRDLL;_CRT_SECURE_NO_WARNINGS;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
@@ -176,13 +176,14 @@
   <ItemGroup>
     <ClCompile Include="game\save_load.cpp" />
     <ClCompile Include="core\main.cpp" />
-    <ClCompile Include="world_sync\networks\detect_spawn.cpp" />
+    <ClCompile Include="world_sync\local_builds.cpp" />
     <ClCompile Include="game\present_hook.cpp" />
     <ClCompile Include="session\game_speed.cpp" />
     <ClCompile Include="determinism\state_hash.cpp" />
     <ClCompile Include="determinism\determinism.cpp" />
-    <ClCompile Include="determinism\det_patches.cpp" />
+    <ClCompile Include="determinism\sim_patches.cpp" />
     <ClCompile Include="determinism\probe_trace.cpp" />
+    <ClCompile Include="determinism\probe_watch.cpp" />
     <ClCompile Include="session\sync_check.cpp" />
     <ClCompile Include="session\money.cpp" />
     <ClCompile Include="session\settings_sync.cpp" />
@@ -202,7 +203,7 @@
     <ClCompile Include="transport\network.cpp" />
     <ClCompile Include="session\save_sync.cpp" />
     <ClCompile Include="ui\main_menu.cpp" />
-    <ClCompile Include="ui\debugui.cpp" />
+    <ClCompile Include="ui\debug_window.cpp" />
     <ClCompile Include="ui\ui_log.cpp" />
     <ClCompile Include="ui\debug_log.cpp" />
     <ClCompile Include="ui\sync_block.cpp" />
@@ -223,13 +224,14 @@
     <ClCompile Include="third_party\imgui\backends\imgui_impl_dx11.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="world_sync\networks\detect_spawn.h" />
+    <ClInclude Include="world_sync\local_builds.h" />
     <ClInclude Include="game\present_hook.h" />
     <ClInclude Include="session\game_speed.h" />
     <ClInclude Include="determinism\state_hash.h" />
     <ClInclude Include="determinism\determinism.h" />
-    <ClInclude Include="determinism\det_patches.h" />
+    <ClInclude Include="determinism\sim_patches.h" />
     <ClInclude Include="determinism\probe_trace.h" />
+    <ClInclude Include="determinism\probe_watch.h" />
     <ClInclude Include="session\sync_check.h" />
     <ClInclude Include="session\money.h" />
     <ClInclude Include="session\settings_sync.h" />
@@ -243,7 +245,7 @@
     <ClInclude Include="game\session_patches.h" />
     <ClInclude Include="world_sync\view_list_scope.h" />
     <ClInclude Include="world_sync\citizens\citizen_destinations.h" />
-    <ClInclude Include="world_sync\replay_ui.h" />
+    <ClInclude Include="world_sync\replay_menus.h" />
     <ClInclude Include="game\input_block.h" />
     <ClInclude Include="core\version.h" />
     <ClInclude Include="world_sync\buildings\build_sync.h" />
@@ -255,7 +257,7 @@
     <ClInclude Include="transport\network.h" />
     <ClInclude Include="session\save_sync.h" />
     <ClInclude Include="ui\main_menu.h" />
-    <ClInclude Include="ui\debugui.h" />
+    <ClInclude Include="ui\debug_window.h" />
     <ClInclude Include="ui\ui_log.h" />
     <ClInclude Include="ui\debug_log.h" />
     <ClInclude Include="ui\sync_block.h" />
