@@ -1,8 +1,9 @@
 // See determinism.h.
 #include "determinism.h"
 #include "state_hash.h"
-#include "det_patches.h"
+#include "sim_patches.h"
 #include "probe_trace.h"
+#include "probe_watch.h"
 #include "../game/save_load.h"
 #include "../session/game_speed.h"
 #include "../session/save_sync.h" // SaveSync_IsBusy - no probe during a session
@@ -174,7 +175,15 @@ static __declspec(noinline) void __cdecl H_randStart(void)
 // ---------------------------------------------------------------------------
 
 typedef void (*TimerStopFn)(void* timer);
-static TimerStopFn o_timerStop;
+static TimerStopFn o_timerStop, o_timerStart;
+
+// The frame loop's first call (105c90): the timer is started and rescaled for
+// the game speed right after. The render thread must not be reading it then.
+static void H_timerStart(void* timer)
+{
+    if (g_active && (BYTE*)timer == g_exeBase + GAME_TIMER_RVA) SimPatches_WaitRender();
+    o_timerStart(timer);
+}
 
 static void H_timerStop(void* timer)
 {
@@ -521,6 +530,7 @@ static void ResetDetail()
     g_detailBytes = 0;
     g_detailFull = g_reportedBuildings = g_reportedCitizens = g_reportedVehicles = false;
     ProbeTrace_Reset();
+    ProbeWatch_Reset();
 }
 
 static CRITICAL_SECTION g_statusLock;
@@ -624,12 +634,31 @@ static void CompareData()
          rest.ranges, rest.bytes, rest.pointers, rest.ranges > rest.lines ? " (first ones listed above)" : "");
 }
 
+// The game's search routine (424430) keeps its work and results in three
+// vectors of the world (+14478, +14490, +144a8: 8-, 4- and 0x68-byte
+// entries), and the chooser (420350) picks from the results. A load does not
+// empty them, so the first choice after it saw what the earlier game last
+// searched. Each probe run starts with them empty (capacity kept).
+#define SEARCH_POOL_OFFSET 0x14478
+static void EmptySearchPool()
+{
+    BYTE* pool = g_exeBase + WORLD_RVA_PROBE + SEARCH_POOL_OFFSET;
+    static const size_t strides[3] = { 8, 4, 0x68 };
+    long long counts[3] = {};
+    for (int v = 0; v < 3; v++) {
+        BYTE** header = (BYTE**)(pool + v * 0x18);
+        if (header[0] && header[1] >= header[0]) counts[v] = (header[1] - header[0]) / (long long)strides[v];
+        header[1] = header[0];
+    }
+    Logf("republicmp  PROBE: search pool after the load: %lld / %lld / %lld entries - emptied", counts[0], counts[1], counts[2]);
+}
+
 static void HookedLoadWorld(void)
 {
     // A probe run starts its generator epoch exactly at the load, so the
     // random numbers the load itself draws are the same in both runs.
     if (g_probeState == PROBE_WAIT_LOAD) {
-        DetPatches_Apply(); // main thread, nothing simulating: both runs start with them
+        SimPatches_Apply(); // main thread, nothing simulating: both runs start with them
         Determinism_Restart();
         g_simDraws = 0;
         g_simDrawHash = 1469598103934665603ull;
@@ -641,6 +670,7 @@ static void HookedLoadWorld(void)
     }
     o_loadWorld();
     if (g_probeState == PROBE_WAIT_LOAD) {
+        EmptySearchPool();
         g_runStep = 0;
         WriteGameSpeed(g_probeSpeed); // the first step already at the probe's speed
         if (g_probeRun == 0) {
@@ -661,7 +691,7 @@ static void RecordSample()
     p.step = g_runStep;
     p.draws = g_simDraws;
     p.drawHash = g_simDrawHash;
-    p.population = DetPatches_LastPopulation();
+    p.population = SimPatches_LastPopulation();
     if (!StateHash_Compute(&p.s)) return;
     RecordDetail(run, g_sampleCount[run]);
     g_sampleCount[run]++;
@@ -669,11 +699,13 @@ static void RecordSample()
 
 static void HookedSimStep(__int64 world)
 {
+    if (g_active && g_probeState == PROBE_RUNNING && g_runStep == 0) ProbeWatch_Step(g_probeRun, 0, false);
     g_simThread = GetCurrentThreadId();
-    DetPatches_BeforeEarly(world);
+    SimPatches_BeforeEarly(world);
     g_inEarly = true;
     o_simStep(world);
     g_inEarly = false;
+    SimPatches_AfterEarly();
     for (int i = 0; i < g_stepObserverCount; i++) g_stepObservers[i](); // also without the layer
     if (!g_active) return;
     g_stepCount++;
@@ -681,12 +713,37 @@ static void HookedSimStep(__int64 world)
         if (g_runStep == 0) WriteGameSpeed(g_probeSpeed); // same speed in both runs from here on
         g_runStep++;
         ProbeTrace_Step(g_probeRun, g_runStep);
+        ProbeWatch_Step(g_probeRun, g_runStep, g_runStep >= (unsigned long long)g_probeSteps);
         if (g_runStep % g_probeInterval == 0) RecordSample();
         if (g_runStep >= (unsigned long long)g_probeSteps) {
             WriteGameSpeed(0);
             InterlockedExchange(&g_probeState, PROBE_RUN_DONE);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Zeroed heap
+// ---------------------------------------------------------------------------
+//
+// The game leaves fields of new objects unset and reads them later: a
+// citizen's activity entries (+0x118, 0x80 each) are filled by the load and by
+// the code that starts an activity only in part, and 83a6d0 reads the whole
+// entry (need types +0x18.., effects +0x38..) when it applies the activity to
+// the needs. Unset words hold whatever the heap had there: zeros in a fresh
+// process, an earlier game's data after a load in the same process, something
+// else on every PC. Every malloc of the exe (operator new included) returns
+// zeroed memory, as a fresh process would - always, not only in a session, so
+// the objects a load creates are the same everywhere.
+
+typedef void* (*MallocFn)(size_t size);
+static MallocFn o_malloc;
+
+static void* H_malloc(size_t size)
+{
+    void* p = o_malloc(size);
+    if (p) memset(p, 0, size);
+    return p;
 }
 
 // ---------------------------------------------------------------------------
@@ -704,16 +761,18 @@ bool Determinism_Install()
     ok += PatchIat(g_exe, DLL_C3D, "?C3DRandom_Double@@YANNN@Z", (void*)&H_randDouble, (void**)&o_randDouble, "det C3DRandom_Double");
     ok += PatchIat(g_exe, DLL_C3D, "?C3DRandom_Start@@YAXXZ", (void*)&H_randStart, (void**)&o_randStart, "det C3DRandom_Start");
     ok += PatchIat(g_exe, DLL_C3D, "?Stop@C3D_TIMER@@QEAAXXZ", (void*)&H_timerStop, (void**)&o_timerStop, "det timer Stop");
+    ok += PatchIat(g_exe, DLL_C3D, "?Start@C3D_TIMER@@QEAAXXZ", (void*)&H_timerStart, (void**)&o_timerStart, "det timer Start");
     ok += PatchIat(g_exe, DLL_C3D, "?GetKeyDown@C3D_INPUT@@QEAA_NH@Z", (void*)&H_getKeyDown, (void**)&o_getKeyDown, "det GetKeyDown");
     g_doneThreadHandle = CreateEventW(nullptr, TRUE, TRUE, nullptr);
     ok += PatchIat(g_exe, "api-ms-win-crt-runtime-l1-1-0.dll", "_beginthread", (void*)&H_beginThread, (void**)&o_beginThread, "det _beginthread");
     ok += PatchIat(g_exe, "KERNEL32.dll", "SetEvent", (void*)&H_setEvent, (void**)&o_setEvent, "det SetEvent");
+    ok += PatchIat(g_exe, "api-ms-win-crt-heap-l1-1-0.dll", "malloc", (void*)&H_malloc, (void**)&o_malloc, "det malloc");
     bool step = InstallInlineHook(g_exeBase + SIM_STEP_RVA, (void*)&HookedSimStep, (void**)&o_simStep,
                                   kSimStepExpect, sizeof(kSimStepExpect), "republicmp sim step");
     bool load = InstallInlineHook(g_exeBase + LOAD_WORLD_RVA, (void*)&HookedLoadWorld, (void**)&o_loadWorld,
                                   kLoadWorldExpect, sizeof(kLoadWorldExpect), "republicmp load world");
-    Logf("republicmp  DETERMINISM: %d/10 imports redirected, sim step hook %d, load hook %d", ok, step, load);
-    return ok == 10 && step && load;
+    Logf("republicmp  DETERMINISM: %d/12 imports redirected, sim step hook %d, load hook %d", ok, step, load);
+    return ok == 12 && step && load;
 }
 
 void Determinism_SetActive(bool active, unsigned long long seed)
@@ -842,6 +901,7 @@ static DWORD WINAPI ProbeThread(LPVOID)
         if (!failed) {
             CompareRuns();
             ProbeTrace_Finish();
+            ProbeWatch_Finish();
         }
         ResetDetail();
     } while (false);
