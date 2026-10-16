@@ -1,7 +1,7 @@
 #include "imgui_hook.h"
 #include "window_focus.h"
 #include "../ui/main_menu.h"
-#include "../ui/debugui.h"
+#include "../ui/debug_window.h"
 #include "../ui/sync_block.h"
 
 #include "imgui.h"
@@ -153,7 +153,7 @@ void ImGuiHook_NewFrameAndRender()
 
     if (g_imguiVisible) {
         g_mainMenu.Draw();
-        g_debugui.Draw();
+        g_debug_window.Draw();
     }
     SyncBlock_Draw(); // drawn last (on top), independent of g_imguiVisible
 

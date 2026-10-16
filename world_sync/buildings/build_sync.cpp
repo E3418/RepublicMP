@@ -1,7 +1,7 @@
 // See build_sync.h for the overall design.
 #include "build_sync.h"
 #include "../../transport/network.h"
-#include "../networks/detect_spawn.h" // g_origUniversal, DetectSpawn_Begin/EndBuildingPlacement
+#include "../local_builds.h" // g_origUniversal, LocalBuilds_Begin/EndBuildingPlacement
 #include "../terrain/terrain_sync.h"            // TerrainSync_Begin/EndForeignReplay, fence
 #include "demolish_hook.h" // DemolishHook_CallOriginal
 #include "../../session/game_speed.h"    // GameSpeed_OnRemote
@@ -9,7 +9,7 @@
 #include "../../session/money.h"         // Money_OnRemote
 #include "../../session/settings_sync.h"           // SettingsSync_ClickedRecently
 #include "../view_list_scope.h"
-#include "../replay_ui.h"
+#include "../replay_menus.h"
 #include "../../ui/debug_log.h"
 #include "../../ui/sync_block.h"
 #include <vector>
@@ -655,7 +655,7 @@ static bool ApplyOneRemotePlacement(__int64 thisPtr, const BuildSyncMsg& msg, in
             // The original (not the hook), so the placement is not sent back.
             // param_4/param_8 = 1 confirm the placement without a mouse click.
             // Terrain levelling under the building arrives over terrain sync.
-            DetectSpawn_BeginBuildingPlacement();
+            LocalBuilds_BeginBuildingPlacement();
             TerrainSync_BeginForeignReplay();
             InterlockedIncrement(&g_applyingRemote);
             // Built the way the sender chose; the local choice goes back after.
@@ -682,7 +682,7 @@ static bool ApplyOneRemotePlacement(__int64 thisPtr, const BuildSyncMsg& msg, in
                 BuildMode_Write(mine);
                 InterlockedDecrement(&g_applyingRemote);
                 TerrainSync_EndForeignReplay();
-                DetectSpawn_EndBuildingPlacement();
+                LocalBuilds_EndBuildingPlacement();
             }
 
             int newCount = 0;
@@ -1146,7 +1146,7 @@ void BuildSync_Tick()
     // RETRY_DELAY_MS, and later ones wait behind it so order is kept.
     unsigned long long now = GetTickCount64();
     // A window or menu open on this PC no longer holds the other player's
-    // buildings (replay_ui.h); the join screen still does.
+    // buildings (replay_menus.h); the join screen still does.
     if (SyncBlock_IsActive()) return;
     ReplayUiScope replayUi;
     static bool s_loggedWindow = false;
@@ -1183,7 +1183,7 @@ void BuildSync_Tick()
         }
         if (p.msg.kind == BUILD_SYNC_KIND_ACCESS_ROAD) {
             // Not into a manager the local player is dragging with.
-            if (DetectSpawn_IsToolDragActive()) break;
+            if (LocalBuilds_IsToolDragActive()) break;
             if (p.road && (PortOnGivenUpBuilding(p.road->startPort) || PortOnGivenUpBuilding(p.road->endPort))) {
                 Logf("republicmp  BUILD_SYNC: access road at (%.2f,%.2f,%.2f) skipped - its building was not placed here",
                      p.msg.x, p.msg.y, p.msg.z);

@@ -2,11 +2,11 @@
 #include "road_sync.h"
 #include "../../transport/network.h"
 #include "../../ui/debug_log.h"
-#include "detect_spawn.h" // DetectSpawn_IsToolDragActive, g_origRoadCommit
+#include "../local_builds.h" // LocalBuilds_IsToolDragActive, g_origRoadCommit
 #include "../terrain/terrain_sync.h"            // TerrainSync_Begin/EndForeignReplay
 #include "../../ui/sync_block.h"
 #include "../view_list_scope.h"
-#include "../replay_ui.h"
+#include "../replay_menus.h"
 #include <intrin.h>
 #pragma intrinsic(_ReturnAddress)
 #include <vector>
@@ -2293,7 +2293,7 @@ static GroupToolFn g_origGroupTool = nullptr;
 static RoadSyncGroupToolMsg g_groupCaptures[GROUP_CAPTURE_MAX];
 static int g_groupCaptureCount = 0;
 
-// What the commit reads besides the menus (replay_ui.h closes those).
+// What the commit reads besides the menus (replay_menus.h closes those).
 struct GroupToolState {
     float box[6];
     float cursor[3];
@@ -2508,12 +2508,12 @@ void RoadSync_Tick()
     __int64 thisPtr = GetWorldThisPtr();
     ULONGLONG nowMs = GetTickCount64();
     // A window or menu open on this PC no longer holds the other player's
-    // roads (replay_ui.h); the join screen still does.
+    // roads (replay_menus.h); the join screen still does.
     if (SyncBlock_IsActive()) return;
     ReplayUiScope replayUi;
     for (size_t i = 0; i < g_waitingDemolish.size();) {
         RoadSyncItem& item = g_waitingDemolish[i];
-        if (nowMs < item.notBeforeMs || DetectSpawn_IsToolDragActive() || ToolWrapperGuardBusy(thisPtr)) {
+        if (nowMs < item.notBeforeMs || LocalBuilds_IsToolDragActive() || ToolWrapperGuardBusy(thisPtr)) {
             ++i;
             continue;
         }
@@ -2529,7 +2529,7 @@ void RoadSync_Tick()
     std::vector<RoadSyncItem> toApply;
     toApply.swap(g_pending);
     for (size_t i = 0; i < toApply.size(); i++) {
-        if (DetectSpawn_IsToolDragActive() || ToolWrapperGuardBusy(thisPtr) || !TerrainFenceAllows(toApply[i]) ||
+        if (LocalBuilds_IsToolDragActive() || ToolWrapperGuardBusy(thisPtr) || !TerrainFenceAllows(toApply[i]) ||
             nowMs < toApply[i].notBeforeMs) {
             g_pending.insert(g_pending.begin(), toApply.begin() + i, toApply.end());
             break;

@@ -1,20 +1,20 @@
-// See detect_spawn.h.
-#include "detect_spawn.h"
-#include "../../game/present_hook.h"
-#include "../../session/game_speed.h"
-#include "../../game/window_focus.h"
-#include "../buildings/build_sync.h"
-#include "road_sync.h"
-#include "../view_list_scope.h"
-#include "../buildings/demolish_hook.h" // DemolishHook_InDemolish
-#include "../../ui/sync_block.h"
+// See local_builds.h.
+#include "local_builds.h"
+#include "../game/present_hook.h"
+#include "../session/game_speed.h"
+#include "../game/window_focus.h"
+#include "buildings/build_sync.h"
+#include "networks/road_sync.h"
+#include "view_list_scope.h"
+#include "buildings/demolish_hook.h" // DemolishHook_InDemolish
+#include "../ui/sync_block.h"
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
 
 #pragma comment(lib, "User32.lib")
 
-void DetectSpawn_Bind(const TsmHost* host)
+void LocalBuilds_Bind(const TsmHost* host)
 {
     TsmBind(host);
 }
@@ -256,11 +256,11 @@ DWORD WINAPI DebugSpawnThread(LPVOID)
 
 // >0 while a building placement call is running.
 static volatile LONG g_buildingPlacementDepth = 0;
-void DetectSpawn_BeginBuildingPlacement() { InterlockedIncrement(&g_buildingPlacementDepth); }
-void DetectSpawn_EndBuildingPlacement()   { InterlockedDecrement(&g_buildingPlacementDepth); }
-bool DetectSpawn_InBuildingPlacement()    { return InterlockedCompareExchange(&g_buildingPlacementDepth, 0, 0) != 0; }
+void LocalBuilds_BeginBuildingPlacement() { InterlockedIncrement(&g_buildingPlacementDepth); }
+void LocalBuilds_EndBuildingPlacement()   { InterlockedDecrement(&g_buildingPlacementDepth); }
+bool LocalBuilds_InBuildingPlacement()    { return InterlockedCompareExchange(&g_buildingPlacementDepth, 0, 0) != 0; }
 
-// Captured inside the commit hook, sent from DetectSpawn_Tick. The hook runs
+// Captured inside the commit hook, sent from LocalBuilds_Tick. The hook runs
 // inside the game's commit and must not allocate, log or do network I/O.
 static RoadSyncSegment g_segmentCapture;
 static volatile LONG g_segmentPending = 0;
@@ -903,12 +903,12 @@ static void FlushCommitCaptures()
 
 static bool g_toolDragActive = false;
 
-bool DetectSpawn_IsToolDragActive()
+bool LocalBuilds_IsToolDragActive()
 {
     return g_toolDragActive;
 }
 
-void DetectSpawn_Tick()
+void LocalBuilds_Tick()
 {
     if (!IsWorldLoaded()) return;
 
@@ -930,7 +930,7 @@ void DetectSpawn_Tick()
 // ---------------------------------------------------------------------------
 
 // Entry of FUN_1402bade0. Runs the original, and if it created buildings,
-// sends the placement (see detect_spawn.h).
+// sends the placement (see local_builds.h).
 void HookedUniversal(__int64 param_1, char* param_2, char param_3, char param_4,
                       unsigned __int64 param_5, unsigned int param_6,
                       char param_7, char param_8)
@@ -973,11 +973,11 @@ void HookedUniversal(__int64 param_1, char* param_2, char param_3, char param_4,
                   ViewListScope_Begin(cursorX - PLACE_SCOPE_MARGIN, cursorZ - PLACE_SCOPE_MARGIN,
                                       cursorX + PLACE_SCOPE_MARGIN, cursorZ + PLACE_SCOPE_MARGIN);
     s_lmbWasDown = lmbDown;
-    DetectSpawn_BeginBuildingPlacement();
+    LocalBuilds_BeginBuildingPlacement();
     __try {
         g_origUniversal(param_1, param_2, param_3, param_4, param_5, param_6, param_7, param_8);
     } __finally {
-        DetectSpawn_EndBuildingPlacement();
+        LocalBuilds_EndBuildingPlacement();
         if (scoped) ViewListScope_End();
     }
 

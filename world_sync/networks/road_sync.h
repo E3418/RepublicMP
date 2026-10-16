@@ -19,7 +19,7 @@
 //
 // Sending side
 // ------------
-// world_sync/networks/detect_spawn.cpp hooks FUN_140518a80's entry and, for a tool manager,
+// world_sync/networks/local_builds.cpp hooks FUN_140518a80's entry and, for a tool manager,
 // copies the interior records, both node positions and any building
 // connection port at either end (RoadSyncSegment). Commits that happen inside
 // a building placement (a building laying its own access road) are skipped -

@@ -1,6 +1,6 @@
 // Build sync: network replication of building placements and demolitions.
 //
-// Sending side: world_sync/networks/detect_spawn.cpp's placement hook sends one
+// Sending side: world_sync/networks/local_builds.cpp's placement hook sends one
 // BuildSyncMsg per building the local player creates. It carries the
 // placement INPUTS of the creating call - cursor position (thisPtr+0xf6c..f74),
 // yaw (thisPtr+0xf94) and param_5 - plus the resulting main object's position

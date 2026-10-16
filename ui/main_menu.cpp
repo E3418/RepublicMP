@@ -1,6 +1,6 @@
 // See main_menu.h.
 #include "main_menu.h"
-#include "debugui.h"
+#include "debug_window.h"
 #include "ui_log.h"
 #include "sync_block.h"
 #include "../game/imgui_hook.h" // g_imguiVisible - "Hide menu" button
@@ -250,7 +250,7 @@ void MainMenu::Draw()
             g_imguiVisible = false; // INSERT brings it back (game/imgui_hook.cpp)
         ImGui::SameLine();
         if (ImGui::Button("Debug", ImVec2(half, 0)))
-            g_debugui.Open();
+            g_debug_window.Open();
 
         ImGui::TextColored(kGrey, "RepublicMP %s  build %08X", SaveSync_GetLocalVersion(), SaveSync_GetLocalDllCrc());
 

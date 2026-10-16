@@ -52,19 +52,19 @@ void HookedRoadCommit(__int64 manager,
 
 // Bracket every building-placement call (local or remote replay). Commits
 // made inside it are the building's own auto-connections and are not sent.
-void DetectSpawn_BeginBuildingPlacement();
-void DetectSpawn_EndBuildingPlacement();
-bool DetectSpawn_InBuildingPlacement();
+void LocalBuilds_BeginBuildingPlacement();
+void LocalBuilds_EndBuildingPlacement();
+bool LocalBuilds_InBuildingPlacement();
 
 DWORD WINAPI HeartbeatThread(LPVOID);  // logs call counters every 2s
 DWORD WINAPI DebugSpawnThread(LPVOID); // polls F9 for the debug spawn
 
 // Per-frame (game thread, Present hook): tracks the drag-active flag, sends
 // captured commits and services F9 requests.
-void DetectSpawn_Tick();
+void LocalBuilds_Tick();
 
 // True while the LOCAL player has a drag in progress with any path tool
 // (thisPtr+0xd2ac). Remote segments are not applied meanwhile.
-bool DetectSpawn_IsToolDragActive();
+bool LocalBuilds_IsToolDragActive();
 
-void DetectSpawn_Bind(const TsmHost* host);
+void LocalBuilds_Bind(const TsmHost* host);

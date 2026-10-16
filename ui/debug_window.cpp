@@ -1,5 +1,5 @@
-// See debugui.h.
-#include "debugui.h"
+// See debug_window.h.
+#include "debug_window.h"
 #include "imgui.h"
 #include <misc/cpp/imgui_stdlib.h> // ImGui::InputText(const char*, std::string*)
 #include "../game/present_hook.h"
@@ -13,14 +13,14 @@
 #include <vector>
 #include <string>
 
-Debugui g_debugui;
+DebugWindow g_debug_window;
 
-void Debugui::Open()  { isOpen = true; }
-void Debugui::Close() { isOpen = false; }
+void DebugWindow::Open()  { isOpen = true; }
+void DebugWindow::Close() { isOpen = false; }
 
 // Draws the Debug window: manual building/road sync connection controls and
 // the verbose debug log.
-void Debugui::Draw()
+void DebugWindow::Draw()
 {
     if (!isOpen)
         return;

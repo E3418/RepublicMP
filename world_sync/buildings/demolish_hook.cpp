@@ -1,6 +1,6 @@
 // See demolish_hook.h.
 #include "demolish_hook.h"
-#include "../networks/detect_spawn.h"          // DetectSpawn_InBuildingPlacement
+#include "../local_builds.h"          // LocalBuilds_InBuildingPlacement
 #include "../terrain/terrain_hook.h"          // g_terrainApplyingRemote
 #include "build_sync.h"     // BuildSync_SendDemolish, BuildSync_IsApplyingRemote
 #include "../networks/road_sync.h"      // RoadSync_IsApplyingSegment
@@ -105,7 +105,7 @@ static void HookedDemolish(__int64 thisPtr, __int64 building,
 
     // Only outermost calls by local play; everything else is either a
     // side effect of one, or remote work being replayed.
-    if (depth == 1 && !DetectSpawn_InBuildingPlacement() && !BuildSync_IsApplyingRemote() &&
+    if (depth == 1 && !LocalBuilds_InBuildingPlacement() && !BuildSync_IsApplyingRemote() &&
         !RoadSync_IsApplyingSegment() && g_terrainApplyingRemote == 0) {
         unsigned long long args[5] = { p3, p4, p5, p6, p7 };
         Capture(thisPtr, building, args, ret);

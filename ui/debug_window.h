@@ -2,7 +2,7 @@
 // verbose sync log.
 #pragma once
 
-class Debugui
+class DebugWindow
 {
 public:
     void Open();
@@ -13,4 +13,4 @@ private:
     bool isOpen = false;
 };
 
-extern Debugui g_debugui;
+extern DebugWindow g_debug_window;
