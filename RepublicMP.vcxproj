@@ -183,6 +183,7 @@
     <ClCompile Include="determinism\held_frame.cpp" />
     <ClCompile Include="lockstep\commands.cpp" />
     <ClCompile Include="lockstep\purchase.cpp" />
+    <ClCompile Include="lockstep\route_tools.cpp" />
     <ClCompile Include="lockstep\lockstep_net.cpp" />
     <ClCompile Include="determinism\determinism.cpp" />
     <ClCompile Include="determinism\sim_patches.cpp" />
@@ -235,6 +236,7 @@
     <ClInclude Include="determinism\held_frame.h" />
     <ClInclude Include="lockstep\commands.h" />
     <ClInclude Include="lockstep\purchase.h" />
+    <ClInclude Include="lockstep\route_tools.h" />
     <ClInclude Include="lockstep\lockstep_net.h" />
     <ClInclude Include="determinism\determinism.h" />
     <ClInclude Include="determinism\sim_patches.h" />

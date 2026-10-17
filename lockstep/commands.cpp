@@ -10,6 +10,7 @@
 #include "../session/settings_sync.h"
 #include "../world_sync/terrain/terrain_hook.h"
 #include "purchase.h"
+#include "route_tools.h"
 #include <vector>
 #include <string.h>
 
@@ -17,6 +18,7 @@ void Commands_Bind(const TsmHost* host)
 {
     TsmBind(host);
     Purchase_Bind(host);
+    RouteTools_Bind(host);
 }
 
 struct Command {
@@ -77,6 +79,7 @@ static const char* KindName(int kind)
     case LS_CMD_TERRAIN: return "terrain edits";
     case LS_CMD_MONEY: return "money";
     case LS_CMD_PURCHASE: return "purchase";
+    case LS_CMD_ROUTE: return "route tool";
     }
     return "?";
 }
@@ -170,6 +173,9 @@ static void Apply(const Command& c)
         break;
     case LS_CMD_PURCHASE:
         ok = Purchase_ApplyCommand(p, n);
+        break;
+    case LS_CMD_ROUTE:
+        ok = RouteTools_ApplyCommand(p, n);
         break;
     }
     InputBlock_EndNeutral();
@@ -272,7 +278,8 @@ static void TakeMoney(double rub, double usd, const char* where)
 
 // Selected tools whose actions are not commands yet act on one PC only; they
 // are put away (world +d428 = 0, as the game's own cancel does). Prefixes of
-// the build menu names.
+// the build menu names; the carried route tools (route_tools.cpp) by full name.
+static const char* const kCarriedTools[] = { "vehicle_addstop", "line_addstop", "line_addstop_copy", "line_addstop_copy2" };
 static const char* const kUncarriedTools[] = {
     "vehicle_", "worker_relocate", "building_addsource", "line_addstop", "second_road", "water_square",
     "bojka", "christmas_", "join_hub", "crossroad_add", "terrain_go_there", "terrain_demolish_trees",
@@ -290,6 +297,9 @@ static void PutAwayUncarriedTool()
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return;
     }
+    if (RouteTools_Ready())
+        for (const char* carried : kCarriedTools)
+            if (strcmp(name, carried) == 0) return;
     for (const char* prefix : kUncarriedTools) {
         if (strncmp(name, prefix, strlen(prefix)) != 0) continue;
         *tool = 0;

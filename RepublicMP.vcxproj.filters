@@ -216,6 +216,9 @@
     <ClCompile Include="lockstep\purchase.cpp">
       <Filter>lockstep</Filter>
     </ClCompile>
+    <ClCompile Include="lockstep\route_tools.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
     <ClCompile Include="lockstep\lockstep_net.cpp">
       <Filter>lockstep</Filter>
     </ClCompile>
@@ -387,6 +390,9 @@
       <Filter>lockstep</Filter>
     </ClInclude>
     <ClInclude Include="lockstep\purchase.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\route_tools.h">
       <Filter>lockstep</Filter>
     </ClInclude>
     <ClInclude Include="lockstep\lockstep_net.h">

@@ -39,6 +39,7 @@ enum LockstepCommandKind {
     LS_CMD_TERRAIN = 10,     // terrain edits of one frame (terrain_hook)
     LS_CMD_MONEY = 11,       // LsMoneyDelta: what a local action paid or got
     LS_CMD_PURCHASE = 12,    // purchase.cpp: a vehicle, licence or blueprint bought in a purchase window
+    LS_CMD_ROUTE = 13,       // route_tools.cpp: a stop added to a schedule, a vehicle put on a line
 };
 
 // Money a local action changed on this PC (an interface purchase, a terrain
