@@ -66,7 +66,7 @@ struct HoverMsg {
 
 typedef U64 (*ToolFn)(U64 world, U64 a2);
 
-static int g_ready[KINDS] = { -1, -1, -1, -1, -1 };
+static int g_ready[KINDS] = { -1, -1, -1, -1, -1, -1 };
 
 void HoverTools_Bind(const TsmHost* host)
 {
@@ -265,7 +265,16 @@ static U64 Run(int kind, U64 world, U64 a2)
     BYTE* w = (BYTE*)world;
     BYTE* press = g_exeBase + PRESS_RVA;
     bool menus = w[kMenus[0]] || w[kMenus[1]] || w[kMenus[2]];
-    if (!*press || menus || !Commands_TakeLocal() || !HoverTools_Ready(kind)) return tool(world, a2);
+    if (!*press || menus || !Commands_TakeLocal() || !HoverTools_Ready(kind)) {
+        // A click in a session that is not taken stays on this PC: worth a line.
+        static int s_logged = 0;
+        if (*press && !menus && Commands_Capturing() && s_logged < 16) {
+            ++s_logged;
+            Logf("republicmp  HOVER: a %s click made on this PC only - %s", kKindText[kind],
+                 !HoverTools_Ready(kind) ? "the tool is not taken over" : "a command or a tick was being made");
+        }
+        return tool(world, a2);
+    }
     HoverMsg m;
     memset(&m, 0, sizeof(m));
     m.kind = kind;

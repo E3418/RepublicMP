@@ -250,7 +250,16 @@ static const char* Rebuild(const GameCallMsg& m, U64* a)
 static U64 Run(unsigned index, const U64* a)
 {
     const GameCallSite& s = kSites[index];
-    if (!Commands_TakeUi()) return CallSite(s, a);
+    if (!Commands_TakeUi()) {
+        // The junction window and the settings page are never opened by a command: in a
+        // session their call not taken stays on this PC.
+        static int s_logged = 0;
+        if ((s.special == CALL_JUNCTION_ACCEPT || s.special == CALL_GAME_RULES) && Commands_Capturing() && s_logged < 16) {
+            ++s_logged;
+            Logf("republicmp  GAME CALL: %s made on this PC only (while a command was being made)", s.name);
+        }
+        return CallSite(s, a);
+    }
     switch (s.special) {
     case CALL_PRESENTATION:
         return s.result;
