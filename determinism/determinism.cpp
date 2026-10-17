@@ -800,6 +800,25 @@ void Determinism_ToolScopeEnd()
     --g_toolScope;
 }
 
+static int g_toolPassSpeed = 0;
+static BYTE g_toolPassPaused = 0;
+
+void Determinism_ToolPassBegin()
+{
+    g_toolPassSpeed = *(int*)(g_exeBase + 0x9D54B4);
+    g_toolPassPaused = g_exeBase[GAME_TIMER_RVA + 12];
+    WriteGameSpeed(0);
+    g_exeBase[GAME_TIMER_RVA + 12] = 1;
+    g_frameStep = g_inEarly = false;
+}
+
+void Determinism_ToolPassEnd()
+{
+    g_frameStep = g_inEarly = true;
+    g_exeBase[GAME_TIMER_RVA + 12] = g_toolPassPaused;
+    WriteGameSpeed(g_toolPassSpeed);
+}
+
 bool Determinism_BeginSession(bool host)
 {
     if (!g_framesReady || g_probeBusy) return false;
@@ -809,6 +828,11 @@ bool Determinism_BeginSession(bool host)
     g_sessionLoadPending = true;
     Logf("republicmp  LOCKSTEP: the next load starts the shared simulation (%s)", host ? "host" : "player");
     return true;
+}
+
+bool Determinism_WorldLoading()
+{
+    return g_sessionLoadPending || g_probeState == PROBE_WAIT_LOAD;
 }
 
 bool Determinism_SessionRunning()

@@ -92,11 +92,18 @@ bool Determinism_IsStepFrame();
 // become commands, as on a held frame (Determinism_InStepFrame is false).
 void Determinism_ToolScopeBegin();
 void Determinism_ToolScopeEnd();
+// A tick's frame runs Late a second time for this PC's view and tool
+// (determinism/sim_patches): as a held frame - speed 0, timer paused, not a
+// step frame for the gates - and back to the tick after it.
+void Determinism_ToolPassBegin();
+void Determinism_ToolPassEnd();
 // Lockstep session (session/save_sync thread). BeginSession turns the layer on;
 // the next world load starts the shared simulation (both PCs load the same
 // save). EndSession turns it off again.
 bool Determinism_BeginSession(bool host);
 bool Determinism_SessionRunning();
+// A world load for the layer is pending (a session's or the probe's).
+bool Determinism_WorldLoading();
 void Determinism_EndSession();
 // Any thread: a tick is being run in this frame (from Prepare to the end of
 // Late) - the early worker's calls included.

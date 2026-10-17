@@ -411,7 +411,13 @@ static bool g_visibleIn = false;
 
 static bool VisibleIn()
 {
-    if (g_visibleIn) return false;
+    // While a world is being loaded the building list is torn down and
+    // rebuilt: its buildings are not walked (the host crashed in C3DDLL64
+    // right at the start of its session load).
+    if (g_visibleIn || Determinism_WorldLoading()) {
+        if (!g_visibleIn) g_visibleFresh = false;
+        return false;
+    }
     if (!g_visibleFresh) {
         FillPrivateVisible();
         g_visibleFresh = true;
@@ -509,12 +515,20 @@ static void HookedLate(__int64 world)
     // The tool stays selected on every frame. A tick's Late runs its handlers
     // through the tool stubs below; a held Late is this PC's own altogether.
     // The render thread has finished here (105eb8). (by SoylentGreed)
+    // A tick's Late is the simulation: the shared view (no building on the
+    // camera, the empty visible list) and no tool - the tool stubs skip the
+    // handlers. Given this PC's view there, its hints and the camera distance
+    // of the buildings reached the simulation (a DESYNC at tick 300 with
+    // sixteen construction sites under one camera). Its view, its hints and
+    // its tool then run in a second Late, as on a held frame.
     if (step) {
-        bool visible = VisibleIn();
         g_inPhase = true;
         o_late(world);
         g_inPhase = false;
-        VisibleOut(visible);
+        Determinism_ToolPassBegin();
+        Commands_RecordMoney(); // the tick's own charges are not this pass's
+        PrivateLate(world);
+        Determinism_ToolPassEnd();
     } else {
         PrivateLate(world);
     }
@@ -529,11 +543,10 @@ static void HookedLate(__int64 world)
 // Late compares the selected tool's build-menu name and calls its handler
 // every frame (one entry at 312823, one exit at 31496d). A handler drew from
 // the shared random stream and searched in the shared vectors (run 17, by
-// SoylentGreed), so every call in that stretch goes through a stub: on a
-// tick's frame it runs in a tool scope (private draws, the private search
-// vectors, its actions made commands and its other changes found as on a held
-// frame); otherwise it calls straight through. The calls to the name compare
-// 84f520 are left alone.
+// SoylentGreed), so every call in that stretch goes through a stub: in a
+// tick's shared Late it is skipped (the tool acts in the view pass after it,
+// as on a held frame); otherwise it calls straight through. The calls to the
+// name compare 84f520 are left alone.
 static const unsigned kToolCalls[][2] = {
     { 0x3128C1, 0x21C110 }, { 0x31294E, 0x214220 }, { 0x3129B8, 0x2BADE0 }, { 0x3129D8, 0x243570 },
     { 0x3129FC, 0x2F94C0 }, { 0x312A1E, 0x3A8A70 }, { 0x312A45, 0x3A8A70 }, { 0x312A6E, 0x3A8A70 },
@@ -591,26 +604,11 @@ static bool CallTo(unsigned int site, BYTE* target, unsigned char out[5]);
 static BYTE* g_toolStubs = nullptr;
 static unsigned __int64 g_toolTarget = 0, g_toolReturn = 0;
 static BYTE g_toolSaved[96] = {};
-static bool g_toolActed = false;
-static PrivateView g_toolKept;
+static BYTE* g_toolSkip = nullptr; // xor eax, eax; xorps xmm0, xmm0; ret
 
 static void ToolEnter()
 {
-    g_toolActed = g_on && Determinism_IsStepFrame();
-    if (!g_toolActed) return;
-    Determinism_ToolScopeBegin();
-    PrivateViewIn(g_toolKept);
-    Commands_RecordMoney(); // the tick's own charges are not the tool's
-    Commands_LateBegin();
-}
-
-static void ToolLeave()
-{
-    if (!g_toolActed) return;
-    g_toolActed = false;
-    Commands_LateEnd();
-    PrivateViewOut(g_toolKept);
-    Determinism_ToolScopeEnd();
+    if (g_on && Determinism_IsStepFrame()) g_toolTarget = (unsigned __int64)g_toolSkip;
 }
 
 static BYTE* Emit(BYTE* p, const unsigned char* bytes, size_t n)
@@ -629,8 +627,8 @@ static BYTE* EmitImm(BYTE* p, unsigned char rex, unsigned char op, unsigned __in
 
 // The common stub. Entered by jmp with the target in r11 and the caller's
 // return address on the stack: the target and the return are kept, the
-// argument registers saved around ToolEnter, the target called with the
-// caller's own stack, and the result saved around ToolLeave.
+// argument registers saved around ToolEnter (which may swap the target for
+// the skip), and the target called with the caller's own stack.
 static BYTE* EmitCommon(BYTE* p)
 {
     static const unsigned char storeR11[] = { 0x4D, 0x89, 0x1A }; // mov [r10], r11
@@ -647,8 +645,6 @@ static BYTE* EmitCommon(BYTE* p)
     static const unsigned char callRax[] = { 0xFF, 0xD0 };
     static const unsigned char addRsp[] = { 0x48, 0x83, 0xC4, 0x20 };
     static const unsigned char callMemR10[] = { 0x41, 0xFF, 0x12 }; // call [r10]
-    static const unsigned char saveResult[] = { 0x49, 0x89, 0x02, 0xF3, 0x41, 0x0F, 0x7F, 0x42, 0x20 }; // rax, xmm0
-    static const unsigned char loadResult[] = { 0x49, 0x8B, 0x02, 0xF3, 0x41, 0x0F, 0x6F, 0x42, 0x20 };
     static const unsigned char jmpMemR10[] = { 0x41, 0xFF, 0x22 }; // jmp [r10]
     p = EmitImm(p, 0x49, 0xBA, (unsigned __int64)&g_toolTarget);
     p = Emit(p, storeR11, sizeof(storeR11));
@@ -665,14 +661,6 @@ static BYTE* EmitCommon(BYTE* p)
     p = Emit(p, loadArgs, sizeof(loadArgs));
     p = EmitImm(p, 0x49, 0xBA, (unsigned __int64)&g_toolTarget);
     p = Emit(p, callMemR10, sizeof(callMemR10));
-    p = EmitImm(p, 0x49, 0xBA, (unsigned __int64)g_toolSaved);
-    p = Emit(p, saveResult, sizeof(saveResult));
-    p = Emit(p, subRsp, sizeof(subRsp));
-    p = EmitImm(p, 0x48, 0xB8, (unsigned __int64)&ToolLeave);
-    p = Emit(p, callRax, sizeof(callRax));
-    p = Emit(p, addRsp, sizeof(addRsp));
-    p = EmitImm(p, 0x49, 0xBA, (unsigned __int64)g_toolSaved);
-    p = Emit(p, loadResult, sizeof(loadResult));
     p = EmitImm(p, 0x49, 0xBA, (unsigned __int64)&g_toolReturn);
     return Emit(p, jmpMemR10, sizeof(jmpMemR10));
 }
@@ -694,7 +682,9 @@ static bool InstallToolStubs()
     DWORD old;
     VirtualProtect(g_toolStubs, size, PAGE_EXECUTE_READWRITE, &old);
     BYTE* common = g_toolStubs + TOOL_STUB_SIZE * TOOL_CALL_COUNT;
-    EmitCommon(common);
+    static const unsigned char skip[] = { 0x31, 0xC0, 0x0F, 0x57, 0xC0, 0xC3 };
+    g_toolSkip = EmitCommon(common);
+    Emit(g_toolSkip, skip, sizeof(skip));
     for (size_t i = 0; i < TOOL_CALL_COUNT; i++) {
         static const unsigned char jmpR10[] = { 0x41, 0xFF, 0xE2 };
         BYTE* p = g_toolStubs + TOOL_STUB_SIZE * i;
