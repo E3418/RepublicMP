@@ -153,7 +153,6 @@ static bool TakeSnapshot()
 {
     g_ranges.clear();
     g_bytes.clear();
-    for (const WorldRange& w : kWorldRanges) Add(0, KIND_WORLD, w.at, (U64)World() + w.at, w.size, 0);
     U64 v[2] = {};
     if (!Copy(v, World() + BUILDINGS_OFFSET, 16) || !v[0] || v[1] < v[0] || (v[1] - v[0]) / 8 > MAX_BUILDINGS) return true;
     size_t n = (size_t)((v[1] - v[0]) / 8);
@@ -316,22 +315,88 @@ static void Compare(const Range& r, bool click)
     if (m.count) Submit(m);
 }
 
+// ---------------------------------------------------------------------------
+// The world settings block
+// ---------------------------------------------------------------------------
+//
+// The bottom menu keeps its own copy of these settings and writes it into the
+// world every frame its page shows, so a PC whose menu still held an older
+// value wrote that back after the other PC's command (run: +b08 read neither
+// value on the player, and the host's menu rewrote it until it was taken for
+// the interface's noise). The session's value - the last one ordered - is the
+// authority: every interface frame a different value is put back, and only a
+// click that writes a new value (not the one the menu kept writing before the
+// click) becomes a command.
+#define WORLD_WORDS 6
+static unsigned g_worldAt[WORLD_WORDS];
+static int g_worldCount = 0;
+static unsigned g_auth[WORLD_WORDS], g_stale[WORLD_WORDS], g_sent[WORLD_WORDS];
+static bool g_sentValid[WORLD_WORDS], g_authReady = false, g_worldFrame = false;
+static unsigned long long g_worldEpoch = 0;
+
+static void WorldWords()
+{
+    if (g_worldCount) return;
+    for (const WorldRange& w : kWorldRanges)
+        for (unsigned at = w.at; at + 4 <= w.at + w.size && g_worldCount < WORLD_WORDS; at += 4) g_worldAt[g_worldCount++] = at;
+}
+
+static void WorldFrame(bool click)
+{
+    WorldWords();
+    BYTE* world = World();
+    if (!g_authReady) {
+        // The session's start: both PCs loaded the same save.
+        for (int i = 0; i < g_worldCount; i++) {
+            Copy(&g_auth[i], world + g_worldAt[i], 4);
+            g_stale[i] = g_auth[i];
+            g_sentValid[i] = false;
+        }
+        g_authReady = true;
+        return;
+    }
+    SwitchMsg m;
+    memset(&m, 0, sizeof(m));
+    m.building = kNoRef;
+    m.kind = KIND_WORLD;
+    for (int i = 0; i < g_worldCount; i++) {
+        unsigned cur = 0;
+        if (!Copy(&cur, world + g_worldAt[i], 4) || cur == g_auth[i]) continue;
+        if (click && cur != g_stale[i] && !(g_sentValid[i] && g_sent[i] == cur)) {
+            m.words[m.count++] = { g_worldAt[i], g_auth[i], cur };
+            g_sent[i] = cur;
+            g_sentValid[i] = true;
+        } else if (!click) {
+            g_stale[i] = cur;
+        }
+        unsigned auth = g_auth[i];
+        Copy(world + g_worldAt[i], &auth, 4);
+    }
+    if (m.count) Submit(m);
+}
+
 void BuildingSwitches_Before(bool simBusy)
 {
     g_taken = false;
+    g_worldFrame = false;
+    if (!Commands_Capturing()) g_authReady = false; // the next session takes its own start
     if (!Commands_TakeUi() || simBusy) return;
     g_click = Clicked();
-    if (!g_click && (++g_frame % SAMPLE_EVERY) != 0) return;
     g_epoch = Commands_ApplyEpoch();
+    g_worldFrame = true;
+    if (!g_click && (++g_frame % SAMPLE_EVERY) != 0) return;
     g_taken = TakeSnapshot();
 }
 
 void BuildingSwitches_After(bool simBusy)
 {
+    // A command made meanwhile (another thread) is not the interface's change.
+    bool same = !simBusy && Commands_TakeUi() && Commands_ApplyEpoch() == g_epoch;
+    if (g_worldFrame && same) WorldFrame(g_click);
+    g_worldFrame = false;
     if (!g_taken) return;
     g_taken = false;
-    // A command made meanwhile (another thread) is not the interface's change.
-    if (simBusy || !Commands_TakeUi() || Commands_ApplyEpoch() != g_epoch) return;
+    if (!same) return;
     for (const Range& r : g_ranges) Compare(r, g_click);
 }
 
@@ -371,6 +436,12 @@ bool BuildingSwitches_ApplyCommand(const void* data, size_t size)
             unsigned* p = (unsigned*)WordAddress(building, m, m.words[i].offset);
             if (*p != m.words[i].old && *p != m.words[i].now) differing++;
             *p = m.words[i].now;
+            if (m.kind == KIND_WORLD) // the session's value from now on
+                for (int k = 0; k < g_worldCount; k++)
+                    if (g_worldAt[k] == m.words[i].offset) {
+                        g_auth[k] = m.words[i].now;
+                        g_sentValid[k] = false;
+                    }
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         why = "a fault while writing";

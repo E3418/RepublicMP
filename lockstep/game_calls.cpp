@@ -79,6 +79,23 @@ static const GameCallSite kSites[] = {
     { 0x3592FF, 0x4962C0, "lines list: delete line (cleanup)", "Mb", 0x12800, 0, false, CALL_PRESENTATION },
     // A late-phase tool (main thread): building_addfield adds the picked field to the farm +d298.
     { 0x1D87D4, 0x162100, "field tool: add a field to a farm", "WBOF", 0, 0, false },
+    // Links and office assignments the building windows remove or make: lists of
+    // the buildings (+f98/+fb0, the assigned building's +888), heap only.
+    { 0x7447FF, 0x1C7E80, "building window: remove the building from its partner's list", "xOO", 0, 0, false },
+    { 0x74480A, 0x162B40, "building window: remove link record by index", "xOI", 0, 0, false },
+    { 0x748BC9, 0x1C7E80, "building window (second): remove the building from its partner's list", "xOO", 0, 0, false },
+    { 0x748BD7, 0x162B40, "building window (second): remove link record by index", "xOI", 0, 0, false },
+    { 0x74BBC9, 0x162B40, "station window: remove link record by index", "xOI", 0, 0, false },
+    { 0x76759A, 0x1C7E80, "link list window: remove the building from its partner's list", "xOO", 0, 0, false },
+    { 0x7675AA, 0x162BD0, "link list window: remove the link record to a partner", "xOO", 0, 0, false },
+    { 0x7676BE, 0x162360, "link list window: unassign building from office", "WOO", 0, 0, false },
+    { 0x76F79A, 0x162360, "office window: unassign building from office", "WOO", 0, 0, false },
+    { 0x770615, 0x162360, "office list: unassign building from office", "WOO", 0, 0, false },
+    { 0x745149, 0x162A30, "clear all links (confirmation)", "xO", 0, 0, false },
+    { 0x71454A, 0x161C90, "assign construction office", "WOOFbb", 0, 0, false },
+    { 0x7145CF, 0x162360, "unassign construction office", "WOO", 0, 0, false },
+    { 0x717D4A, 0x161C90, "assign construction office (second window)", "WOOFbb", 0, 0, false },
+    { 0x717DD0, 0x162360, "unassign construction office (second window)", "WOO", 0, 0, false },
 };
 #define SITE_COUNT (sizeof(kSites) / sizeof(kSites[0]))
 
