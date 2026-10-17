@@ -69,6 +69,9 @@ struct Mask {
 };
 static const Mask kBuildingMasks[] = {
     { 0x121C, 0x14 }, // recomputed by the building window every frame
+    { 0x1158, 0x8 },  // camera visibility +115a and distance +115c (this PC's view, sim_patches)
+    { 0x1344, 4 },    // animation phase of a building near the camera (16c900)
+    { 0x137C, 4 },    // ambient sound timer of a site near the camera (139a70: amb_construction)
 };
 static const Mask kVehicleMasks[] = {
     { 0x8, 0x20 },    // model name buffer

@@ -16,6 +16,10 @@
 // both runs watch the same citizens. Off by default; set the spot to the
 // place to examine.
 #define WATCH_ON 0
+// Instead of a citizen: the republic's balances (world +0x588 rubles, +0x580
+// dollars), for the whole run - who changes the money, and where the runs
+// part. Off by default.
+#define WATCH_MONEY 0
 #define SPOT_X 0.0f
 #define SPOT_Z 0.0f
 #define SPOT_RADIUS 12.0f
@@ -198,6 +202,14 @@ static void Watch(int run, BYTE* citizen, LONG place)
         // local enable, break on writes (01), 4 bytes (11)
         if (citizen) dr7 |= (1ull << (t * 2)) | (0xDull << (16 + t * 4));
     }
+    if (WATCH_MONEY && citizen) {
+        // rubles and dollars, 8 bytes each (len 10)
+        BYTE* world = g_exeBase + WORLD_RVA;
+        g_addresses[0] = world + 0x588;
+        g_addresses[1] = world + 0x580;
+        g_addresses[2] = g_addresses[3] = nullptr;
+        dr7 = (1ull << 0) | (0x9ull << 16) | (1ull << 2) | (0x9ull << 20);
+    }
     if (!g_handler) g_handler = AddVectoredExceptionHandler(1, OnSingleStep);
     g_mainThread = GetCurrentThreadId();
     InterlockedExchange(&g_run, citizen ? run : -1);
@@ -227,7 +239,7 @@ void ProbeWatch_Step(int run, unsigned long long step, bool last)
         return;
     }
     LONG place = -1;
-    BYTE* c = Nearest(&place);
+    BYTE* c = WATCH_MONEY ? g_exeBase + WORLD_RVA : Nearest(&place);
     Watch(run, c, place);
 }
 
@@ -236,8 +248,9 @@ static void LogHit(int run, LONG i)
     const Hit& h = g_hits[run][i];
     float f;
     memcpy(&f, &h.value, 4);
+    unsigned offset = WATCH_MONEY ? (h.target ? 0x580 : 0x588) : kOffsets[h.target];
     Logf("republicmp  PROBE WATCH:   run %d #%ld step %u citizen #%u +0x%X = %08x (%.9g) at %X <- %X <- %X <- %X <- %X%s",
-         run + 1, i, h.step, h.citizen, kOffsets[h.target], h.value, f, h.rip, h.callers[0], h.callers[1],
+         run + 1, i, h.step, h.citizen, offset, h.value, f, h.rip, h.callers[0], h.callers[1],
          h.callers[2], h.callers[3], h.mainThread ? "" : " (other thread)");
 }
 
