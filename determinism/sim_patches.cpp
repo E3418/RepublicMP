@@ -8,7 +8,7 @@
 #include "../lockstep/game_calls.h"
 #include "../lockstep/vehicle_switches.h"
 #include "../lockstep/building_switches.h"
-#include "../lockstep/tree_tool.h"
+#include "../lockstep/brush_tools.h"
 #include "determinism.h"
 #include <string.h>
 #include <intrin.h>
@@ -721,7 +721,10 @@ static bool InstallToolStubs()
         // The copy line and depot tools go through their routes (lockstep/route_tools), which call them.
         unsigned __int64 target = kToolCalls[i][1] == 0x2B4C60   ? (unsigned __int64)&RouteTools_LineCopyTool
                                   : kToolCalls[i][1] == 0x2B2DD0 ? (unsigned __int64)&RouteTools_DepotTool
-                                  : kToolCalls[i][1] == 0x2F94C0 ? (unsigned __int64)&TreeTool_Run
+                                  : kToolCalls[i][1] == 0x2F94C0 ? (unsigned __int64)&BrushTools_Tree
+                                  : kToolCalls[i][1] == 0x3A8A70 ? (unsigned __int64)&BrushTools_Terrain
+                                  : kToolCalls[i][1] == 0x3ADF80 ? (unsigned __int64)&BrushTools_DemolishTrees
+                                  : kToolCalls[i][1] == 0x3CCD70 ? (unsigned __int64)&BrushTools_Topsoil
                                                                  : (unsigned __int64)(g_exeBase + kToolCalls[i][1]);
         p = EmitImm(p, 0x49, 0xBB, target); // mov r11, target
         p = EmitImm(p, 0x49, 0xBA, (unsigned __int64)common);                        // mov r10, common
@@ -1121,6 +1124,7 @@ bool SimPatches_Install()
     }
     bool tools = relays && InstallToolStubs();
     GameCalls_Install(); // window buttons; a site that differs is only left alone
+    BrushTools_Install(); // the terrain brush's press reads; without them the terrain brushes stay as before
     Logf("republicmp  SIM_PATCHES: late hook %d, relays %d (building visibility, saplings, render before Early, interface searches, Prepare at speed 0, window cost display, placing press, buy press, route tools), tool stubs %d (%d calls)%s",
          late, relays, tools, (int)TOOL_CALL_COUNT, sitesOk ? "" : " - unexpected bytes at a relay site");
     return late && relays && tools;

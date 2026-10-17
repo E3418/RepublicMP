@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.5.1
+
+More of the game shared in lockstep. Protocol 22 - both players need this
+build.
+
+- **Terrain brushes** - raise, lower, the three levelling brushes, tree
+  demolition and topsoil restoration run as the game's own tool on both PCs
+  with the clicking PC's inputs (cursor, brush, frame time, level height),
+  so vegetation, topsoil and costs come out the same (by SoylentGreed).
+- **Trees** - the single-tree tools plant the same trees on both PCs (#27,
+  by SoylentGreed).
+- **Decoration paths** - the second-road paths and pavements (airplane,
+  basic road, l2-l4) are drag commands like roads (by SoylentGreed).
+- **Window settings** - what a click changes in a building's window, its
+  storage slots (auto purchase amounts, "store this item") or the bottom
+  menu's world settings is put back and carried; the bottom menu's
+  every-frame rewrite no longer splits the world settings.
+- **Farms and offices** - adding a field to a farm, and unassigning fields
+  and buildings from farms and offices, removing links (by SoylentGreed).
+
+Still put away in lockstep: removing decoration paths, worker relocation,
+buoys, Christmas lights, junction and merge tools, "Go there".
+
 ## 0.5.0
 
 Lockstep: both games run the same simulation tick by tick. This is a rewrite

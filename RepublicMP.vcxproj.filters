@@ -234,7 +234,7 @@
     <ClCompile Include="lockstep\building_switches.cpp">
       <Filter>lockstep</Filter>
     </ClCompile>
-    <ClCompile Include="lockstep\tree_tool.cpp">
+    <ClCompile Include="lockstep\brush_tools.cpp">
       <Filter>lockstep</Filter>
     </ClCompile>
     <ClCompile Include="lockstep\lockstep_net.cpp">
@@ -428,7 +428,7 @@
     <ClInclude Include="lockstep\building_switches.h">
       <Filter>lockstep</Filter>
     </ClInclude>
-    <ClInclude Include="lockstep\tree_tool.h">
+    <ClInclude Include="lockstep\brush_tools.h">
       <Filter>lockstep</Filter>
     </ClInclude>
     <ClInclude Include="lockstep\lockstep_net.h">

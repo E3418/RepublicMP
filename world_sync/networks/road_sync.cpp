@@ -159,11 +159,17 @@ static RoadSyncCategoryInfo g_categories[ROAD_SYNC_CATEGORY_COUNT] = {
     { "CABLEWAY",    0xfa40, true  },
     { "AIRROAD",     0xfa30, true  },
     { "FACTORYCONN", 0xf9c0, true  },
+    // The second-road network (pavements and decoration paths: second_road_airplane type 0,
+    // _basicroad 1, _l2 2, _l3 -2, _l4 -3). Its handler 3cf6f0 begins on the press and finishes
+    // on the release; after a finish that appended an edge it starts the edge's construction
+    // (5247f0) and clears the ground under it (3ae120) itself, so the replay's release through
+    // the handler makes those steps too. (by SoylentGreed)
+    { "SECOND_ROAD", 0xf7a8, true  },
 };
 
 static const unsigned int g_categoryWrapperRva[ROAD_SYNC_CATEGORY_COUNT] = {
     0x3D00F0, 0x3B0E60, 0x3B12B0, 0x3B4230, 0x3D4730, 0x3D68B0, 0x3B3820,
-    0x3B8780, 0x3BAED0, 0x3AEC30, 0x3CBFA0, 0x3C9130, 0x3D6E70,
+    0x3B8780, 0x3BAED0, 0x3AEC30, 0x3CBFA0, 0x3C9130, 0x3D6E70, 0x3CF6F0,
 };
 
 const RoadSyncCategoryInfo* RoadSync_GetCategoryInfo(int category)

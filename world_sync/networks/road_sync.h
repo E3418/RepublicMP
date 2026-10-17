@@ -75,6 +75,7 @@ enum RoadSyncCategory {
     ROAD_SYNC_CATEGORY_CABLEWAY = 10,    // create_cableway
     ROAD_SYNC_CATEGORY_AIRROAD = 11,     // create_airroad*
     ROAD_SYNC_CATEGORY_FACTORYCONN = 12, // factoryconnection (+ direction, see RoadSyncDirectionMsg)
+    ROAD_SYNC_CATEGORY_SECOND_ROAD = 13, // second_road_* (decoration paths and pavements, by SoylentGreed)
     ROAD_SYNC_CATEGORY_COUNT
 };
 

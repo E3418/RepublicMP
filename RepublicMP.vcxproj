@@ -189,7 +189,7 @@
     <ClCompile Include="lockstep\line_accept.cpp" />
     <ClCompile Include="lockstep\vehicle_switches.cpp" />
     <ClCompile Include="lockstep\building_switches.cpp" />
-    <ClCompile Include="lockstep\tree_tool.cpp" />
+    <ClCompile Include="lockstep\brush_tools.cpp" />
     <ClCompile Include="lockstep\lockstep_net.cpp" />
     <ClCompile Include="determinism\determinism.cpp" />
     <ClCompile Include="determinism\sim_patches.cpp" />
@@ -248,7 +248,7 @@
     <ClInclude Include="lockstep\line_accept.h" />
     <ClInclude Include="lockstep\vehicle_switches.h" />
     <ClInclude Include="lockstep\building_switches.h" />
-    <ClInclude Include="lockstep\tree_tool.h" />
+    <ClInclude Include="lockstep\brush_tools.h" />
     <ClInclude Include="lockstep\lockstep_net.h" />
     <ClInclude Include="determinism\determinism.h" />
     <ClInclude Include="determinism\sim_patches.h" />

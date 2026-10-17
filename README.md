@@ -7,7 +7,7 @@ from there both games run the same simulation tick by tick (**lockstep**),
 or each game simulates on its own and the players' actions are repeated on
 the other side (**replay mode**).
 
-**Status:** alpha, tested with two players. Current version: **0.5.0**
+**Status:** alpha, tested with two players. Current version: **0.5.1**
 ([changelog](CHANGELOG.md)).
 
 ## Support and community
@@ -39,11 +39,15 @@ Carried as commands:
 
 - **Construction** - building placement (with terrain levelling), every drag
   tool (roads, rails, footpaths, pipes, power lines, fences, conveyors,
-  cableways, factory connections), upgrades, planned construction, the group
-  tools, building and network demolition with the bulldozer, terrain edits.
-- **Building windows** - settings and storage slots, pay with rubles /
-  dollars and stop on construction sites, factory connection directions,
-  adding fields to a farm.
+  cableways, factory connections, decoration paths), upgrades, planned
+  construction, the group tools, building and network demolition with the
+  bulldozer.
+- **Terrain and trees** - the terrain brushes (raise, lower, levelling, tree
+  demolition, topsoil restoration) and the single-tree tools.
+- **Building windows** - settings and storage slots (auto purchase amounts),
+  the bottom menu's world settings, pay with rubles / dollars and stop on
+  construction sites, factory connection directions, adding and removing
+  fields of a farm, office assignments and links.
 - **Vehicles** - purchases (new and used vehicles, licences, factory
   blueprints), the vehicle window's buttons (send to depot, release, stop /
   start, clear line, next skin), vehicle settings changed in its window
@@ -53,9 +57,9 @@ Carried as commands:
   Accept, adding stops, putting vehicles on a line, launching vehicles.
 
 Not carried yet (tools are put away when selected, or the action acts on one
-PC only): trees, worker relocation, pavements, buoys, Christmas lights,
-junction and merge tools, "Go there", goods purchases and the auto purchase
-window, research, world settings. Saving is refused inside a lockstep
+PC only): removing decoration paths, worker relocation, buoys, Christmas
+lights, junction and merge tools, "Go there", goods purchases in shops,
+research. Saving is refused inside a lockstep
 session. The construction animation (scaffolding, ground, workers on a
 building site) is not drawn; the building still finishes on time.
 

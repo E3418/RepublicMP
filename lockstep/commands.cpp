@@ -17,7 +17,7 @@
 #include "world_refs.h"
 #include "vehicle_switches.h"
 #include "building_switches.h"
-#include "tree_tool.h"
+#include "brush_tools.h"
 #include <vector>
 #include <string.h>
 
@@ -31,7 +31,7 @@ void Commands_Bind(const TsmHost* host)
     WorldRefs_Bind(host);
     VehicleSwitches_Bind(host);
     BuildingSwitches_Bind(host);
-    TreeTool_Bind(host);
+    BrushTools_Bind(host);
 }
 
 struct Command {
@@ -109,7 +109,7 @@ static const char* KindName(int kind)
     case LS_CMD_LINE_ACCEPT: return "line accept";
     case LS_CMD_VEHICLE_SWITCH: return "vehicle setting";
     case LS_CMD_BUILDING_SWITCH: return "window setting";
-    case LS_CMD_TREE: return "tree planting";
+    case LS_CMD_BRUSH: return "brush";
     }
     return "?";
 }
@@ -117,7 +117,7 @@ static const char* KindName(int kind)
 // Terrain brushes and their cost come every frame a tool is used: not logged one by one.
 static bool Frequent(int kind)
 {
-    return kind == LS_CMD_TERRAIN || kind == LS_CMD_MONEY || kind == LS_CMD_TREE;
+    return kind == LS_CMD_TERRAIN || kind == LS_CMD_MONEY || kind == LS_CMD_BRUSH;
 }
 
 void Commands_Submit(int kind, const void* data, size_t size)
@@ -229,8 +229,8 @@ static void Apply(const Command& c)
     case LS_CMD_BUILDING_SWITCH:
         ok = BuildingSwitches_ApplyCommand(p, n);
         break;
-    case LS_CMD_TREE:
-        ok = TreeTool_ApplyCommand(p, n);
+    case LS_CMD_BRUSH:
+        ok = BrushTools_ApplyCommand(p, n);
         break;
     }
     InputBlock_EndNeutral();
@@ -340,13 +340,16 @@ static void TakeMoney(double rub, double usd, const char* where)
 // are put away (world +d428 = 0, as the game's own cancel does). Prefixes of
 // the build menu names; the carried route tools (route_tools.cpp) by full name.
 static const char* const kCarriedTools[] = { "vehicle_addstop", "line_addstop", "line_addstop_copy", "line_addstop_copy2",
-                                              "vehicle_godepo", "vehicle_godepo_batch" };
+                                              "vehicle_godepo", "vehicle_godepo_batch",
+                                              // the second-road drags (a road sync category; their removal stays put away)
+                                              "second_road_airplane", "second_road_basicroad", "second_road_l2",
+                                              "second_road_l3", "second_road_l4" };
 static const char* const kUncarriedTools[] = {
     "vehicle_", "worker_relocate", "building_addsource", "line_addstop", "second_road", "water_square",
-    "bojka", "christmas_", "join_hub", "crossroad_add", "terrain_go_there", "terrain_demolish_trees",
+    "bojka", "christmas_", "join_hub", "crossroad_add", "terrain_go_there",
     "road_crossroad",
 };
-// The single-tree tools (tree_tool.cpp): put away only when the game's tree tool differs.
+// The single-tree tools and the tree demolition brush (brush_tools.cpp): put away only when their routine differs.
 static const char* const kTreeTools[] = { "tree_", "palma", "jungle_", "fjord_", "afgan_", "afghan_", "tallkriak", "leafkriak" };
 
 static void PutAwayUncarriedTool()
@@ -360,16 +363,15 @@ static void PutAwayUncarriedTool()
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return;
     }
-    if (RouteTools_Ready())
-        for (const char* carried : kCarriedTools)
-            if (strcmp(name, carried) == 0) return;
-    if (!TreeTool_Ready())
-        for (const char* prefix : kTreeTools)
-            if (strncmp(name, prefix, strlen(prefix)) == 0) {
-                *tool = 0;
-                Logf("republicmp  LOCKSTEP: tool [%s] put away - the game's tree tool differs", name);
-                return;
-            }
+    for (const char* carried : kCarriedTools)
+        if (strcmp(name, carried) == 0 && (RouteTools_Ready() || strncmp(name, "second_road", 11) == 0)) return;
+    bool trees = false;
+    for (const char* prefix : kTreeTools) trees |= strncmp(name, prefix, strlen(prefix)) == 0;
+    if ((trees && !BrushTools_Ready(3)) || (strcmp(name, "terrain_demolish_trees") == 0 && !BrushTools_Ready(1))) {
+        *tool = 0;
+        Logf("republicmp  LOCKSTEP: tool [%s] put away - the game's routine for it differs", name);
+        return;
+    }
     for (const char* prefix : kUncarriedTools) {
         if (strncmp(name, prefix, strlen(prefix)) != 0) continue;
         *tool = 0;
