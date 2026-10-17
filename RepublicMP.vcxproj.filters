@@ -243,6 +243,9 @@
     <ClCompile Include="lockstep\junction_accept.cpp">
       <Filter>lockstep</Filter>
     </ClCompile>
+    <ClCompile Include="lockstep\cargo_settings.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
     <ClCompile Include="lockstep\lockstep_net.cpp">
       <Filter>lockstep</Filter>
     </ClCompile>
@@ -441,6 +444,9 @@
       <Filter>lockstep</Filter>
     </ClInclude>
     <ClInclude Include="lockstep\junction_accept.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\cargo_settings.h">
       <Filter>lockstep</Filter>
     </ClInclude>
     <ClInclude Include="lockstep\lockstep_net.h">

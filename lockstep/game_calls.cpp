@@ -46,6 +46,8 @@ enum {
     CALL_JUNCTION_ACCEPT,
     // The settings page applies its copy of the game rules: the copy goes to commands.cpp.
     CALL_GAME_RULES,
+    // Made on this PC only, never carried: a cache the simulation rebuilds before it reads it.
+    CALL_LOCAL,
 };
 
 // Appended only: a command names its site by index.
@@ -73,8 +75,10 @@ static const GameCallSite kSites[] = {
     { 0x701D7E, 0x3FBDC0, "building window: call all vehicles home (each vehicle)", "WVbbbb", 0, 0, false },
     { 0x743BA3, 0x1EA1A0, "building window: try sending all vehicles with cargo", "WO", 0, 0, false },
     { 0x747C29, 0x1EA2A0, "building window (second): try sending all vehicles with cargo", "WO", 0, 0, false },
-    { 0x7D709A, 0x6BF1D0, "vehicle window: route rebuild for display", "Vbbb", 0, 0, false, CALL_PRESENTATION },
-    { 0x7E9D46, 0x6BF1D0, "vehicle window: route rebuild for the schedule list", "Vbbb", 0, 0, false, CALL_PRESENTATION },
+    // 6bf1d0 rebuilds the cargo summary (vehicle +458/+470, the window's "Carried" list) from the
+    // train's cargo; it writes nothing else, and the simulation's readers rebuild it first.
+    { 0x7D709A, 0x6BF1D0, "vehicle window: cargo summary for display", "Vbbb", 0, 0, false, CALL_LOCAL },
+    { 0x7E9D46, 0x6BF1D0, "vehicle window: cargo summary for the schedule list", "Vbbb", 0, 0, false, CALL_LOCAL },
     { 0x7D1DC0, 0x495830, "line window: accept changes", "xLxx", 0, 0, false, CALL_LINE_ACCEPT },
     { 0x7D1DCB, 0x4945A0, "line window: accept (merge equal lines)", "ML", 0x12800, 0, false, CALL_PRESENTATION },
     { 0x7D1E4E, 0x22A6D0, "line window: accept (mark the line changed)", "Lx", 0, 0, false, CALL_ACCEPT_MEASURES },
@@ -263,6 +267,8 @@ static U64 Run(unsigned index, const U64* a)
     switch (s.special) {
     case CALL_PRESENTATION:
         return s.result;
+    case CALL_LOCAL:
+        return CallSite(s, a);
     case CALL_ACCEPT_MEASURES:
         LineAccept_RestoreMeasures();
         return s.result;

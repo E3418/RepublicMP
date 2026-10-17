@@ -144,6 +144,20 @@ static bool TextWord(int kind, unsigned offset)
     return kind == KIND_VEHICLE && offset >= NAME_FLAG && offset < NAME_END;
 }
 
+// A stop record's lists (each half's +8 pairs and +38..+c8 lists): heap links,
+// their contents are cargo_settings.cpp's. The vehicle's cargo summary (+458,
+// +470) is a cache the vehicle window rebuilds on each PC (game_calls).
+#define HALF_BYTES 0xC8
+#define SUMMARY_BEGIN 0x458
+#define SUMMARY_END 0x488
+static bool ListWord(int kind, unsigned offset)
+{
+    if (kind == KIND_VEHICLE) return offset >= SUMMARY_BEGIN && offset < SUMMARY_END;
+    if (kind != KIND_STOP || offset >= 2 * HALF_BYTES) return false;
+    unsigned l = offset % HALF_BYTES;
+    return (l >= 0x8 && l < 0x20) || l >= 0x38;
+}
+
 static void Submit(const SwitchMsg& m)
 {
     Commands_Submit(LS_CMD_VEHICLE_SWITCH, &m, sizeof(m));
@@ -179,6 +193,7 @@ static void Compare(const Snap& s, int kind, bool click)
             if (wa == wb) continue;
             unsigned offset = (unsigned)(q + h);
             unsigned word = (offset % kRecordBytes[kind]) / 4;
+            if (ListWord(kind, offset % kRecordBytes[kind])) continue;
             if (!click) {
                 if (!noise[word]) {
                     noise[word] = true;

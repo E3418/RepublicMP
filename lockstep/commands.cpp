@@ -20,6 +20,7 @@
 #include "brush_tools.h"
 #include "hover_tools.h"
 #include "junction_accept.h"
+#include "cargo_settings.h"
 #include <vector>
 #include <string.h>
 
@@ -36,6 +37,7 @@ void Commands_Bind(const TsmHost* host)
     BrushTools_Bind(host);
     HoverTools_Bind(host);
     JunctionAccept_Bind(host);
+    CargoSettings_Bind(host);
 }
 
 struct Command {
@@ -118,6 +120,7 @@ static const char* KindName(int kind)
     case LS_CMD_HOVER: return "road hover tool";
     case LS_CMD_JUNCTION: return "junction accept";
     case LS_CMD_GAME_RULES: return "game rules";
+    case LS_CMD_CARGO_SETTINGS: return "cargo settings";
     }
     return "?";
 }
@@ -248,6 +251,9 @@ static void Apply(const Command& c)
         break;
     case LS_CMD_GAME_RULES:
         ok = ApplyGameRules(p, n);
+        break;
+    case LS_CMD_CARGO_SETTINGS:
+        ok = CargoSettings_ApplyCommand(p, n);
         break;
     }
     InputBlock_EndNeutral();

@@ -10,6 +10,7 @@
 #include "../lockstep/building_switches.h"
 #include "../lockstep/brush_tools.h"
 #include "../lockstep/hover_tools.h"
+#include "../lockstep/cargo_settings.h"
 #include "determinism.h"
 #include <string.h>
 #include <intrin.h>
@@ -853,7 +854,10 @@ static __int64 DetUiRoutine(void* world)
     Determinism_UiSpeedBegin();
     VehicleSwitches_Before(g_inPhase);
     BuildingSwitches_Before(g_inPhase);
+    CargoSettings_Before(g_inPhase);
     __int64 r = original(world);
+    // The cargo settings first: a half they put back is the same again for the switches.
+    CargoSettings_After(g_inPhase);
     BuildingSwitches_After(g_inPhase);
     VehicleSwitches_After(g_inPhase);
     Commands_GuardSettings();
