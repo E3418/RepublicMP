@@ -98,9 +98,18 @@ static void ResyncControls()
     }
     ImGui::TextColored(kGrey, "Re-sync sends your world to the player again (vehicles, citizens, production).");
 
-    // Drift measured by the hourly sync check (session/sync_check).
+    // Drift measured by the hourly sync check (session/sync_check). In
+    // lockstep the games either match or not: the state summaries compared
+    // every LOCKSTEP_HASH_TICKS ticks say which.
+    bool lockstep = SaveSync_IsLockstepSession();
     SyncDrift d = SyncCheck_GetDrift();
-    if (d.valid) {
+    if (lockstep) {
+        const char* desync = LockstepNet_Desync();
+        unsigned long long matched = LockstepNet_LastMatchedTick();
+        if (desync[0]) ImGui::TextColored(kRed, "Lockstep: %s", desync);
+        else if (matched) ImGui::TextColored(kGreen, "Lockstep: in sync (checked after tick %llu)", matched);
+        else ImGui::TextColored(kGrey, "Lockstep: compared every %d ticks", LOCKSTEP_HASH_TICKS);
+    } else if (d.valid) {
         ImVec4 col = d.total < 2.0f ? kGreen : d.total < 10.0f ? kYellow : kRed;
         ImGui::TextColored(col, "Drift %.1f%%", d.total);
         ImGui::SameLine();
@@ -115,7 +124,7 @@ static void ResyncControls()
     for (int i = 0; i < IM_ARRAYSIZE(kLimits); i++)
         if (kLimits[i] == SyncCheck_GetAutoResyncPercent()) limit = i;
     ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("Re-sync on drift:");
+    ImGui::TextUnformatted(lockstep ? "Re-sync when the games differ:" : "Re-sync on drift:");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(110);
     if (ImGui::Combo("##driftResync", &limit, kLimitLabels, IM_ARRAYSIZE(kLimitLabels)))

@@ -802,6 +802,9 @@ void Determinism_ToolScopeEnd()
 
 static int g_toolPassSpeed = 0;
 static BYTE g_toolPassPaused = 0;
+static bool g_inToolPass = false;
+
+bool Determinism_InToolPass() { return g_inToolPass; }
 
 void Determinism_ToolPassBegin()
 {
@@ -810,10 +813,12 @@ void Determinism_ToolPassBegin()
     WriteGameSpeed(0);
     g_exeBase[GAME_TIMER_RVA + 12] = 1;
     g_frameStep = g_inEarly = false;
+    g_inToolPass = true;
 }
 
 void Determinism_ToolPassEnd()
 {
+    g_inToolPass = false;
     g_frameStep = g_inEarly = true;
     g_exeBase[GAME_TIMER_RVA + 12] = g_toolPassPaused;
     WriteGameSpeed(g_toolPassSpeed);

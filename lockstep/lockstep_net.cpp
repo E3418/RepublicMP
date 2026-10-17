@@ -60,6 +60,7 @@ static OwnHash g_ownHashes[LS_HASH_KEEP];
 static LsHash g_playerHashes[LS_HASH_KEEP];
 static int g_playerHashCount = 0;
 static char g_desync[256] = "";
+static volatile unsigned long long g_lastMatched = 0; // the last tick both summaries matched
 
 // Player side.
 static std::deque<LsGrant> g_grants;
@@ -132,6 +133,7 @@ static void ResetState()
     memset(g_ownHashes, 0, sizeof(g_ownHashes));
     g_playerHashCount = 0;
     g_desync[0] = 0;
+    g_lastMatched = 0;
     g_grants.clear();
     g_hostStateKnown = false;
     g_hostState.paused = 1;
@@ -193,6 +195,7 @@ void LockstepNet_Close()
 bool LockstepNet_IsConnected() { return g_connected; }
 bool LockstepNet_IsHost() { return g_isHost; }
 const char* LockstepNet_Desync() { return g_desync; }
+unsigned long long LockstepNet_LastMatchedTick() { return g_lastMatched; }
 
 // ---------------------------------------------------------------------------
 // State comparison (host)
@@ -215,7 +218,10 @@ static void Compare(const LsHash& theirs)
     if (a.hashBuildings != b.hashBuildings) strcat_s(what, "buildings ");
     if (a.hashVehicles != b.hashVehicles) strcat_s(what, "vehicles ");
     if (a.hashCitizens != b.hashCitizens) strcat_s(what, "citizens ");
-    if (!what[0]) return;
+    if (!what[0]) {
+        g_lastMatched = theirs.tick;
+        return;
+    }
     _snprintf_s(g_desync, sizeof(g_desync), _TRUNCATE, "the games differ after tick %llu: %s", theirs.tick, what);
     Logf("republicmp  LOCKSTEP: DESYNC - %s (host: buildings %d vehicles %d citizens %d, player: %d %d %d)", g_desync,
          a.buildings, a.vehicles, a.citizens, b.buildings, b.vehicles, b.citizens);

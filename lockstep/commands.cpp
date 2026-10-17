@@ -4,6 +4,7 @@
 #include "../determinism/determinism.h"
 #include "../world_sync/networks/road_sync.h"
 #include "../world_sync/buildings/build_sync.h"
+#include "../world_sync/replay_menus.h"
 #include "lockstep_net.h"
 #include "../game/input_block.h"
 #include "../session/settings_sync.h"
@@ -125,6 +126,11 @@ static void Apply(const Command& c)
     // the replay and change what it builds on this PC only: it is cancelled.
     if (c.kind == LS_CMD_SEGMENT || c.kind == LS_CMD_UPGRADE || c.kind == LS_CMD_NET_DEMOLISH || c.kind == LS_CMD_PLACE)
         RoadSync_CancelLocalDrag();
+    // This PC's open menus or a window under its cursor (+fbc/+fbe/+fc3) make
+    // the tools return at once: a command is made with them closed, as the
+    // replays are (replay_menus.h). A road from the host was refused on the
+    // player only because its cursor was over a window.
+    ReplayUiScope menus;
     switch (c.kind) {
     case LS_CMD_SEGMENT:
         if (n == sizeof(RoadSyncMsg)) ok = RoadSync_ApplyCommandSegment(*(const RoadSyncMsg*)p);
@@ -165,7 +171,7 @@ static void Apply(const Command& c)
     g_madeThisFrame = true;
     if (!Frequent(c.kind) || !ok)
         Logf("republicmp  LOCKSTEP: #%u %s after tick %llu - %s", c.seq, KindName(c.kind), c.afterTick,
-             ok ? "made" : "not made (refused alike on every PC)");
+             ok ? "made" : "not made");
 }
 
 bool Commands_Due(unsigned long long completed)

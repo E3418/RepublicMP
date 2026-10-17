@@ -97,6 +97,7 @@ void Determinism_ToolScopeEnd();
 // step frame for the gates - and back to the tick after it.
 void Determinism_ToolPassBegin();
 void Determinism_ToolPassEnd();
+bool Determinism_InToolPass();
 // Lockstep session (session/save_sync thread). BeginSession turns the layer on;
 // the next world load starts the shared simulation (both PCs load the same
 // save). EndSession turns it off again.

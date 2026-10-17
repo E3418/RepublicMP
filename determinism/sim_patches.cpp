@@ -940,12 +940,28 @@ static bool DetPlacePress(void* input)
     if (pressed && Determinism_IsActive() && LocalBuilds_PlacementPress()) return false;
     return pressed;
 }
-#define STEP_CALL_COUNT 16
+// Each network manager keeps two lists of retired render objects and a
+// switch (+0x290): 542790, called once per Late for fifteen managers
+// (31561d..3156c5), frees the current list and flips the switch. A tick's
+// frame runs Late twice (the view pass), so both lists were freed in one
+// frame while the renderer still drew from them: every road, rail and paved
+// surface blinked once the game ran. The view pass skips it.
+static void DetNetworkRetired(void* manager)
+{
+    if (Determinism_InToolPass()) return;
+    ((void (*)(void*))(g_exeBase + 0x542790))(manager);
+}
+#define STEP_CALL_COUNT 31
 static const unsigned kStepCalls[STEP_CALL_COUNT] = { 0x30E3AC, 0x30E3B8, 0x30E3C4, 0x30D9DD, 0x30D9E7, 0x30D6BC, 0x30D6C4, 0x3155F4,
-                                                      0x6F91DF, 0x6F92C8, 0x6F940E, 0x6FA603, 0x6FA657, 0x7FCAE6, 0x7FCBDC, 0x7FCD00 };
+                                                      0x6F91DF, 0x6F92C8, 0x6F940E, 0x6FA603, 0x6FA657, 0x7FCAE6, 0x7FCBDC, 0x7FCD00,
+                                                      0x31561D, 0x315629, 0x315635, 0x315641, 0x31564D, 0x315659, 0x315665, 0x315671,
+                                                      0x31567D, 0x315689, 0x315695, 0x3156A1, 0x3156AD, 0x3156B9, 0x3156C5 };
 static const unsigned kStepTargets[STEP_CALL_COUNT] = { 0x547EF0, 0x547EF0, 0x547EF0, 0x333BD0, 0x5CFEA0, 0x12FD80, 0x12EC40, 0x40ECE0,
-                                                        0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0 };
-static const int kStepSlots[STEP_CALL_COUNT] = { 6, 6, 6, 7, 8, 9, 10, 11, 12, 12, 12, 12, 12, 12, 12, 12 }; // relay slot of each site
+                                                        0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0,
+                                                        0x542790, 0x542790, 0x542790, 0x542790, 0x542790, 0x542790, 0x542790, 0x542790,
+                                                        0x542790, 0x542790, 0x542790, 0x542790, 0x542790, 0x542790, 0x542790 };
+static const int kStepSlots[STEP_CALL_COUNT] = { 6, 6, 6, 7, 8, 9, 10, 11, 12, 12, 12, 12, 12, 12, 12, 12,
+                                                 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14 }; // relay slot of each site
 static bool VerifyStepCalls()
 {
     for (int i = 0; i < STEP_CALL_COUNT; i++) {
@@ -990,18 +1006,18 @@ bool SimPatches_Install()
     if (sitesOk) g_relay = AllocNear(g_exeBase, 4096);
     if (g_relay) {
         DWORD old;
-        VirtualProtect(g_relay, 224, PAGE_EXECUTE_READWRITE, &old);
-        void* targets[14] = { (void*)&DetGetNode, (void*)&DetSaplingRender, (void*)&DetSaplingLate, (void*)&DetFrameLock,
+        VirtualProtect(g_relay, 240, PAGE_EXECUTE_READWRITE, &old);
+        void* targets[15] = { (void*)&DetGetNode, (void*)&DetSaplingRender, (void*)&DetSaplingLate, (void*)&DetFrameLock,
                               (void*)&DetUiRoutine, (void*)&DetPrepare, (void*)&DetPieceSpeed, (void*)&DetWeather, (void*)&DetRoadWeather,
                               (void*)&DetBuildingLinks, (void*)&DetConnectionChecks, (void*)&DetGroundPaint, (void*)&DetDisplayCost,
-                              (void*)&DetPlacePress };
-        for (int i = 0; i < 14; i++) {
+                              (void*)&DetPlacePress, (void*)&DetNetworkRetired };
+        for (int i = 0; i < 15; i++) {
             BYTE* r = g_relay + i * 16;
             r[0] = 0xff; r[1] = 0x25; r[2] = r[3] = r[4] = r[5] = 0;
             memcpy(r + 6, &targets[i], 8);
         }
-        VirtualProtect(g_relay, 224, PAGE_EXECUTE_READ, &old);
-        FlushInstructionCache(GetCurrentProcess(), g_relay, 224);
+        VirtualProtect(g_relay, 240, PAGE_EXECUTE_READ, &old);
+        FlushInstructionCache(GetCurrentProcess(), g_relay, 240);
         unsigned char getNode[6], render[5], lateCall[5], frameLock[6], uiCall[5], prepareCall[5], placePress[6];
         getNode[0] = 0x90;
         frameLock[0] = 0x90;

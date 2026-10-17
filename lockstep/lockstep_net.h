@@ -45,6 +45,8 @@ bool LockstepNet_IsConnected();
 bool LockstepNet_IsHost();
 // The first state difference found (host), or "".
 const char* LockstepNet_Desync();
+// Host: the last tick whose state summaries matched (0 = none compared yet).
+unsigned long long LockstepNet_LastMatchedTick();
 
 // Game thread, start of a frame: handles everything received.
 void LockstepNet_Poll();
