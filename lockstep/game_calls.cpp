@@ -15,6 +15,7 @@
 #define SEND_TO_DEPOT 0x3FBDC0
 #define LINES_OFFSET 0x12800
 #define DELETE_CLEANUP 0x4962C0
+#define DRAG_RVA 0x996B98        // the depot window's dragged vehicle (interface state)
 #define MAX_ARGS 7
 
 // Argument kinds: x ignored (0), W the world, M the pointer world+worldPointer
@@ -48,6 +49,9 @@ enum {
     CALL_GAME_RULES,
     // Made on this PC only, never carried: a cache the simulation rebuilds before it reads it.
     CALL_LOCAL,
+    // The routine reads the depot window's dragged vehicle (exe+996b98): it travels as argument 0,
+    // and every PC puts it in its own global for the call.
+    CALL_DRAG,
 };
 
 // Appended only: a command names its site by index.
@@ -121,6 +125,21 @@ static const GameCallSite kSites[] = {
     { 0x7145CF, 0x162360, "unassign construction office", "WOO", 0, 0, false },
     { 0x717D4A, 0x161C90, "assign construction office (second window)", "WOOFbb", 0, 0, false },
     { 0x717DD0, 0x162360, "unassign construction office (second window)", "WOO", 0, 0, false },
+    // The depot window composes trains by drag and drop: 3fdef0(world, vehicle) takes the dragged
+    // vehicle off its head, 3fd5d0(world, head, vehicle, index, 1, 0, &result) couples it at the
+    // index (-1 the end; the result only picks the window's message), 3fe520(-, head) moves the
+    // dragged vehicle and its wagons onto the head. With the vehicle window's replace or line copy
+    // tool selected, its rows act like the line window's.
+    { 0x7C7A08, 0x3FDEF0, "depot window: uncouple the dragged vehicle (train drop)", "WV", 0, 0, false },
+    { 0x7C7A15, 0x3FE520, "depot window: attach the dragged train to the vehicle", "VV", 0, 0, false, CALL_DRAG },
+    { 0x7C7E87, 0x3FDEF0, "depot window: uncouple the dragged vehicle (row drop)", "WV", 0, 0, false },
+    { 0x7C7ED8, 0x3FD5D0, "depot window: couple the dragged vehicle at the row", "WVVIbbx", 0, 0, false },
+    { 0x7C8CB0, 0x3FDEF0, "depot window: uncouple the dragged vehicle (end drop)", "WV", 0, 0, false },
+    { 0x7C8CE7, 0x3FD5D0, "depot window: couple the dragged vehicle at the end", "WVVIbbx", 0, 0, false },
+    { 0x7C81F4, 0x1AB290, "depot window: replace tool (prepare the replaced vehicle)", "WV", 0, 0, false },
+    { 0x7C8205, 0x1AAAA0, "depot window: replace tool (replace by the row's vehicle)", "WoOb", 0, 0, false },
+    { 0x7C8458, 0x497B10, "depot window: line copy tool (put the row's vehicle on the line)", "MLVbo", 0x12800, 0, false },
+    { 0x7C846C, 0x3BB330, "depot window: line copy tool (refresh the vehicle)", "WO", 0, 0, false },
 };
 #define SITE_COUNT (sizeof(kSites) / sizeof(kSites[0]))
 
@@ -289,10 +308,13 @@ static U64 Run(unsigned index, const U64* a)
         }
         break;
     }
+    U64 args[MAX_ARGS];
+    memcpy(args, a, sizeof(args));
     GameCallMsg m;
-    const char* why;
+    const char* why = nullptr;
     __try {
-        why = Capture(index, a, m);
+        if (s.special == CALL_DRAG && !(args[0] = *(U64*)(g_exeBase + DRAG_RVA))) why = "no vehicle is dragged";
+        if (!why) why = Capture(index, args, m);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         why = "a fault while reading the arguments";
     }
@@ -345,12 +367,20 @@ bool GameCalls_ApplyCommand(const void* data, size_t size)
     U64 a[MAX_ARGS];
     const char* why = nullptr;
     U64 r = 0;
+    U64* drag = nullptr;
+    U64 dragged = 0;
     __try {
         why = Rebuild(m, a);
-        if (!why && s.special != CALL_PLAIN && s.special != CALL_DELETE_LINE) why = "not a command site";
+        if (!why && s.special != CALL_PLAIN && s.special != CALL_DELETE_LINE && s.special != CALL_DRAG) why = "not a command site";
         if (!why) {
             if (s.special == CALL_DELETE_LINE) *(BYTE*)(a[1] + 1) = 0;
+            if (s.special == CALL_DRAG) {
+                drag = (U64*)(g_exeBase + DRAG_RVA);
+                dragged = *drag;
+                *drag = a[0];
+            }
             r = CallSite(s, a);
+            if (drag) *drag = dragged;
             if (s.special == CALL_DELETE_LINE) {
                 typedef void (*CleanupFn)(U64, U64);
                 ((CleanupFn)(g_exeBase + DELETE_CLEANUP))(Q((U64)World() + LINES_OFFSET), 1);
@@ -362,6 +392,7 @@ bool GameCalls_ApplyCommand(const void* data, size_t size)
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         why = "the call faulted";
+        if (drag) *drag = dragged;
     }
     Logf("republicmp  GAME CALL: %s: %s", s.name, why ? why : "made");
     return why == nullptr;
