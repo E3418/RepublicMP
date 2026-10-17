@@ -49,6 +49,7 @@ enum LockstepCommandKind {
     LS_CMD_JUNCTION = 20,    // junction_accept.cpp: the junction window's Accept with its working copy
     LS_CMD_GAME_RULES = 21,  // commands.cpp: the game menu's settings page applied (its copy of the rules)
     LS_CMD_CARGO_SETTINGS = 22, // cargo_settings.cpp: a stop's or link's loading or unloading half
+    LS_CMD_SOURCE_SLOTS = 23,   // source_slots.cpp: a building's specific sources (add-source tool, windows)
 };
 
 // Money a local action changed on this PC (an interface purchase, a terrain

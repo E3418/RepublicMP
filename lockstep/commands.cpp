@@ -21,6 +21,7 @@
 #include "hover_tools.h"
 #include "junction_accept.h"
 #include "cargo_settings.h"
+#include "source_slots.h"
 #include <vector>
 #include <string.h>
 
@@ -38,6 +39,7 @@ void Commands_Bind(const TsmHost* host)
     HoverTools_Bind(host);
     JunctionAccept_Bind(host);
     CargoSettings_Bind(host);
+    SourceSlots_Bind(host);
 }
 
 struct Command {
@@ -121,6 +123,7 @@ static const char* KindName(int kind)
     case LS_CMD_JUNCTION: return "junction accept";
     case LS_CMD_GAME_RULES: return "game rules";
     case LS_CMD_CARGO_SETTINGS: return "cargo settings";
+    case LS_CMD_SOURCE_SLOTS: return "source slots";
     }
     return "?";
 }
@@ -255,6 +258,9 @@ static void Apply(const Command& c)
     case LS_CMD_CARGO_SETTINGS:
         ok = CargoSettings_ApplyCommand(p, n);
         break;
+    case LS_CMD_SOURCE_SLOTS:
+        ok = SourceSlots_ApplyCommand(p, n);
+        break;
     }
     InputBlock_EndNeutral();
     InterlockedDecrement(&g_applying);
@@ -387,6 +393,7 @@ static void PutAwayUncarriedTool()
     }
     for (const char* carried : kCarriedTools)
         if (strcmp(name, carried) == 0 && (RouteTools_Ready() || strncmp(name, "second_road", 11) == 0)) return;
+    if (strcmp(name, "building_addsource") == 0 && SourceSlots_Ready()) return; // source_slots.cpp
     bool trees = false;
     for (const char* prefix : kTreeTools) trees |= strncmp(name, prefix, strlen(prefix)) == 0;
     if ((trees && !BrushTools_Ready(3)) || (strcmp(name, "terrain_demolish_trees") == 0 && !BrushTools_Ready(1))) {

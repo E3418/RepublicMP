@@ -11,6 +11,7 @@
 #include "../lockstep/brush_tools.h"
 #include "../lockstep/hover_tools.h"
 #include "../lockstep/cargo_settings.h"
+#include "../lockstep/source_slots.h"
 #include "determinism.h"
 #include <string.h>
 #include <intrin.h>
@@ -733,6 +734,7 @@ static bool InstallToolStubs()
                                   : kToolCalls[i][1] == 0x4184C0 ? (unsigned __int64)&HoverTools_RailPlace
                                   : kToolCalls[i][1] == 0x418F90 ? (unsigned __int64)&HoverTools_RailRemove
                                   : kToolCalls[i][1] == 0x4182D0 ? (unsigned __int64)&HoverTools_Junction
+                                  : kToolCalls[i][1] == 0x1D51A0 ? (unsigned __int64)&SourceSlots_AddSourceTool
                                                                  : (unsigned __int64)(g_exeBase + kToolCalls[i][1]);
         p = EmitImm(p, 0x49, 0xBB, target); // mov r11, target
         p = EmitImm(p, 0x49, 0xBA, (unsigned __int64)common);                        // mov r10, common
@@ -855,9 +857,11 @@ static __int64 DetUiRoutine(void* world)
     VehicleSwitches_Before(g_inPhase);
     BuildingSwitches_Before(g_inPhase);
     CargoSettings_Before(g_inPhase);
+    SourceSlots_Before(g_inPhase);
     __int64 r = original(world);
     // The cargo settings first: a half they put back is the same again for the switches.
     CargoSettings_After(g_inPhase);
+    SourceSlots_After(g_inPhase);
     BuildingSwitches_After(g_inPhase);
     VehicleSwitches_After(g_inPhase);
     Commands_GuardSettings();

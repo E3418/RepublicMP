@@ -193,6 +193,7 @@
     <ClCompile Include="lockstep\hover_tools.cpp" />
     <ClCompile Include="lockstep\junction_accept.cpp" />
     <ClCompile Include="lockstep\cargo_settings.cpp" />
+    <ClCompile Include="lockstep\source_slots.cpp" />
     <ClCompile Include="lockstep\lockstep_net.cpp" />
     <ClCompile Include="determinism\determinism.cpp" />
     <ClCompile Include="determinism\sim_patches.cpp" />
@@ -255,6 +256,7 @@
     <ClInclude Include="lockstep\hover_tools.h" />
     <ClInclude Include="lockstep\junction_accept.h" />
     <ClInclude Include="lockstep\cargo_settings.h" />
+    <ClInclude Include="lockstep\source_slots.h" />
     <ClInclude Include="lockstep\lockstep_net.h" />
     <ClInclude Include="determinism\determinism.h" />
     <ClInclude Include="determinism\sim_patches.h" />
