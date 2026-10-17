@@ -7,7 +7,7 @@ from there both games run the same simulation tick by tick (**lockstep**),
 or each game simulates on its own and the players' actions are repeated on
 the other side (**replay mode**).
 
-**Status:** alpha, tested with two players. Current version: **0.5.1**
+**Status:** alpha, tested with two players. Current version: **0.5.2**
 ([changelog](CHANGELOG.md)).
 
 ## Support and community
@@ -47,21 +47,27 @@ Carried as commands:
 - **Building windows** - settings and storage slots (auto purchase amounts),
   the bottom menu's world settings, pay with rubles / dollars and stop on
   construction sites, factory connection directions, adding and removing
-  fields of a farm, office assignments and links.
+  fields of a farm, office assignments and links, the cargo filters of links,
+  specific sources (the add-source tool and the source windows).
+- **Roads and junctions** - road signs, junction rules (right-hand, main road,
+  traffic lights) from the junction window and the decoration tool, rail
+  signals.
+- **Game rules** - changes on the settings page apply on both PCs.
 - **Vehicles** - purchases (new and used vehicles, licences, factory
   blueprints), the vehicle window's buttons (send to depot, release, stop /
   start, clear line, next skin), vehicle settings changed in its window
-  (checkboxes, limits, per-stop loading, cargo limits), sending to a depot
-  with the pick tool.
+  (checkboxes, limits, per-stop cargo settings, cargo limits), sending to a
+  depot with the pick tool, composing trains in the depot, selling vehicles.
 - **Lines and routes** - creating and deleting lines, the line window's
   Accept, adding stops, putting vehicles on a line, launching vehicles.
 
 Not carried yet (tools are put away when selected, or the action acts on one
 PC only): removing decoration paths, worker relocation, buoys, Christmas
-lights, junction and merge tools, "Go there", goods purchases in shops,
-research. Saving is refused inside a lockstep
-session. The construction animation (scaffolding, ground, workers on a
-building site) is not drawn; the building still finishes on time.
+lights, merge tools, "Go there", goods purchases in shops, research. Saving
+is refused inside a lockstep session. The construction animation
+(scaffolding, ground, workers on a building site) is not drawn; the building
+still finishes on time. While the game is paused, what comes into view
+appears only after the pause.
 
 ## Replay mode
 

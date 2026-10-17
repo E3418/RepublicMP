@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.2
+
+More of the game shared in lockstep. Protocol 23 - both players need this
+build.
+
+- **Roads and junctions** - road signs, junction rules (right-hand, main
+  road, traffic lights) from the junction window and the decoration tool,
+  and rail signals (by SoylentGreed).
+- **Game rules** - changes on the settings page apply on both PCs; a
+  critical rule no longer saves and reloads one game only.
+- **Vehicles** - selling, per-stop cargo settings, composing trains in the
+  depot (couple, uncouple, move wagons) (by SoylentGreed).
+- **Buildings** - cargo filters of links and specific sources (the add-source
+  tool, the source windows) (by SoylentGreed).
+- **Fixes** - the vehicle window's "Carried" list shows the cargo again;
+  traffic lights and building doors no longer blink; the camera no longer
+  flies off.
+
 ## 0.5.1
 
 More of the game shared in lockstep. Protocol 22 - both players need this
