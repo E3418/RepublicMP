@@ -54,11 +54,18 @@ bool LockstepNet_MayRun(unsigned long long tick);
 void LockstepNet_Grant(unsigned long long tick, int speed);
 int LockstepNet_TakePauseToggles();
 int LockstepNet_TakeSpeedRequest(); // 0 = none
+// Any thread: tells the player the world is sent again (a re-sync).
+void LockstepNet_SendResync();
+// Any thread: a keepalive, and the time since the other game sent anything.
+void LockstepNet_Ping();
+unsigned long long LockstepNet_MsSinceReceived();
 void LockstepNet_SendState(bool paused, int speed);
 
 // Player (game thread).
 bool LockstepNet_TakeGrant(unsigned long long tick, int* speed);
 void LockstepNet_Ack(unsigned long long completed);
+// Any thread: the host announced a re-sync (taken once).
+bool LockstepNet_TakeResync();
 void LockstepNet_SendPauseToggle();
 void LockstepNet_SendSpeed(int speed);
 // The host's pause and speed for the buttons; false until it sent them.

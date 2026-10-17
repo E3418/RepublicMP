@@ -19,6 +19,8 @@ enum LockstepMsgType {
     LS_CMDS = 3,  // host -> player: LsCommandHead + payload
     LS_ACK = 4,   // player -> host: unsigned long long completed
     LS_HASH = 5,  // player -> host: LsHash
+    LS_RESYNC = 6, // host -> player: the world is sent again (no payload)
+    LS_PING = 11,  // either way: still here (no payload)
     LS_PAUSE = 7, // player -> host: a pause toggle
     LS_SPEED = 8, // player -> host: int speed
     LS_STATE = 9, // host -> player: LsState
@@ -61,6 +63,8 @@ static char g_desync[256] = "";
 
 // Player side.
 static std::deque<LsGrant> g_grants;
+static volatile bool g_resyncReceived = false; // set by the receive thread
+static volatile ULONGLONG g_lastReceived = 0;    // GetTickCount64 of the last message
 static bool g_hostStateKnown = false;
 static LsState g_hostState = { 1, 1 };
 
@@ -96,9 +100,17 @@ static DWORD WINAPI RecvThread(LPVOID)
         m.type = h.type;
         m.data.resize(h.size);
         if (h.size && !NetworkRecvExact(g_sock, m.data.data(), h.size)) break;
+        g_lastReceived = GetTickCount64();
+        if (h.type == LS_PING) continue;
         if (h.type == LS_BYE) {
             Logf("republicmp  LOCKSTEP: the other player left");
             break;
+        }
+        // Noted here, not in the game thread's poll: the host closes the
+        // connection right after it.
+        if (h.type == LS_RESYNC) {
+            g_resyncReceived = true;
+            continue;
         }
         EnterCriticalSection(&g_inLock);
         g_inbox.push_back(std::move(m));
@@ -124,6 +136,8 @@ static void ResetState()
     g_hostStateKnown = false;
     g_hostState.paused = 1;
     g_hostState.speed = 1;
+    g_resyncReceived = false;
+    g_lastReceived = GetTickCount64();
 }
 
 static bool Started(SOCKET s, bool host)
@@ -318,6 +332,28 @@ bool LockstepNet_TakeGrant(unsigned long long tick, int* speed)
     if (g_grants.empty() || g_grants.front().tick != tick) return false;
     *speed = g_grants.front().speed;
     g_grants.pop_front();
+    return true;
+}
+
+void LockstepNet_Ping()
+{
+    Send(LS_PING, nullptr, 0);
+}
+
+ULONGLONG LockstepNet_MsSinceReceived()
+{
+    return GetTickCount64() - g_lastReceived;
+}
+
+void LockstepNet_SendResync()
+{
+    Send(LS_RESYNC, nullptr, 0);
+}
+
+bool LockstepNet_TakeResync()
+{
+    if (!g_resyncReceived) return false;
+    g_resyncReceived = false;
     return true;
 }
 
