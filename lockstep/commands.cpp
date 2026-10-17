@@ -11,6 +11,10 @@
 #include "../world_sync/terrain/terrain_hook.h"
 #include "purchase.h"
 #include "route_tools.h"
+#include "game_calls.h"
+#include "line_accept.h"
+#include "world_refs.h"
+#include "vehicle_switches.h"
 #include <vector>
 #include <string.h>
 
@@ -19,6 +23,10 @@ void Commands_Bind(const TsmHost* host)
     TsmBind(host);
     Purchase_Bind(host);
     RouteTools_Bind(host);
+    GameCalls_Bind(host);
+    LineAccept_Bind(host);
+    WorldRefs_Bind(host);
+    VehicleSwitches_Bind(host);
 }
 
 struct Command {
@@ -37,6 +45,7 @@ static size_t g_replayed = 0;
 static volatile bool g_capturing = false;
 static bool g_replaying = false;
 static volatile LONG g_applying = 0;
+static DWORD g_applyThread = 0;
 static unsigned g_seq = 0;
 static int g_session = COMMANDS_OFF; // in a session the player keeps the host's commands in g_record
 
@@ -64,6 +73,11 @@ bool Commands_TakeLocal()
     return g_capturing && g_applying == 0 && !Determinism_InStepFrame();
 }
 
+bool Commands_TakeUi()
+{
+    return g_capturing && !(g_applying != 0 && GetCurrentThreadId() == g_applyThread);
+}
+
 static const char* KindName(int kind)
 {
     switch (kind) {
@@ -80,6 +94,9 @@ static const char* KindName(int kind)
     case LS_CMD_MONEY: return "money";
     case LS_CMD_PURCHASE: return "purchase";
     case LS_CMD_ROUTE: return "route tool";
+    case LS_CMD_GAME_CALL: return "window button";
+    case LS_CMD_LINE_ACCEPT: return "line accept";
+    case LS_CMD_VEHICLE_SWITCH: return "vehicle setting";
     }
     return "?";
 }
@@ -126,6 +143,7 @@ static void Apply(const Command& c)
     const void* p = c.data.data();
     size_t n = c.data.size();
     bool ok = false;
+    g_applyThread = GetCurrentThreadId();
     InterlockedIncrement(&g_applying);
     InputBlock_BeginNeutral();
     // A drag the local player has under way would share the tool manager with
@@ -176,6 +194,15 @@ static void Apply(const Command& c)
         break;
     case LS_CMD_ROUTE:
         ok = RouteTools_ApplyCommand(p, n);
+        break;
+    case LS_CMD_GAME_CALL:
+        ok = GameCalls_ApplyCommand(p, n);
+        break;
+    case LS_CMD_LINE_ACCEPT:
+        ok = LineAccept_ApplyCommand(p, n);
+        break;
+    case LS_CMD_VEHICLE_SWITCH:
+        ok = VehicleSwitches_ApplyCommand(p, n);
         break;
     }
     InputBlock_EndNeutral();
@@ -279,7 +306,8 @@ static void TakeMoney(double rub, double usd, const char* where)
 // Selected tools whose actions are not commands yet act on one PC only; they
 // are put away (world +d428 = 0, as the game's own cancel does). Prefixes of
 // the build menu names; the carried route tools (route_tools.cpp) by full name.
-static const char* const kCarriedTools[] = { "vehicle_addstop", "line_addstop", "line_addstop_copy", "line_addstop_copy2" };
+static const char* const kCarriedTools[] = { "vehicle_addstop", "line_addstop", "line_addstop_copy", "line_addstop_copy2",
+                                              "vehicle_godepo", "vehicle_godepo_batch" };
 static const char* const kUncarriedTools[] = {
     "vehicle_", "worker_relocate", "building_addsource", "line_addstop", "second_road", "water_square",
     "bojka", "christmas_", "join_hub", "crossroad_add", "terrain_go_there", "terrain_demolish_trees",

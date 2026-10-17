@@ -39,7 +39,10 @@ enum LockstepCommandKind {
     LS_CMD_TERRAIN = 10,     // terrain edits of one frame (terrain_hook)
     LS_CMD_MONEY = 11,       // LsMoneyDelta: what a local action paid or got
     LS_CMD_PURCHASE = 12,    // purchase.cpp: a vehicle, licence or blueprint bought in a purchase window
-    LS_CMD_ROUTE = 13,       // route_tools.cpp: a stop added to a schedule, a vehicle put on a line
+    LS_CMD_ROUTE = 13,       // route_tools.cpp: a stop added to a schedule, a vehicle put on a line, sent to a depot
+    LS_CMD_GAME_CALL = 14,   // game_calls.cpp: a window button's routine call
+    LS_CMD_LINE_ACCEPT = 15, // line_accept.cpp: the line window's Accept with its working copy
+    LS_CMD_VEHICLE_SWITCH = 16, // vehicle_switches.cpp: vehicle words a window click changed
 };
 
 // Money a local action changed on this PC (an interface purchase, a terrain
@@ -58,6 +61,10 @@ bool Commands_Capturing();
 // the simulation's own calls (anything during a step frame - tools are
 // hidden then) and while a command is being made.
 bool Commands_TakeLocal();
+
+// For a window's call (the interface, any thread): should it become a command?
+// False only while this thread makes a command.
+bool Commands_TakeUi();
 
 // Any thread: queues a captured action; it is made at the next boundary.
 void Commands_Submit(int kind, const void* data, size_t size);

@@ -5,8 +5,11 @@
 #include "../world_sync/local_builds.h"
 #include "../lockstep/purchase.h"
 #include "../lockstep/route_tools.h"
+#include "../lockstep/game_calls.h"
+#include "../lockstep/vehicle_switches.h"
 #include "determinism.h"
 #include <string.h>
+#include <intrin.h>
 #include <limits.h>
 #include <vector>
 #include <unordered_set>
@@ -713,9 +716,10 @@ static bool InstallToolStubs()
     for (size_t i = 0; i < TOOL_CALL_COUNT; i++) {
         static const unsigned char jmpR10[] = { 0x41, 0xFF, 0xE2 };
         BYTE* p = g_toolStubs + TOOL_STUB_SIZE * i;
-        // The copy line tool goes through its route (lockstep/route_tools), which calls it.
-        unsigned __int64 target = kToolCalls[i][1] == 0x2B4C60 ? (unsigned __int64)&RouteTools_LineCopyTool
-                                                               : (unsigned __int64)(g_exeBase + kToolCalls[i][1]);
+        // The copy line and depot tools go through their routes (lockstep/route_tools), which call them.
+        unsigned __int64 target = kToolCalls[i][1] == 0x2B4C60   ? (unsigned __int64)&RouteTools_LineCopyTool
+                                  : kToolCalls[i][1] == 0x2B2DD0 ? (unsigned __int64)&RouteTools_DepotTool
+                                                                 : (unsigned __int64)(g_exeBase + kToolCalls[i][1]);
         p = EmitImm(p, 0x49, 0xBB, target); // mov r11, target
         p = EmitImm(p, 0x49, 0xBA, (unsigned __int64)common);                        // mov r10, common
         Emit(p, jmpR10, sizeof(jmpR10));
@@ -834,7 +838,9 @@ static __int64 DetUiRoutine(void* world)
     memcpy(shared, g_privateSearch, sizeof(saved));
     Determinism_PrivateScope privateRng;
     Determinism_UiSpeedBegin();
+    VehicleSwitches_Before(g_inPhase);
     __int64 r = original(world);
+    VehicleSwitches_After(g_inPhase);
     Determinism_UiSpeedEnd();
     memcpy(g_privateSearch, shared, sizeof(saved));
     memcpy(shared, saved, sizeof(saved));
@@ -1008,14 +1014,21 @@ static U64 DetLineMark(U64 w, U64 vehicle, U64 a3, U64 refused)
 {
     return RouteTools_LineMark(w, vehicle, a3, refused);
 }
-#define STEP_CALL_COUNT 19
+
+// The depot tool's mark 40bd60 (2b3790): the tool's list is read from its caller's frame.
+static U64 DetDepotMark(U64 w, U64 depot, U64 a3, U64 a4, U64 a5)
+{
+    U64* ret = (U64*)_AddressOfReturnAddress();
+    return RouteTools_DepotMark(w, depot, a3, a4, a5, (U64)(ret + 1), *ret);
+}
+#define STEP_CALL_COUNT 20
 static const unsigned kStepCalls[STEP_CALL_COUNT] = { 0x30E3AC, 0x30E3B8, 0x30E3C4, 0x30D9DD, 0x30D9E7, 0x30D6BC, 0x30D6C4, 0x3155F4,
                                                       0x6F91DF, 0x6F92C8, 0x6F940E, 0x6FA603, 0x6FA657, 0x7FCAE6, 0x7FCBDC, 0x7FCD00,
-                                                      0x2B2800, 0x2B4B03, 0x2B505C };
+                                                      0x2B2800, 0x2B4B03, 0x2B505C, 0x2B3790 };
 static const unsigned kStepTargets[STEP_CALL_COUNT] = { 0x547EF0, 0x547EF0, 0x547EF0, 0x333BD0, 0x5CFEA0, 0x12FD80, 0x12EC40, 0x40ECE0,
                                                         0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0,
-                                                        0x2B5120, 0x2B5120, 0x40CDE0 };
-static const int kStepSlots[STEP_CALL_COUNT] = { 6, 6, 6, 7, 8, 9, 10, 11, 12, 12, 12, 12, 12, 12, 12, 12, 15, 16, 17 }; // relay slot of each site
+                                                        0x2B5120, 0x2B5120, 0x40CDE0, 0x40BD60 };
+static const int kStepSlots[STEP_CALL_COUNT] = { 6, 6, 6, 7, 8, 9, 10, 11, 12, 12, 12, 12, 12, 12, 12, 12, 15, 16, 17, 18 }; // relay slot of each site
 static bool VerifyStepCalls()
 {
     for (int i = 0; i < STEP_CALL_COUNT; i++) {
@@ -1033,7 +1046,7 @@ static bool VerifyStepCalls()
 
 // A relay page near the exe: one `jmp [rip+0]` per target, 16 bytes apart.
 static BYTE* g_relay = nullptr;
-#define RELAY_SLOTS 18
+#define RELAY_SLOTS 19
 
 static bool CallTo(unsigned int site, BYTE* target, unsigned char out[5])
 {
@@ -1067,7 +1080,7 @@ bool SimPatches_Install()
                               (void*)&DetUiRoutine, (void*)&DetPrepare, (void*)&DetPieceSpeed, (void*)&DetWeather, (void*)&DetRoadWeather,
                               (void*)&DetBuildingLinks, (void*)&DetConnectionChecks, (void*)&DetGroundPaint, (void*)&DetDisplayCost,
                               (void*)&DetPlacePress, (void*)&DetBuyPress, (void*)&DetStopPickVehicle, (void*)&DetStopPickLine,
-                              (void*)&DetLineMark };
+                              (void*)&DetLineMark, (void*)&DetDepotMark };
         for (int i = 0; i < RELAY_SLOTS; i++) {
             BYTE* r = g_relay + i * 16;
             r[0] = 0xff; r[1] = 0x25; r[2] = r[3] = r[4] = r[5] = 0;
@@ -1102,6 +1115,7 @@ bool SimPatches_Install()
         }
     }
     bool tools = relays && InstallToolStubs();
+    GameCalls_Install(); // window buttons; a site that differs is only left alone
     Logf("republicmp  SIM_PATCHES: late hook %d, relays %d (building visibility, saplings, render before Early, interface searches, Prepare at speed 0, window cost display, placing press, buy press, route tools), tool stubs %d (%d calls)%s",
          late, relays, tools, (int)TOOL_CALL_COUNT, sitesOk ? "" : " - unexpected bytes at a relay site");
     return late && relays && tools;

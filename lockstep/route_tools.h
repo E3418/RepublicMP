@@ -17,6 +17,12 @@
 // an allowed click becomes a command: every PC makes the tool's click steps
 // (498990 test, 1aa540 home test, 497b10 line, 3bb330 start with Ctrl).
 //
+// vehicle_godepo / vehicle_godepo_batch (2b2dd0) send the vehicle +d298 (or a
+// depot's own vehicles) to a picked depot. In a session the tool runs with the
+// click hidden; its mark (40bd60 at 2b3790) gives the depot and, from the
+// tool's frame, the vehicles it listed: one command, and every PC makes the
+// tool's sending steps with the game's own routines and tests.
+//
 // The line window's "New stop" edits the window's working copy (+270), which
 // only the clicking PC holds: that stays local.
 #pragma once
@@ -36,6 +42,13 @@ unsigned __int64 RouteTools_StopPick(int kind, unsigned __int64 world, unsigned 
 unsigned __int64 RouteTools_LineCopyTool(unsigned __int64 world);
 unsigned __int64 RouteTools_LineMark(unsigned __int64 world, unsigned __int64 vehicle, unsigned __int64 a3,
                                      unsigned __int64 refused);
+
+// The depot tool's call (the tool stubs of 31426f and 314291) and its mark
+// (2b3790; the relay passes its caller's rsp and return address).
+unsigned __int64 RouteTools_DepotTool(unsigned __int64 world, unsigned __int64 batch);
+unsigned __int64 RouteTools_DepotMark(unsigned __int64 world, unsigned __int64 depot, unsigned __int64 a3,
+                                      unsigned __int64 a4, unsigned __int64 a5, unsigned __int64 callerRsp,
+                                      unsigned __int64 returnTo);
 
 // The command (lockstep/commands).
 bool RouteTools_ApplyCommand(const void* data, size_t size);

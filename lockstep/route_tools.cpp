@@ -4,6 +4,7 @@
 // 1.1.1.9).
 #include "route_tools.h"
 #include "commands.h"
+#include "world_refs.h"
 #include <string.h>
 
 #define WORLD_RVA 0x9D4F10
@@ -17,14 +18,10 @@
 #define LINE_WINDOWS_RVA 0x9E19D0 // the line windows (a vector of window pointers)
 #define LINE_WINDOW_COPY 0x270    // a line window's working copy
 #define LINES_OFFSET 0x12800      // the lines manager: +0 and +18 line vectors
-#define VEHICLES_OFFSET 0x12810
-#define BUILDINGS_OFFSET 0x11B08
-#define NODE_LIST 0x298           // a network's nodes
 #define PRESS_RVA 0xA54E91        // the left press, as the tools read it
 #define CTRL_RVA 0xA54BAD         // the left Ctrl key
 #define STAND_IN_BYTES 0x400
 
-static const unsigned kNodeFields[2] = { 0xF908, 0xFA28 };
 static const unsigned kStopTools[2] = { 0x2B2760, 0x2B4A50 };
 #define LINE_COPY_TOOL 0x2B4C60
 #define LINE_MARK 0x40CDE0
@@ -32,10 +29,17 @@ static const unsigned kStopTools[2] = { 0x2B2760, 0x2B4A50 };
 #define LINE_HOME_TEST 0x1AA540
 #define LINE_PUT 0x497B10
 #define LINE_START 0x3BB330
+#define DEPOT_TOOL 0x2B2DD0
+#define DEPOT_MARK 0x40BD60
+#define DEPOT_MARK_RETURN 0x2B3795 // after the mark's call at 2b3790
+#define DEPOT_LIST_BEGIN (0x100 - 0x58) // the tool's vehicle list, from the mark caller's rsp
+#define DEPOT_LIST_END (0x100 - 0x50)
+#define DEPOT_MAX 64
 
 struct RoutineEntry {
     unsigned rva;
     unsigned char entry[16];
+    size_t size; // 0: all 16 bytes
 };
 static const RoutineEntry kRoutines[] = {
     { 0x2B5120, { 0x4c, 0x89, 0x4c, 0x24, 0x20, 0x44, 0x89, 0x44, 0x24, 0x18, 0x89, 0x54, 0x24, 0x10, 0x48, 0x89 } },
@@ -47,9 +51,23 @@ static const RoutineEntry kRoutines[] = {
     { 0x1AA540, { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0x9a, 0xf8, 0x04, 0x00 } },
     { 0x3BB330, { 0x48, 0x89, 0x5c, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x50, 0x83, 0xb9, 0xbc, 0x05, 0x00, 0x00 } },
     { 0x497B10, { 0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x81, 0xec, 0xf0 } },
+    // The depot tool's frame (mov rax,rsp; five pushes; lea rbp,[rax-108h]) and its mark.
+    { 0x2B2DD0, { 0x48, 0x8b, 0xc4, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8d, 0xa8, 0xf8 } },
+    { 0x2B2DE0, { 0xfe, 0xff, 0xff, 0x48, 0x81, 0xec, 0xe0, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, 10 },
+    { 0x40BD60, { 0x40, 0x55, 0x53, 0x56, 0x57, 0x48, 0x8d, 0xac, 0x24, 0xf8, 0xe5, 0xff, 0xff, 0xb8, 0x08, 0x1b } },
+    // The sending steps.
+    { 0x68B2B0, { 0x48, 0x8b, 0x81, 0x08, 0x17, 0x00, 0x00, 0x48, 0x85, 0xc0, 0x74, 0x29, 0xf3, 0x0f, 0x10, 0x05 } },
+    { 0x3E2900, { 0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18, 0x44, 0x88, 0x4c, 0x24, 0x20, 0x56 } },
+    { 0x3E3F40, { 0x44, 0x89, 0x4c, 0x24, 0x20, 0x53, 0x56, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x48, 0x83, 0xec } },
+    { 0x3BB640, { 0x4d, 0x8b, 0xd0, 0x48, 0x85, 0xd2, 0x75, 0x03, 0x32, 0xc0, 0xc3, 0x48, 0x8b, 0x82, 0xb0, 0x05 } },
+    { 0x3A38F0, { 0x48, 0x8b, 0x82, 0x48, 0x0a, 0x00, 0x00, 0x45, 0x33, 0xc0, 0x48, 0x2b, 0x82, 0x40, 0x0a, 0x00 } },
+    { 0x3A3830, { 0x45, 0x33, 0xd2, 0x0f, 0x28, 0xd9, 0x45, 0x85, 0xc9, 0x79, 0x56, 0x49, 0x8b, 0x80, 0x48, 0x0a } },
+    { 0x6DE260, { 0x40, 0x57, 0x48, 0x83, 0xec, 0x40, 0x83, 0xb9, 0x04, 0x1a, 0x00, 0x00, 0x03, 0x48, 0x8b, 0xf9 } },
+    { 0x1AE130, { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0xd9, 0x00, 0x00, 0x00, 0x48, 0x89, 0x5c, 0x24, 0x10, 0x57, 0x48 } },
+    { 0x6B7070, { 0x48, 0x89, 0x54, 0x24, 0x10, 0x55, 0x56, 0x57, 0x48, 0x81, 0xec, 0xe0, 0x01, 0x00, 0x00, 0x48 } },
+    { 0x6B7420, { 0x40, 0x56, 0x41, 0x57, 0x48, 0x83, 0xec, 0x28, 0x48, 0x89, 0x5c, 0x24, 0x40, 0x4d, 0x8b, 0xf8 } },
 };
 
-typedef unsigned __int64 U64;
 typedef U64 (*PickFn)(U64, U64, U64, U64, U64, U64, U64*, U64*);
 typedef U64 (*ToolFn)(U64 world);
 typedef U64 (*MarkFn)(U64 world, U64 vehicle, U64 a3, U64 refused);
@@ -73,7 +91,7 @@ bool RouteTools_Ready()
     if (g_ready < 0) {
         g_ready = 1;
         for (const RoutineEntry& e : kRoutines) {
-            if (memcmp(g_exeBase + e.rva, e.entry, sizeof(e.entry)) != 0) {
+            if (memcmp(g_exeBase + e.rva, e.entry, e.size ? e.size : sizeof(e.entry)) != 0) {
                 Logf("republicmp  ROUTE: game routine at 0x%X differs - the route tools are put away in lockstep", e.rva);
                 g_ready = 0;
                 break;
@@ -87,20 +105,11 @@ static BYTE* World() { return g_exeBase + WORLD_RVA; }
 static U64 Q(U64 at) { return *(U64*)at; }
 
 // ---------------------------------------------------------------------------
-// Identities the same on every PC
+// Commands
 // ---------------------------------------------------------------------------
-//
-// In lockstep the world's lists are the same on every PC: an object travels as
-// its place in its list and a check.
 
 #pragma pack(push, 1)
-struct RouteRef {
-    unsigned list;  // a line: 0 or 1 (the manager's +0 / +18); a node: the network's field
-    int place;      // -1: none
-    unsigned check; // a building's or vehicle's id, an FNV of a line's or node's words
-};
-
-enum { ROUTE_VEHICLE_STOP = 0, ROUTE_LINE_STOP = 1, ROUTE_LINE_COPY = 2 };
+enum { ROUTE_VEHICLE_STOP = 0, ROUTE_LINE_STOP = 1, ROUTE_LINE_COPY = 2, ROUTE_DEPOT = 3 };
 
 struct RouteMsg {
     unsigned kind;
@@ -113,121 +122,16 @@ struct RouteMsg {
     RouteRef subject; // line copy: the window's vehicle, or none
     unsigned char ctrl;
 };
+
+// The depot tool: the depot and the vehicles the tool listed, in its order.
+struct DepotMsg {
+    unsigned kind; // ROUTE_DEPOT
+    unsigned count;
+    RouteRef depot;
+    RouteRef vehicles[DEPOT_MAX];
+};
 #pragma pack(pop)
 
-static unsigned Fnv(const unsigned* words, int n)
-{
-    unsigned h = 2166136261u;
-    for (int i = 0; i < n; i++)
-        for (int b = 0; b < 4; b++) {
-            h ^= (words[i] >> (8 * b)) & 0xffu;
-            h *= 16777619u;
-        }
-    return h | 1u;
-}
-
-static bool Find(U64 vector, U64 object, int* place)
-{
-    U64 begin = Q(vector), end = Q(vector + 8);
-    if (!begin || end < begin) return false;
-    for (U64 at = begin; at < end; at += 8)
-        if (Q(at) == object) {
-            *place = (int)((at - begin) / 8);
-            return true;
-        }
-    return false;
-}
-
-static U64 At(U64 vector, int place)
-{
-    U64 begin = Q(vector), end = Q(vector + 8);
-    if (!begin || place < 0 || end < begin || (U64)place >= (end - begin) / 8) return 0;
-    return Q(begin + (U64)place * 8);
-}
-
-static bool VehicleRef(U64 vehicle, RouteRef& r)
-{
-    r.list = 0;
-    if (!vehicle || !Find((U64)World() + VEHICLES_OFFSET, vehicle, &r.place)) return false;
-    r.check = *(unsigned*)(vehicle + 4);
-    return true;
-}
-
-static U64 VehicleAt(const RouteRef& r)
-{
-    U64 v = At((U64)World() + VEHICLES_OFFSET, r.place);
-    return v && *(unsigned*)(v + 4) == r.check ? v : 0;
-}
-
-static bool BuildingRef(U64 building, RouteRef& r)
-{
-    r.list = 0;
-    if (!building || !Find((U64)World() + BUILDINGS_OFFSET, building, &r.place)) return false;
-    r.check = *(unsigned*)building;
-    return true;
-}
-
-static U64 BuildingAt(const RouteRef& r)
-{
-    U64 b = At((U64)World() + BUILDINGS_OFFSET, r.place);
-    return b && *(unsigned*)b == r.check ? b : 0;
-}
-
-static unsigned LineCheck(U64 line)
-{
-    unsigned w[3] = { 0x4c494e45u, *(unsigned*)(line + 4), *(unsigned*)(line + 8) };
-    return Fnv(w, 3);
-}
-
-static bool LineRef(U64 line, RouteRef& r)
-{
-    U64 lines = Q((U64)World() + LINES_OFFSET);
-    if (!line || !lines) return false;
-    for (unsigned k = 0; k < 2; k++)
-        if (Find(lines + k * 0x18, line, &r.place)) {
-            r.list = k;
-            r.check = LineCheck(line);
-            return true;
-        }
-    return false;
-}
-
-static U64 LineAt(const RouteRef& r)
-{
-    U64 lines = Q((U64)World() + LINES_OFFSET);
-    if (!lines || r.list > 1) return 0;
-    U64 l = At(lines + r.list * 0x18, r.place);
-    return l && LineCheck(l) == r.check ? l : 0;
-}
-
-static unsigned NodeCheck(U64 node)
-{
-    unsigned w[3] = { 0x4e4f4445u, *(unsigned*)(node + 4), *(unsigned*)(node + 0xc) };
-    return Fnv(w, 3);
-}
-
-static bool NodeRef(U64 node, RouteRef& r)
-{
-    for (unsigned field : kNodeFields) {
-        U64 net = Q((U64)World() + field);
-        if (net && Find(net + NODE_LIST, node, &r.place)) {
-            r.list = field;
-            r.check = NodeCheck(node);
-            return true;
-        }
-    }
-    return false;
-}
-
-static U64 NodeAt(const RouteRef& r)
-{
-    if (r.list != kNodeFields[0] && r.list != kNodeFields[1]) return 0;
-    U64 net = Q((U64)World() + r.list);
-    U64 n = net ? At(net + NODE_LIST, r.place) : 0;
-    return n && NodeCheck(n) == r.check ? n : 0;
-}
-
-static const RouteRef kNone = { 0, -1, 0 };
 
 static const char* KindText(unsigned kind)
 {
@@ -235,6 +139,7 @@ static const char* KindText(unsigned kind)
     case ROUTE_VEHICLE_STOP: return "a vehicle's stop";
     case ROUTE_LINE_STOP: return "a line's stop";
     case ROUTE_LINE_COPY: return "a vehicle on a line";
+    case ROUTE_DEPOT: return "vehicles sent to a depot";
     }
     return "?";
 }
@@ -268,12 +173,12 @@ static const char* CaptureStop(int kind, U64 building, U64 node, RouteMsg& m)
     memset(&m, 0, sizeof(m));
     m.kind = kind == 0 ? ROUTE_VEHICLE_STOP : ROUTE_LINE_STOP;
     m.origin = g_origin;
-    m.building = m.node = m.vehicle = m.subject = kNone;
+    m.building = m.node = m.vehicle = m.subject = kNoRef;
     if (!object || !window) return "no window";
     m.index = *(int*)(window + WINDOW_INDEX);
-    if (kind == 0 ? !VehicleRef(object, m.object) : !LineRef(object, m.object)) return kind == 0 ? "the vehicle" : "the line";
-    if (building && !BuildingRef(building, m.building)) return "the building";
-    if (node && !NodeRef(node, m.node)) return "the node";
+    if (kind == 0 ? !Ref_Vehicle(object, m.object) : !Ref_Line(object, m.object)) return kind == 0 ? "the vehicle" : "the line";
+    if (building && !Ref_Building(building, m.building)) return "the building";
+    if (node && !Ref_Node(node, m.node)) return "the node";
     if (!building && !node) return "nothing picked";
     return nullptr;
 }
@@ -352,12 +257,87 @@ U64 RouteTools_LineCopyTool(U64 world)
     m.kind = ROUTE_LINE_COPY;
     m.origin = g_origin;
     m.index = 0;
-    m.building = m.node = m.subject = kNone;
+    m.building = m.node = m.subject = kNoRef;
     m.ctrl = ctrl ? 1 : 0;
     __try {
-        if (!LineRef(Q(world + TARGET_OFFSET), m.object)) Refused(what, "the line");
-        else if (!VehicleRef(g_markVehicle, m.vehicle)) Refused(what, "the vehicle");
-        else if (subject && !VehicleRef(subject, m.subject)) Refused(what, "the window's vehicle");
+        if (!Ref_Line(Q(world + TARGET_OFFSET), m.object)) Refused(what, "the line");
+        else if (!Ref_Vehicle(g_markVehicle, m.vehicle)) Refused(what, "the vehicle");
+        else if (subject && !Ref_Vehicle(subject, m.subject)) Refused(what, "the window's vehicle");
+        else Commands_Submit(LS_CMD_ROUTE, &m, sizeof(m));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Refused(what, "a fault while reading it");
+    }
+    return r;
+}
+
+// The depot tool (vehicle_godepo, vehicle_godepo_batch) with the click hidden:
+// its mark gives the depot and, from the tool's frame, the vehicles it listed.
+static bool g_depotArmed = false, g_depotSeen = false, g_depotOverflow = false;
+static U64 g_depot = 0;
+static U64 g_depotList[DEPOT_MAX];
+static unsigned g_depotCount = 0;
+
+U64 RouteTools_DepotMark(U64 world, U64 depot, U64 a3, U64 a4, U64 a5, U64 callerRsp, U64 returnTo)
+{
+    if (g_depotArmed && !g_depotSeen) {
+        g_depotSeen = true;
+        g_depot = depot;
+        __try {
+            if (returnTo == (U64)(g_exeBase + DEPOT_MARK_RETURN)) {
+                U64 begin = Q(callerRsp + DEPOT_LIST_BEGIN), end = Q(callerRsp + DEPOT_LIST_END);
+                if (begin && end >= begin && (end - begin) % 8 == 0) {
+                    U64 n = (end - begin) / 8;
+                    if (n > DEPOT_MAX) g_depotOverflow = true;
+                    else {
+                        for (U64 i = 0; i < n; i++) g_depotList[i] = Q(begin + i * 8);
+                        g_depotCount = (unsigned)n;
+                    }
+                }
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            g_depotCount = 0;
+        }
+    }
+    typedef U64 (*DepotMarkFn)(U64, U64, U64, U64, U64);
+    return ((DepotMarkFn)(g_exeBase + DEPOT_MARK))(world, depot, a3, a4, a5);
+}
+
+U64 RouteTools_DepotTool(U64 world, U64 batch)
+{
+    typedef U64 (*DepotToolFn)(U64, U64);
+    DepotToolFn tool = (DepotToolFn)(g_exeBase + DEPOT_TOOL);
+    BYTE* press = g_exeBase + PRESS_RVA;
+    if (!*press || !Commands_TakeLocal()) return tool(world, batch);
+    BYTE kept = *press;
+    *press = 0;
+    g_depotArmed = true;
+    g_depotSeen = g_depotOverflow = false;
+    g_depot = 0;
+    g_depotCount = 0;
+    U64 r = tool(world, batch);
+    g_depotArmed = false;
+    *press = kept;
+    if (!g_depotSeen || !g_depot || (!g_depotCount && !g_depotOverflow)) return r;
+    const char* what = KindText(ROUTE_DEPOT);
+    if (g_depotOverflow) {
+        Refused(what, "more vehicles than a command carries");
+        return r;
+    }
+    if (!RouteTools_Ready()) {
+        Refused(what, "a game routine differs");
+        return r;
+    }
+    DepotMsg m;
+    memset(&m, 0, sizeof(m));
+    m.kind = ROUTE_DEPOT;
+    m.count = g_depotCount;
+    for (unsigned i = 0; i < DEPOT_MAX; i++) m.vehicles[i] = kNoRef;
+    __try {
+        const char* why = nullptr;
+        if (!Ref_Building(g_depot, m.depot)) why = "the depot";
+        for (unsigned i = 0; !why && i < g_depotCount; i++)
+            if (!Ref_Vehicle(g_depotList[i], m.vehicles[i])) why = "a vehicle";
+        if (why) Refused(what, why);
         else Commands_Submit(LS_CMD_ROUTE, &m, sizeof(m));
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         Refused(what, "a fault while reading it");
@@ -378,11 +358,11 @@ static BYTE g_standInWindow[STAND_IN_BYTES], g_standInTool[STAND_IN_BYTES];
 static const char* ApplyStop(const RouteMsg& m, int* used)
 {
     U64 world = (U64)World();
-    U64 object = m.kind == ROUTE_VEHICLE_STOP ? VehicleAt(m.object) : LineAt(m.object);
+    U64 object = m.kind == ROUTE_VEHICLE_STOP ? Ref_VehicleAt(m.object) : Ref_LineAt(m.object);
     if (!object) return m.kind == ROUTE_VEHICLE_STOP ? "the vehicle is gone" : "the line is gone";
     U64 building = 0, node = 0;
-    if (m.building.place >= 0 && !(building = BuildingAt(m.building))) return "the building is gone";
-    if (m.node.place >= 0 && !(node = NodeAt(m.node))) return "the node is gone";
+    if (m.building.place >= 0 && !(building = Ref_BuildingAt(m.building))) return "the building is gone";
+    if (m.node.place >= 0 && !(node = Ref_NodeAt(m.node))) return "the node is gone";
     if (!building && !node) return "nothing picked";
     static const unsigned kMenus[3] = MENU_OFFSETS;
     U64 own298 = Q(world + TARGET_OFFSET), own2a0 = Q(world + WINDOW_OFFSET), own428 = Q(world + SELECTED_OFFSET);
@@ -420,10 +400,13 @@ static const char* ApplyStop(const RouteMsg& m, int* used)
 static const char* ApplyLineCopy(const RouteMsg& m, int* result)
 {
     U64 world = (U64)World();
-    U64 line = LineAt(m.object), vehicle = VehicleAt(m.vehicle), subject = 0;
-    if (!line) return "the line is gone";
+    U64 line = Ref_LineAt(m.object), vehicle = Ref_VehicleAt(m.vehicle), subject = 0;
+    if (!line) {
+        Logf("republicmp  ROUTE: the line (list %u, place %d) is not in this PC's lines manager", m.object.list, m.object.place);
+        return "the line is gone";
+    }
     if (!vehicle) return "the vehicle is gone";
-    if (m.subject.place >= 0 && !(subject = VehicleAt(m.subject))) return "the window's vehicle is gone";
+    if (m.subject.place >= 0 && !(subject = Ref_VehicleAt(m.subject))) return "the window's vehicle is gone";
     U64 lines = Q(world + LINES_OFFSET);
     if (!lines) return "no lines manager";
     *result = -1;
@@ -439,9 +422,81 @@ static const char* ApplyLineCopy(const RouteMsg& m, int* result)
     return nullptr;
 }
 
+// The depot tool's sending steps (2b380b..2b3a63), last listed vehicle first.
+static const char* ApplyDepot(const DepotMsg& m, unsigned* sent)
+{
+    typedef unsigned char (*UnusableFn)(U64 vehicle);
+    typedef unsigned char (*DepotTypeFn)(U64 world, U64 depot, U64 type, U64, U64);
+    typedef unsigned char (*LinkedFn)(U64, U64 depot, U64 vehicle, U64);
+    typedef int (*SlotFn)(U64, U64 depot);
+    typedef unsigned char (*SlotFitsFn)(U64, float, U64 depot, int);
+    typedef void (*UnloadFn)(U64 vehicle);
+    typedef unsigned char (*AtHomeFn)(U64, U64 vehicle);
+    typedef void (*RouteFn)(U64 world, U64, U64 vehicle, U64);
+    typedef void (*SendFn)(U64 vehicle, U64 depot);
+    typedef void (*SendResultFn)(U64 vehicle, U64 depot, int*, int*);
+    U64 world = (U64)World();
+    U64 depot = Ref_BuildingAt(m.depot);
+    if (!depot) return "the depot is gone";
+    if (!m.count || m.count > DEPOT_MAX) return "no vehicles";
+    U64 list[DEPOT_MAX] = {};
+    for (unsigned i = 0; i < m.count; i++)
+        if (!(list[i] = Ref_VehicleAt(m.vehicles[i]))) return "a vehicle is gone";
+    *sent = 0;
+    __try {
+        for (unsigned k = m.count; k-- > 0;) {
+            U64 v = list[k];
+            U64 type = Q(v + 0x1708);
+            if (m.count > 1 && *(unsigned*)(type + 0x294) != 1) continue;
+            if (((UnusableFn)(g_exeBase + 0x68B2B0))(v)) continue;
+            if (!((DepotTypeFn)(g_exeBase + 0x3E2900))(world, depot, type, 0, 0) ||
+                !((DepotTypeFn)(g_exeBase + 0x3E3F40))(world, depot, type, 0, 0))
+                continue;
+            if (*(BYTE*)(Q(v + 0x1710) + 0x25C)) {
+                float load = *(float*)(type + 0x7A78);
+                for (U64 at = Q(v + 0x3A0); at < Q(v + 0x3A8); at += 8) load += *(float*)(Q(Q(at) + 0x1708) + 0x7A78);
+                if (((LinkedFn)(g_exeBase + 0x3BB640))(0, depot, v, 0) && load > *(float*)(Q(depot + 0x318) + 0x9E4))
+                    continue;
+            }
+            if (Q(v + 0x4F8) == depot) continue;
+            if (!Q(depot + 0x5D0) && *(unsigned*)(type + 0x294) == 6) {
+                int slot = ((SlotFn)(g_exeBase + 0x3A38F0))(0, depot);
+                if (slot < 0 || !((SlotFitsFn)(g_exeBase + 0x3A3830))(0, *(float*)(type + 0x7A78), depot, slot)) continue;
+            }
+            U64 dt = Q(depot + 0x318);
+            if (dt && *(unsigned*)(dt + 0x360) == 0x2B && Q(v + 0x490) != Q(v + 0x488)) continue;
+            if (*(unsigned*)(type + 0x294) == 8 && Q(v + 0xC80)) continue;
+            if (*(unsigned*)(type + 0x294) == 0xA && *(unsigned*)(v + 0x1A04) == 3) ((UnloadFn)(g_exeBase + 0x6DE260))(v);
+            if (Q(v + 0x4F8) && !((AtHomeFn)(g_exeBase + 0x1AA540))(0, v)) {
+                *(U64*)(v + 0x600) = depot;
+                U64 route = Q(v + 0x1AD0);
+                if (!route) continue;
+                ((RouteFn)(g_exeBase + 0x1AE130))(world, route, v, 0);
+            } else {
+                ((SendFn)(g_exeBase + 0x6B7070))(v, depot);
+                int a = -1, c = -1;
+                ((SendResultFn)(g_exeBase + 0x6B7420))(v, depot, &a, &c);
+            }
+            ++*sent;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return "the steps faulted";
+    }
+    return nullptr;
+}
+
 bool RouteTools_ApplyCommand(const void* data, size_t size)
 {
-    if (size != sizeof(RouteMsg) || !RouteTools_Ready()) return false;
+    if (!RouteTools_Ready()) return false;
+    if (size == sizeof(DepotMsg) && *(const unsigned*)data == ROUTE_DEPOT) {
+        DepotMsg d;
+        memcpy(&d, data, sizeof(d));
+        unsigned sent = 0;
+        const char* why = ApplyDepot(d, &sent);
+        Logf("republicmp  ROUTE: %s (%u listed, %u sent): %s", KindText(ROUTE_DEPOT), d.count, sent, why ? why : "done");
+        return why == nullptr;
+    }
+    if (size != sizeof(RouteMsg)) return false;
     RouteMsg m;
     memcpy(&m, data, sizeof(m));
     const char* why = nullptr;

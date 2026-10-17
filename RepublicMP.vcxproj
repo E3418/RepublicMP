@@ -184,6 +184,10 @@
     <ClCompile Include="lockstep\commands.cpp" />
     <ClCompile Include="lockstep\purchase.cpp" />
     <ClCompile Include="lockstep\route_tools.cpp" />
+    <ClCompile Include="lockstep\world_refs.cpp" />
+    <ClCompile Include="lockstep\game_calls.cpp" />
+    <ClCompile Include="lockstep\line_accept.cpp" />
+    <ClCompile Include="lockstep\vehicle_switches.cpp" />
     <ClCompile Include="lockstep\lockstep_net.cpp" />
     <ClCompile Include="determinism\determinism.cpp" />
     <ClCompile Include="determinism\sim_patches.cpp" />
@@ -237,6 +241,10 @@
     <ClInclude Include="lockstep\commands.h" />
     <ClInclude Include="lockstep\purchase.h" />
     <ClInclude Include="lockstep\route_tools.h" />
+    <ClInclude Include="lockstep\world_refs.h" />
+    <ClInclude Include="lockstep\game_calls.h" />
+    <ClInclude Include="lockstep\line_accept.h" />
+    <ClInclude Include="lockstep\vehicle_switches.h" />
     <ClInclude Include="lockstep\lockstep_net.h" />
     <ClInclude Include="determinism\determinism.h" />
     <ClInclude Include="determinism\sim_patches.h" />
