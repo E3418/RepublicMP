@@ -163,6 +163,59 @@ static void DrawJunctions()
     }
 }
 
+// Early's building pass (139a70) moves the doors of the buildings on camera
+// itself: 138b90(building, seconds) steps each door's opening (+1238, +1250)
+// toward the vehicles at it and queues the door meshes on the frame's render
+// list ([exe+995268]+a8), which every frame empties. A held frame has no Early,
+// so the doors were drawn on tick frames only and blinked; the held frame
+// queues them with no time step (the openings stay as the last tick left
+// them). A building whose openings the pass has not sized yet is left out
+// (the call would allocate them on this PC only).
+#define BUILDINGS_BEGIN_RVA 0x9E6A18
+#define BUILDINGS_END_RVA 0x9E6A20
+#define ENGINE_RVA 0x9941F0       // engine object: +ff8 models, +ee0 map quadtree
+#define FRAGMENT_IMPORT 0x86CFB8  // a model's fragment
+#define GETNODE_IMPORT 0x86C560   // the quadtree's node of a fragment (+25: visible)
+static int g_doorsChecked = -1;
+
+static size_t Count(const BYTE* vector, size_t elem)
+{
+    uintptr_t begin = *(const uintptr_t*)vector, end = *(const uintptr_t*)(vector + 8);
+    return begin && end > begin && (end - begin) % elem == 0 ? (end - begin) / elem : 0;
+}
+
+static void DrawDoors()
+{
+    if (g_doorsChecked < 0) {
+        static const unsigned char list[14] = { 0x48, 0x8b, 0x1d, 0xe2, 0xbc, 0x85, 0x00, 0x48, 0x81, 0xc3, 0xa8, 0x00, 0x00, 0x00 };
+        g_doorsChecked = CallTargets(0x13DB61, 0x138B90) && memcmp(g_exeBase + 0x13957F, list, sizeof(list)) == 0 ? 1 : 0;
+        if (!g_doorsChecked) Logf("republicmp  HELD FRAME: Early's door drawing differs - doors drawn on tick frames only");
+    }
+    if (!g_doorsChecked) return;
+    typedef BYTE* (*FragmentFn)(void* models, int model, int variant);
+    typedef BYTE* (*GetNodeFn)(void* tree, int index);
+    FragmentFn fragment = *(FragmentFn*)(g_exeBase + FRAGMENT_IMPORT);
+    GetNodeFn getNode = *(GetNodeFn*)(g_exeBase + GETNODE_IMPORT);
+    __try {
+        BYTE* engine = *(BYTE**)(g_exeBase + ENGINE_RVA);
+        BYTE** it = *(BYTE***)(g_exeBase + BUILDINGS_BEGIN_RVA);
+        BYTE** end = *(BYTE***)(g_exeBase + BUILDINGS_END_RVA);
+        for (; engine && it && it < end; ++it) {
+            BYTE* b = *it;
+            BYTE* type = b ? *(BYTE**)(b + 0x318) : nullptr;
+            // As the pass (13db03..13db61): a finished building (+604 1.0, no site +5d0) with doors.
+            if (!type || *(float*)(b + 0x604) != 1.0f || *(void**)(b + 0x5D0)) continue;
+            size_t doors = Count(type + 0xA18, 0x28), passages = Count(type + 0xA30, 0x30);
+            if (!doors && !passages) continue;
+            if (Count(b + 0x1238, 4) != doors || Count(b + 0x1250, 4) != passages) continue;
+            BYTE* f = fragment(*(void**)(engine + 0xFF8), *(int*)(type + 0x410), *(int*)(b + 0x5F4));
+            BYTE* node = f ? getNode(*(void**)(engine + 0xEE0), *(int*)(f + 0x3C)) : nullptr;
+            if (node && node[0x25]) ((void (*)(void*, float))(g_exeBase + 0x138B90))(b, 0.0f);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
 // Early (30cb74..30cf4e) normally starts and joins this worker. On a held
 // frame its simulation vector exe+9e7738 and the queues at [9e7710]+60 and
 // [9e2350]+40 are empty. The vehicle render vector stays visible under the
@@ -197,6 +250,13 @@ bool HeldFrame_Draw(bool entitiesReady)
             *(int*)(g_exeBase + 0x9D54CC) = 0;
         }
     }
+    // Early queues the junctions and doors before it starts the worker, whose
+    // vehicle builders push to the same render lists (+a8, +1f8, +258).
+    if (entitiesReady) {
+        Determinism_PrivateScope privateRng;
+        DrawJunctions();
+        DrawDoors();
+    }
     BYTE* queue = *(BYTE**)(g_exeBase + 0x9E7710);
     BYTE* paths = *(BYTE**)(g_exeBase + 0x9E2350);
     BYTE* headers[] = { g_exeBase + 0x9E7738, queue ? queue + 0x60 : nullptr, paths ? paths + 0x40 : nullptr };
@@ -213,7 +273,6 @@ bool HeldFrame_Draw(bool entitiesReady)
     }
     if (entitiesReady) {
         Determinism_PrivateScope privateRng;
-        DrawJunctions();
         BYTE* world = g_exeBase + 0x9D4F10;
         BYTE* list = world + (g_exeBase[0xA54BB5] ? 0x126A8 : 0x126C0);
         ((void (*)(void*, void*))(g_exeBase + 0x83CEA0))(nullptr, list);
