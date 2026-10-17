@@ -76,5 +76,11 @@ void SettingsSync_SetFieldDiff(bool on);
 #define SETTINGS_FIELD_STOP 2001
 void SettingsSync_LockstepBaseline();
 void SettingsSync_LockstepDetect();
+
+// The words this sync carries itself, with its follow-up steps (lockstep/
+// building_switches leaves them to it): a building word at `offset`, and a
+// storage slot's word (region 0 the slot's own bytes, 2 its +18 entries).
+bool SettingsSync_OwnsBuildingWord(unsigned offset);
+bool SettingsSync_OwnsSlotWord(unsigned slot, unsigned region, unsigned local);
 bool SettingsSync_ApplyCommand(const SettingWire& w);
 bool SettingsSync_GetFieldDiff();

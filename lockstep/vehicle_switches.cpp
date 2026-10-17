@@ -82,6 +82,7 @@ struct Snap {
 static std::vector<Snap> g_snaps;
 static std::vector<BYTE> g_bytes;
 static bool g_taken = false, g_click = false;
+static unsigned long long g_epoch = 0;
 static unsigned g_frame = 0;
 // Words the interface changes without a click, per kind (word index within one record).
 static std::vector<bool> g_noise[KIND_COUNT];
@@ -224,6 +225,7 @@ void VehicleSwitches_Before(bool simBusy)
     g_click = Clicked();
     // Frames without a click are compared now and then, to learn the interface's own changes.
     if (!g_click && (++g_frame % SAMPLE_EVERY) != 0) return;
+    g_epoch = Commands_ApplyEpoch();
     g_taken = TakeSnapshot();
 }
 
@@ -231,7 +233,7 @@ void VehicleSwitches_After(bool simBusy)
 {
     if (!g_taken) return;
     g_taken = false;
-    if (simBusy || !Commands_TakeUi()) return;
+    if (simBusy || !Commands_TakeUi() || Commands_ApplyEpoch() != g_epoch) return;
     for (const Snap& s : g_snaps)
         for (int k = 0; k < KIND_COUNT; k++) Compare(s, k, g_click);
 }

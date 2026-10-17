@@ -447,6 +447,27 @@ static void ReadLsBuilding(BYTE* b, LsBuilding& s)
     }
 }
 
+static bool Overlaps(unsigned offset, int at, int size)
+{
+    return (int)offset + 4 > at && (int)offset < at + size;
+}
+
+bool SettingsSync_OwnsBuildingWord(unsigned offset)
+{
+    for (int f = 0; f < kFieldCount; f++)
+        if (kFields[f].kind == FIELD_BYTES && Overlaps(offset, kFields[f].offset, kFields[f].size)) return true;
+    return Overlaps(offset, BLD_PAY_OFFSET, 2) || Overlaps(offset, BLD_STOPPED_OFFSET, 1);
+}
+
+bool SettingsSync_OwnsSlotWord(unsigned slot, unsigned region, unsigned local)
+{
+    if (region == 2) return (local % SLOT_ENTRY_SIZE) >= 8; // share and enabled of each entry
+    if (region != 0 || slot != 0) return false;
+    for (int f = 0; f < kFieldCount; f++)
+        if (kFields[f].kind == FIELD_SLOT0 && Overlaps(local, kFields[f].offset, kFields[f].size)) return true;
+    return false;
+}
+
 void SettingsSync_LockstepBaseline()
 {
     g_lsList.resize(200000);

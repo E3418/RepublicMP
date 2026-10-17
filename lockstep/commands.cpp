@@ -16,6 +16,7 @@
 #include "line_accept.h"
 #include "world_refs.h"
 #include "vehicle_switches.h"
+#include "building_switches.h"
 #include <vector>
 #include <string.h>
 
@@ -28,6 +29,7 @@ void Commands_Bind(const TsmHost* host)
     LineAccept_Bind(host);
     WorldRefs_Bind(host);
     VehicleSwitches_Bind(host);
+    BuildingSwitches_Bind(host);
 }
 
 struct Command {
@@ -47,6 +49,7 @@ static volatile bool g_capturing = false;
 static bool g_replaying = false;
 static volatile LONG g_applying = 0;
 static DWORD g_applyThread = 0;
+static volatile LONG64 g_applyEpoch = 0;
 static unsigned g_seq = 0;
 static int g_session = COMMANDS_OFF; // in a session the player keeps the host's commands in g_record
 
@@ -74,6 +77,11 @@ bool Commands_TakeLocal()
     return g_capturing && g_applying == 0 && !Determinism_InStepFrame();
 }
 
+unsigned long long Commands_ApplyEpoch()
+{
+    return (unsigned long long)InterlockedCompareExchange64(&g_applyEpoch, 0, 0);
+}
+
 bool Commands_TakeUi()
 {
     return g_capturing && !(g_applying != 0 && GetCurrentThreadId() == g_applyThread);
@@ -98,6 +106,7 @@ static const char* KindName(int kind)
     case LS_CMD_GAME_CALL: return "window button";
     case LS_CMD_LINE_ACCEPT: return "line accept";
     case LS_CMD_VEHICLE_SWITCH: return "vehicle setting";
+    case LS_CMD_BUILDING_SWITCH: return "window setting";
     }
     return "?";
 }
@@ -146,6 +155,7 @@ static void Apply(const Command& c)
     bool ok = false;
     g_applyThread = GetCurrentThreadId();
     InterlockedIncrement(&g_applying);
+    InterlockedIncrement64(&g_applyEpoch);
     double rubBefore = *Rubles(), usdBefore = *Dollars();
     InputBlock_BeginNeutral();
     // A drag the local player has under way would share the tool manager with
@@ -212,6 +222,9 @@ static void Apply(const Command& c)
         break;
     case LS_CMD_VEHICLE_SWITCH:
         ok = VehicleSwitches_ApplyCommand(p, n);
+        break;
+    case LS_CMD_BUILDING_SWITCH:
+        ok = BuildingSwitches_ApplyCommand(p, n);
         break;
     }
     InputBlock_EndNeutral();

@@ -7,6 +7,7 @@
 #include "../lockstep/route_tools.h"
 #include "../lockstep/game_calls.h"
 #include "../lockstep/vehicle_switches.h"
+#include "../lockstep/building_switches.h"
 #include "determinism.h"
 #include <string.h>
 #include <intrin.h>
@@ -839,7 +840,9 @@ static __int64 DetUiRoutine(void* world)
     Determinism_PrivateScope privateRng;
     Determinism_UiSpeedBegin();
     VehicleSwitches_Before(g_inPhase);
+    BuildingSwitches_Before(g_inPhase);
     __int64 r = original(world);
+    BuildingSwitches_After(g_inPhase);
     VehicleSwitches_After(g_inPhase);
     Determinism_UiSpeedEnd();
     memcpy(g_privateSearch, shared, sizeof(saved));

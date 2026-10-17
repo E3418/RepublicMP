@@ -43,6 +43,7 @@ enum LockstepCommandKind {
     LS_CMD_GAME_CALL = 14,   // game_calls.cpp: a window button's routine call
     LS_CMD_LINE_ACCEPT = 15, // line_accept.cpp: the line window's Accept with its working copy
     LS_CMD_VEHICLE_SWITCH = 16, // vehicle_switches.cpp: vehicle words a window click changed
+    LS_CMD_BUILDING_SWITCH = 17, // building_switches.cpp: building, storage slot or world setting words a click changed
 };
 
 // Money a local action changed on this PC (an interface purchase, a terrain
@@ -65,6 +66,10 @@ bool Commands_TakeLocal();
 // For a window's call (the interface, any thread): should it become a command?
 // False only while this thread makes a command.
 bool Commands_TakeUi();
+
+// Counts the commands made so far (any thread): a comparison around the
+// interface that saw it change knows a command, not the interface, wrote.
+unsigned long long Commands_ApplyEpoch();
 
 // Any thread: queues a captured action; it is made at the next boundary.
 void Commands_Submit(int kind, const void* data, size_t size);
