@@ -452,19 +452,32 @@ static bool Overlaps(unsigned offset, int at, int size)
     return (int)offset + 4 > at && (int)offset < at + size;
 }
 
-bool SettingsSync_OwnsBuildingWord(unsigned offset)
+static int SafeCategory(const BYTE* b)
 {
+    __try {
+        return CategoryOf((BYTE*)b);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return -1;
+    }
+}
+
+bool SettingsSync_OwnsBuildingWord(const BYTE* building, unsigned offset)
+{
+    int category = SafeCategory(building);
     for (int f = 0; f < kFieldCount; f++)
-        if (kFields[f].kind == FIELD_BYTES && Overlaps(offset, kFields[f].offset, kFields[f].size)) return true;
+        if (kFields[f].kind == FIELD_BYTES && FieldApplies(kFields[f], category) && Overlaps(offset, kFields[f].offset, kFields[f].size))
+            return true;
     return Overlaps(offset, BLD_PAY_OFFSET, 2) || Overlaps(offset, BLD_STOPPED_OFFSET, 1);
 }
 
-bool SettingsSync_OwnsSlotWord(unsigned slot, unsigned region, unsigned local)
+bool SettingsSync_OwnsSlotWord(const BYTE* building, unsigned slot, unsigned region, unsigned local)
 {
     if (region == 2) return (local % SLOT_ENTRY_SIZE) >= 8; // share and enabled of each entry
     if (region != 0 || slot != 0) return false;
+    int category = SafeCategory(building);
     for (int f = 0; f < kFieldCount; f++)
-        if (kFields[f].kind == FIELD_SLOT0 && Overlaps(local, kFields[f].offset, kFields[f].size)) return true;
+        if (kFields[f].kind == FIELD_SLOT0 && FieldApplies(kFields[f], category) && Overlaps(local, kFields[f].offset, kFields[f].size))
+            return true;
     return false;
 }
 

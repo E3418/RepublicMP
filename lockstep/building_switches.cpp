@@ -124,7 +124,16 @@ static bool g_taken = false, g_click = false;
 static unsigned g_frame = 0;
 static unsigned long long g_epoch = 0;
 static std::vector<bool> g_noiseBuilding, g_noiseSlot[4], g_noiseWorld;
-static int g_noiseLogged = 0, g_heapLogged = 0;
+static int g_noiseLogged = 0, g_heapLogged = 0, g_leftLogged = 0;
+
+// A building's category (type +0x360), for the log.
+static int Category(U64 building)
+{
+    U64 type = 0;
+    int category = -1;
+    if (building && Copy(&type, (const void*)(building + 0x318), 8) && type) Copy(&category, (const void*)(type + 0x360), 4);
+    return category;
+}
 
 static bool Clicked()
 {
@@ -185,9 +194,11 @@ static bool InRanges(const WorldRange* list, size_t n, unsigned offset)
 static bool LeftOut(const Range& r, unsigned offset)
 {
     if (r.kind == KIND_BUILDING)
-        return SettingsSync_OwnsBuildingWord(offset) || InRanges(kViewWords, sizeof(kViewWords) / sizeof(kViewWords[0]), offset);
+        return SettingsSync_OwnsBuildingWord((const BYTE*)r.building, offset) ||
+               InRanges(kViewWords, sizeof(kViewWords) / sizeof(kViewWords[0]), offset);
     if (r.kind == KIND_SLOT)
-        return SettingsSync_OwnsSlotWord(offset / SLOT_STRIDE, (offset % SLOT_STRIDE) / REGION_STRIDE, offset % REGION_STRIDE);
+        return SettingsSync_OwnsSlotWord((const BYTE*)r.building, offset / SLOT_STRIDE, (offset % SLOT_STRIDE) / REGION_STRIDE,
+                                         offset % REGION_STRIDE);
     return false;
 }
 
@@ -257,7 +268,14 @@ static void Compare(const Range& r, bool click)
         if (wa == wb) continue;
         unsigned offset = r.base + q;
         unsigned word = NoiseIndex(r, q);
-        if (LeftOut(r, offset)) continue;
+        if (LeftOut(r, offset)) {
+            if (click && g_leftLogged < 40) {
+                ++g_leftLogged;
+                Logf("republicmp  SWITCH: a click changed %s +0x%X (category 0x%X) - left to the building settings sync",
+                     kKindText[r.kind], offset, Category(r.building));
+            }
+            continue;
+        }
         if (!click) {
             if (word < noise.size() && !noise[word]) {
                 noise[word] = true;
@@ -357,8 +375,8 @@ bool BuildingSwitches_ApplyCommand(const void* data, size_t size)
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         why = "a fault while writing";
     }
-    Logf("republicmp  SWITCH: %s%s, %u word(s) from +0x%X%s: %s", kKindText[m.kind],
-         m.kind == KIND_WORLD ? "" : " of a building", m.count, m.words[0].offset, differing ? " (some read neither value)" : "",
-         why ? why : "made");
+    Logf("republicmp  SWITCH: %s%s (category 0x%X), %u word(s) from +0x%X%s: %s", kKindText[m.kind],
+         m.kind == KIND_WORLD ? "" : " of a building", m.kind == KIND_WORLD ? 0 : Category(Ref_BuildingAt(m.building)), m.count,
+         m.words[0].offset, differing ? " (some read neither value)" : "", why ? why : "made");
     return why == nullptr;
 }
