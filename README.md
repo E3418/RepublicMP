@@ -8,6 +8,12 @@ both machines.
 
 **Status:** early alpha, tested with two players.
 
+## Support and community
+
+Questions, bug reports and test partners are welcome on
+[Discord](https://discord.gg/BRTAYNKAYu). If you want to support the work,
+you can do it on [Buy Me a Coffee](https://buymeacoffee.com/3418).
+
 ## Features
 
 1. **Joining** - The joining player receives the host's current game (saved,
