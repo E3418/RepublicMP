@@ -168,6 +168,10 @@ static void Apply(const Command& c)
         if (n == sizeof(RoadSyncDemolishMsg)) {
             ok = RoadSync_ApplyCommandDemolish(*(const RoadSyncDemolishMsg*)p);
             LocalBuilds_DemolishMade(*(const RoadSyncDemolishMsg*)p);
+        } else if (n == sizeof(LsDemolishHoverMsg)) {
+            const LsDemolishHoverMsg& h = *(const LsDemolishHoverMsg*)p;
+            ok = RoadSync_ApplyCommandDemolishHover(h);
+            LocalBuilds_DemolishMade(h.m, &h.hover);
         }
         break;
     case LS_CMD_PLACE:

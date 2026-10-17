@@ -386,3 +386,23 @@ void RoadSync_LockstepDirectionsDetect();
 bool RoadSync_ApplyCommandDirection(const RoadSyncDirectionMsg& msg);
 bool RoadSync_ApplyCommandUpgrade(const RoadSyncUpgradeMsg& msg);
 bool RoadSync_ApplyCommandDemolish(const RoadSyncDemolishMsg& msg);
+
+// Lockstep: a bulldozer commit whose piece the hook cannot read (the cursor
+// on a cut's end: the game removes through the hovered node or edge). The
+// hovered node and edge travel as positions in the commit's network; every PC
+// sets them, runs the tool's update at the cursor and commits what it picks.
+struct RoadSyncDemolishHover {
+    int nodeKind;    // 0 none, 1 = exe+9e4560, 2 = exe+9e45e0
+    float node[3];
+    int edgeKind;    // 0 none, 1 = exe+9e4558, 2 = exe+9e45d8
+    float edgeA[3];  // the edge's node 0 and node 1
+    float edgeB[3];
+    int edgePoints;
+};
+struct LsDemolishHoverMsg {
+    RoadSyncDemolishMsg m; // the cursor; no range, no pieces
+    RoadSyncDemolishHover hover;
+};
+// The hovered node / edge as they are now, when they belong to this network.
+bool RoadSync_ReadDemolishHover(__int64 manager, RoadSyncDemolishHover* out);
+bool RoadSync_ApplyCommandDemolishHover(const LsDemolishHoverMsg& msg);

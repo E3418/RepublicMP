@@ -1105,6 +1105,89 @@ static bool AdoptSenderRange(__int64 manager, const RoadSyncDemolishMsg& m, int*
 static bool ApplyDemolishInner(const RoadSyncDemolishMsg& m, bool* outRemoved);
 
 // The pick finds the piece wherever this player's camera is.
+// Lockstep: the hovered node / edge a hover demolition carries (main thread, during its apply).
+static const RoadSyncDemolishHover* g_applyHover = nullptr;
+static const unsigned kHoverNodeRvas[2] = { 0x9E4560, 0x9E45E0 };
+static const unsigned kHoverEdgeRvas[2] = { 0x9E4558, 0x9E45D8 };
+
+static bool SamePos(const float* a, const float* b)
+{
+    return fabsf(a[0] - b[0]) < 0.01f && fabsf(a[1] - b[1]) < 0.01f && fabsf(a[2] - b[2]) < 0.01f;
+}
+
+static int EdgePointCount(__int64 edge)
+{
+    return (int)((*(__int64*)(edge + SEG_POINTS_END_OFFSET) - *(__int64*)(edge + SEG_POINTS_BEGIN_OFFSET)) / 0x18);
+}
+
+bool RoadSync_ReadDemolishHover(__int64 manager, RoadSyncDemolishHover* h)
+{
+    memset(h, 0, sizeof(*h));
+    __try {
+        __int64* begin = *(__int64**)(manager + MGR_SEGMENTS_BEGIN_OFFSET);
+        __int64* end = *(__int64**)(manager + MGR_SEGMENTS_END_OFFSET);
+        for (int k = 0; k < 2 && !h->nodeKind; k++) {
+            __int64 node = *(__int64*)((uintptr_t)g_exe + kHoverNodeRvas[k]);
+            for (__int64* it = begin; node && it && it < end; ++it)
+                if (*it && (*(__int64*)(*it + SEG_NODE0_OFFSET) == node || *(__int64*)(*it + SEG_NODE1_OFFSET) == node)) {
+                    h->nodeKind = k + 1;
+                    memcpy(h->node, (const float*)(node + NODE_POS_OFFSET), 12);
+                    break;
+                }
+        }
+        for (int k = 0; k < 2 && !h->edgeKind; k++) {
+            __int64 edge = *(__int64*)((uintptr_t)g_exe + kHoverEdgeRvas[k]);
+            for (__int64* it = begin; edge && it && it < end; ++it)
+                if (*it == edge) {
+                    __int64 n0 = *(__int64*)(edge + SEG_NODE0_OFFSET), n1 = *(__int64*)(edge + SEG_NODE1_OFFSET);
+                    if (!n0 || !n1) break;
+                    h->edgeKind = k + 1;
+                    memcpy(h->edgeA, (const float*)(n0 + NODE_POS_OFFSET), 12);
+                    memcpy(h->edgeB, (const float*)(n1 + NODE_POS_OFFSET), 12);
+                    h->edgePoints = EdgePointCount(edge);
+                    break;
+                }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        memset(h, 0, sizeof(*h));
+        return false;
+    }
+    return h->nodeKind || h->edgeKind;
+}
+
+// Sets this PC's hovered node / edge to the carried ones (after the replay cleared them).
+static void ApplyHoverRefs(__int64 manager, const RoadSyncDemolishHover& h)
+{
+    __int64* begin = *(__int64**)(manager + MGR_SEGMENTS_BEGIN_OFFSET);
+    __int64* end = *(__int64**)(manager + MGR_SEGMENTS_END_OFFSET);
+    __int64 node = 0, edge = 0;
+    for (__int64* it = begin; it && it < end; ++it) {
+        __int64 e = *it;
+        if (!e) continue;
+        __int64 n0 = *(__int64*)(e + SEG_NODE0_OFFSET), n1 = *(__int64*)(e + SEG_NODE1_OFFSET);
+        if (!n0 || !n1) continue;
+        const float* p0 = (const float*)(n0 + NODE_POS_OFFSET);
+        const float* p1 = (const float*)(n1 + NODE_POS_OFFSET);
+        if (h.nodeKind && !node) {
+            if (SamePos(p0, h.node)) node = n0;
+            else if (SamePos(p1, h.node)) node = n1;
+        }
+        if (h.edgeKind && !edge && SamePos(p0, h.edgeA) && SamePos(p1, h.edgeB) && EdgePointCount(e) == h.edgePoints) edge = e;
+    }
+    if (node) *(__int64*)((uintptr_t)g_exe + kHoverNodeRvas[h.nodeKind - 1]) = node;
+    if (edge) *(__int64*)((uintptr_t)g_exe + kHoverEdgeRvas[h.edgeKind - 1]) = edge;
+    Logf("republicmp  ROAD_SYNC:   hover demolition: node %s, edge %s", !h.nodeKind ? "none" : node ? "found" : "MISSING",
+         !h.edgeKind ? "none" : edge ? "found" : "MISSING");
+}
+
+bool RoadSync_ApplyCommandDemolishHover(const LsDemolishHoverMsg& msg)
+{
+    g_applyHover = &msg.hover;
+    bool ok = RoadSync_ApplyCommandDemolish(msg.m);
+    g_applyHover = nullptr;
+    return ok;
+}
+
 static bool ApplyDemolish(const RoadSyncDemolishMsg& m, bool* outRemoved)
 {
     ScopeBox box = {};
@@ -1146,6 +1229,7 @@ static bool ApplyDemolishInner(const RoadSyncDemolishMsg& m, bool* outRemoved)
             float savedCursor[3] = { cursor[0], cursor[1], cursor[2] };
             __try {
                 HoverGlobals_Clear();
+                if (g_applyHover) ApplyHoverRefs(manager, *g_applyHover);
                 *lmbHeld = 0;
                 *lmbJustPressed = 0;
                 cursor[0] = m.cursor[0]; cursor[1] = m.cursor[1]; cursor[2] = m.cursor[2];

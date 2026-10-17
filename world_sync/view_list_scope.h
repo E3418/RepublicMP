@@ -16,7 +16,8 @@
 // from the game's own array allocator (FUN_1400019e0 / FUN_1400001a50), so a
 // list the command grows is freed correctly. ViewListScope_End puts each
 // PC's own list back without the edges the command removed (Late's tools
-// read them before the renderer refills them). The renderer lock
+// read them before the renderer refills them), with the edges the command
+// made added (a cut's halves: the tools pick through these lists). The renderer lock
 // ([exe+0x995268]+0x80, held by the main thread's Early) is held from Begin
 // to End.
 //

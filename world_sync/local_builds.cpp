@@ -763,22 +763,32 @@ static RoadSyncMsg g_commandSegment; // ~48 KB: main thread only
 // boundary - a piece already sent and not made yet is not sent again. Main
 // thread (the commit hook and the commands' boundary).
 #define DEMOLISH_PENDING_MAX 16
+#define DEMOLISH_MAX_PIECES 64 // whole segments of one removal drag
 #define DEMOLISH_PENDING_MS 5000
 struct PendingDemolish {
     ULONGLONG at;
     RoadSyncDemolishMsg msg;
+    __int64 seg; // a single piece: its segment and point range at the capture
+    int rs, re;
+    bool hovered; // a hover demolition: the hovered node / edge are its key
+    RoadSyncDemolishHover hover;
 };
 static PendingDemolish g_pendingDemolish[DEMOLISH_PENDING_MAX];
 
 static bool SameDemolish(const RoadSyncDemolishMsg& a, const RoadSyncDemolishMsg& b)
 {
+    if (!a.hasRange && !a.pieceCount) return false; // a hover demolition: compared by its hover
     if (a.category != b.category || a.hasRange != b.hasRange || a.pieceCount != b.pieceCount) return false;
     if (a.hasRange) return memcmp(a.rangeA, b.rangeA, sizeof(a.rangeA)) == 0 && memcmp(a.rangeB, b.rangeB, sizeof(a.rangeB)) == 0;
     return memcmp(a.pieces, b.pieces, sizeof(a.pieces[0]) * (a.pieceCount > 0 ? a.pieceCount : 0)) == 0;
 }
 
-// True when this piece is still waiting for its command; else it is remembered.
-static bool DemolishAlreadySent(const RoadSyncDemolishMsg& m)
+// True when this piece is still waiting for its command - or, on the same
+// segment, overlaps one that is (the brush moved while the cut waited for the
+// tick boundary; after that cut the overlapping window would miss its ends) -
+// else it is remembered. seg 0: whole segments, compared as they are.
+static bool DemolishAlreadySent(const RoadSyncDemolishMsg& m, __int64 seg = 0, int rs = 0, int re = 0,
+                                const RoadSyncDemolishHover* hover = nullptr)
 {
     ULONGLONG now = GetTickCount64();
     int free = -1;
@@ -789,19 +799,39 @@ static bool DemolishAlreadySent(const RoadSyncDemolishMsg& m)
             if (free < 0) free = i;
             continue;
         }
+        if (hover) {
+            if (p.hovered && p.msg.category == m.category && memcmp(&p.hover, hover, sizeof(*hover)) == 0) return true;
+            continue;
+        }
         if (SameDemolish(p.msg, m)) return true;
+        if (seg && p.seg == seg && rs < p.re && p.rs < re) return true;
     }
     if (free < 0) free = 0;
-    g_pendingDemolish[free].at = now;
-    g_pendingDemolish[free].msg = m;
+    PendingDemolish& n = g_pendingDemolish[free];
+    n.at = now;
+    n.msg = m;
+    n.seg = seg;
+    n.rs = rs;
+    n.re = re;
+    n.hovered = hover != nullptr;
+    if (hover) n.hover = *hover;
+    else memset(&n.hover, 0, sizeof(n.hover));
     return false;
 }
 
-void LocalBuilds_DemolishMade(const RoadSyncDemolishMsg& m)
+void LocalBuilds_DemolishMade(const RoadSyncDemolishMsg& m, const RoadSyncDemolishHover* hover)
 {
-    for (int i = 0; i < DEMOLISH_PENDING_MAX; i++)
-        if (g_pendingDemolish[i].at && SameDemolish(g_pendingDemolish[i].msg, m)) g_pendingDemolish[i].at = 0;
+    for (int i = 0; i < DEMOLISH_PENDING_MAX; i++) {
+        PendingDemolish& p = g_pendingDemolish[i];
+        if (!p.at) continue;
+        if (hover ? (p.hovered && p.msg.category == m.category && memcmp(&p.hover, hover, sizeof(*hover)) == 0)
+                  : (!p.hovered && SameDemolish(p.msg, m)))
+            p.at = 0;
+    }
 }
+
+// Why a bulldozer commit's piece could not be read (lockstep diagnostics, capped).
+static int g_hoverDemolishLogged = 0;
 
 // The piece +0x380 is one of the network's segments (after a removal the tool
 // keeps its selection on the segment that is gone).
@@ -820,19 +850,59 @@ static bool TakeCommitAsCommand(__int64 manager, int category)
         if (IsDemolishToolActive()) {
             bool multi = *(unsigned char*)(manager + MGR_UPG_MULTI_OFFSET) != 0;
             __int64 seg = *(__int64*)(manager + MGR_UPG_SEGMENT_OFFSET);
-            // No piece under the brush, or the one just removed: nothing to carry.
-            if (!multi && (*(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) == 0 || !SegmentListed(manager, seg)))
-                return true;
+            // No piece under the brush: the commit removes only with +0x390 set (518a80).
+            if (*(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) == 0) return true;
+            bool listed = multi || SegmentListed(manager, seg);
             RoadSyncDemolishMsg m = {};
             __int64 thisPtr = GetPlacementManagerThisPtr();
             m.category = category;
             m.cursor[0] = *(float*)(thisPtr + CURSOR_X_OFFSET);
             m.cursor[1] = *(float*)(thisPtr + CURSOR_Y_OFFSET);
             m.cursor[2] = *(float*)(thisPtr + CURSOR_Z_OFFSET);
-            m.hasRange = ReadDemolishRange(manager, m.rangeA, m.rangeB) ? 1 : 0;
-            m.pieceCount = m.hasRange ? 0 : ReadDemolishPieces(manager, m.pieces, 8);
-            if (m.hasRange || m.pieceCount > 0) {
-                if (!DemolishAlreadySent(m)) Commands_Submit(LS_CMD_NET_DEMOLISH, &m, sizeof(m));
+            m.hasRange = listed && ReadDemolishRange(manager, m.rangeA, m.rangeB) ? 1 : 0;
+            // A removal drag over many segments: the message holds 8, so the
+            // rest go in further commands (whole segments, independent).
+            static RoadSyncUpgradePiece s_pieces[DEMOLISH_MAX_PIECES];
+            int all = m.hasRange || !listed ? 0 : ReadDemolishPieces(manager, s_pieces, DEMOLISH_MAX_PIECES);
+            if (!m.hasRange && all == 0) {
+                // The piece is not readable (in normal play these are the commits
+                // the old capture had to find by comparing segments): the cursor
+                // on a cut's end, removed through the hovered node or edge.
+                int rs = *(int*)(manager + MGR_UPG_RANGE_START_OFFSET), re = *(int*)(manager + MGR_UPG_RANGE_END_OFFSET);
+                int count = !multi && seg && listed ? (int)((*(__int64*)(seg + SEG_POINTS_END_OFFSET) - *(__int64*)(seg + SEG_POINTS_BEGIN_OFFSET)) / 0x18) : -1;
+                static LsDemolishHoverMsg s_hover;
+                memset(&s_hover, 0, sizeof(s_hover));
+                s_hover.m = m;
+                bool haveHover = RoadSync_ReadDemolishHover(manager, &s_hover.hover);
+                if (g_hoverDemolishLogged < 60) {
+                    ++g_hoverDemolishLogged;
+                    Logf("republicmp  LOCKSTEP: bulldozer piece not readable (multi %d, segment %s, points %d, range %d..%d) - hovered node %d, edge %d%s",
+                         multi ? 1 : 0, !seg ? "none" : listed ? "listed" : "not in the network", count, rs, re,
+                         s_hover.hover.nodeKind, s_hover.hover.edgeKind, haveHover ? " - sent with the hover" : " - nothing to send");
+                }
+                if (haveHover && !DemolishAlreadySent(m, 0, 0, 0, &s_hover.hover))
+                    Commands_Submit(LS_CMD_NET_DEMOLISH, &s_hover, sizeof(s_hover));
+                return true;
+            }
+            if (m.hasRange) {
+                if (!DemolishAlreadySent(m, seg, *(int*)(manager + MGR_UPG_RANGE_START_OFFSET),
+                                         *(int*)(manager + MGR_UPG_RANGE_END_OFFSET))) {
+                    Logf("republicmp  LOCKSTEP: demolition piece (%.1f,%.1f)-(%.1f,%.1f) range (%d,%d)", m.rangeA[0], m.rangeA[2],
+                         m.rangeB[0], m.rangeB[2], *(int*)(manager + MGR_UPG_RANGE_START_OFFSET),
+                         *(int*)(manager + MGR_UPG_RANGE_END_OFFSET));
+                    Commands_Submit(LS_CMD_NET_DEMOLISH, &m, sizeof(m));
+                }
+            } else if (all > 0) {
+                const int chunk = (int)(sizeof(m.pieces) / sizeof(m.pieces[0]));
+                for (int at = 0; at < all; at += chunk) {
+                    m.pieceCount = all - at < chunk ? all - at : chunk;
+                    memset(m.pieces, 0, sizeof(m.pieces));
+                    memcpy(m.pieces, s_pieces + at, sizeof(m.pieces[0]) * m.pieceCount);
+                    if (DemolishAlreadySent(m)) continue;
+                    Logf("republicmp  LOCKSTEP: demolition of %d whole segment(s) (%d-%d of %d in the drag)", m.pieceCount, at + 1,
+                         at + m.pieceCount, all);
+                    Commands_Submit(LS_CMD_NET_DEMOLISH, &m, sizeof(m));
+                }
             } else {
                 int count = 0;
                 if (!multi && seg) count = (int)((*(__int64*)(seg + SEG_POINTS_END_OFFSET) - *(__int64*)(seg + SEG_POINTS_BEGIN_OFFSET)) / 0x18);

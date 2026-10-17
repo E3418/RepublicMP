@@ -77,4 +77,5 @@ void LocalBuilds_Bind(const TsmHost* host);
 // Lockstep: a network demolition command was made (every PC); the clicking PC
 // may send that piece again if the tool still selects it.
 struct RoadSyncDemolishMsg;
-void LocalBuilds_DemolishMade(const RoadSyncDemolishMsg& m);
+struct RoadSyncDemolishHover;
+void LocalBuilds_DemolishMade(const RoadSyncDemolishMsg& m, const RoadSyncDemolishHover* hover = nullptr);

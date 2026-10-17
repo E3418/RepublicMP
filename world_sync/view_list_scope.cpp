@@ -36,6 +36,7 @@ struct NetScope {
     __int64 network;
     ListSwap lists[2];
     int swapped; // lists swapped so far
+    std::vector<__int64> before; // the committed edges at Begin, sorted
 };
 
 static NetScope g_nets[ROAD_SYNC_CATEGORY_COUNT];
@@ -139,16 +140,14 @@ static void WriteHeader(__int64 header, __int64 b, __int64 e, __int64 c)
     }
 }
 
+static bool SortedHas(const std::vector<__int64>& v, __int64 edge)
+{
+    return std::binary_search(v.begin(), v.end(), edge);
+}
+
 static bool WasInWhole(__int64 edge)
 {
-    const __int64* a = g_whole.data();
-    size_t lo = 0, hi = g_whole.size();
-    while (lo < hi) {
-        size_t mid = (lo + hi) / 2;
-        if (a[mid] < edge) lo = mid + 1;
-        else hi = mid;
-    }
-    return lo < g_whole.size() && a[lo] == edge;
+    return SortedHas(g_whole, edge);
 }
 
 static bool CopyWhole(__int64 network, __int64* out, long long count)
@@ -176,6 +175,15 @@ static long long FilterOwn(__int64 begin, __int64 end)
     return kept;
 }
 
+// The committed edges at Begin, sorted (no SEH here: the vector's iterators unwind).
+static bool KeepBefore(NetScope& n, __int64 network, long long whole)
+{
+    n.before.resize((size_t)whole);
+    if (whole && !CopyWhole(network, n.before.data(), whole)) return false;
+    std::sort(n.before.begin(), n.before.end());
+    return true;
+}
+
 static void RestoreAll()
 {
     ReleaseFn release = (ReleaseFn)(g_exeBase + GAME_RELEASE_RVA);
@@ -185,12 +193,38 @@ static void RestoreAll()
         g_whole.resize(count > 0 ? (size_t)count : 0);
         bool haveWhole = count >= 0 && (count == 0 || CopyWhole(n.network, g_whole.data(), count));
         std::sort(g_whole.begin(), g_whole.end());
+        // Edges the command made (a cut's two halves, a new road): the game's
+        // own frame would have them in its lists at once, and the tools pick
+        // and hover through these lists - without them a piece left by a cut
+        // could not be picked until the renderer filled the lists again.
+        std::vector<__int64> added;
+        if (haveWhole)
+            for (__int64 e : g_whole)
+                if (!SortedHas(n.before, e)) added.push_back(e);
         for (int k = n.swapped - 1; k >= 0; k--) {
             ListSwap& s = n.lists[k];
             __int64 cb, ce, cc;
             bool current = ReadHeader(s.header, &cb, &ce, &cc);
-            // Own list back, minus edges the command removed.
+            // Own list back, minus edges the command removed, plus the ones it made.
             long long kept = haveWhole ? FilterOwn(s.begin, s.end) : 0;
+            long long room = s.begin ? (s.cap - s.begin) / 8 : 0;
+            long long total = kept + (long long)added.size();
+            if (!added.empty() && total > room) {
+                // A bigger buffer from the game's allocator; the old one released with it.
+                size_t want = (size_t)total + LIST_SLACK;
+                __int64 grown = (__int64)((AllocateFn)(g_exeBase + GAME_ALLOCATE_RVA))(want, 8);
+                if (grown) {
+                    if (kept) memcpy((void*)grown, (const void*)s.begin, (size_t)kept * 8);
+                    if (s.begin) release((void*)s.begin, (size_t)room, 8);
+                    s.begin = grown;
+                    s.cap = grown + (__int64)want * 8;
+                    room = (long long)want;
+                }
+            }
+            if (total <= room) {
+                if (!added.empty()) memcpy((void*)(s.begin + kept * 8), added.data(), added.size() * 8);
+                kept = total;
+            }
             WriteHeader(s.header, s.begin, s.begin + kept * 8, s.cap);
             // The buffer the list had in the scope: ours, or one the game
             // grew it into (then ours is already released). An unreadable
@@ -198,6 +232,7 @@ static void RestoreAll()
             if (current && cb && cb != s.begin) release((void*)cb, (size_t)((cc - cb) / 8), 8);
         }
         n.swapped = 0;
+        n.before.clear();
     }
     g_netCount = 0;
     g_whole.clear();
@@ -230,6 +265,7 @@ bool ViewListScope_Begin(float minX, float minZ, float maxX, float maxZ)
         NetScope& n = g_nets[g_netCount++];
         n.network = network;
         n.swapped = 0;
+        if (!KeepBefore(n, network, whole)) { ok = false; break; }
         static const __int64 kLists[2] = { NET_VIEW_OFFSET, NET_SECOND_OFFSET };
         long long sel = 0;
         for (int k = 0; k < 2; k++) {
