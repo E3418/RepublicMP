@@ -800,30 +800,6 @@ void Determinism_ToolScopeEnd()
     --g_toolScope;
 }
 
-static int g_toolPassSpeed = 0;
-static BYTE g_toolPassPaused = 0;
-static bool g_inToolPass = false;
-
-bool Determinism_InToolPass() { return g_inToolPass; }
-
-void Determinism_ToolPassBegin()
-{
-    g_toolPassSpeed = *(int*)(g_exeBase + 0x9D54B4);
-    g_toolPassPaused = g_exeBase[GAME_TIMER_RVA + 12];
-    WriteGameSpeed(0);
-    g_exeBase[GAME_TIMER_RVA + 12] = 1;
-    g_frameStep = g_inEarly = false;
-    g_inToolPass = true;
-}
-
-void Determinism_ToolPassEnd()
-{
-    g_inToolPass = false;
-    g_frameStep = g_inEarly = true;
-    g_exeBase[GAME_TIMER_RVA + 12] = g_toolPassPaused;
-    WriteGameSpeed(g_toolPassSpeed);
-}
-
 bool Determinism_BeginSession(bool host)
 {
     if (!g_framesReady || g_probeBusy) return false;

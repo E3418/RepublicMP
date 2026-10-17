@@ -439,15 +439,22 @@ static void VisibleOut(bool swapped)
 {
     if (!swapped) return;
     BYTE* world = g_exeBase + WORLD_RVA;
-    // Put the simulation's values back on the buildings still listed (one the
-    // phase removed was taken out of the list and is gone).
-    BYTE** listed = *(BYTE***)(world + VISIBLE_OFFSET);
-    BYTE** listedEnd = *(BYTE***)(world + VISIBLE_OFFSET + 8);
+    // Put the simulation's values back on every building that still exists
+    // (one the phase removed is gone). The visible list itself is no guide:
+    // the phase may empty it, and a building left with this PC's distance
+    // made the next tick's Early animate it (16c900 from 13daf9: +0x1344) on
+    // this PC only - the probe found it, and the sessions split on it.
+    BYTE** listed = *(BYTE***)(g_exeBase + BUILDINGS_BEGIN_RVA);
+    BYTE** listedEnd = *(BYTE***)(g_exeBase + BUILDINGS_END_RVA);
     std::unordered_set<BYTE*> still(listed, listedEnd);
+    // What the simulation's own building pass writes with no building on the
+    // camera (13ce61/13ce6d; a construction site keeps its distance, 13d963):
+    // the same on every PC, whatever this phase or an earlier one left.
     for (const VisibleKept& k : g_visibleKept) {
         if (!still.count(k.building)) continue;
-        k.building[0x115A] = k.visible;
-        *(float*)(k.building + 0x115C) = k.distance;
+        bool typed = *(void**)(k.building + 0x318) != nullptr;
+        k.building[0x115A] = 0;
+        *(float*)(k.building + 0x115C) = typed ? 100000.0f : k.distance;
     }
     g_visibleKept.clear();
     memcpy(g_privateVisible, world + VISIBLE_OFFSET, sizeof(g_privateVisible));
@@ -515,20 +522,12 @@ static void HookedLate(__int64 world)
     // The tool stays selected on every frame. A tick's Late runs its handlers
     // through the tool stubs below; a held Late is this PC's own altogether.
     // The render thread has finished here (105eb8). (by SoylentGreed)
-    // A tick's Late is the simulation: the shared view (no building on the
-    // camera, the empty visible list) and no tool - the tool stubs skip the
-    // handlers. Given this PC's view there, its hints and the camera distance
-    // of the buildings reached the simulation (a DESYNC at tick 300 with
-    // sixteen construction sites under one camera). Its view, its hints and
-    // its tool then run in a second Late, as on a held frame.
     if (step) {
+        bool visible = VisibleIn();
         g_inPhase = true;
         o_late(world);
         g_inPhase = false;
-        Determinism_ToolPassBegin();
-        Commands_RecordMoney(); // the tick's own charges are not this pass's
-        PrivateLate(world);
-        Determinism_ToolPassEnd();
+        VisibleOut(visible);
     } else {
         PrivateLate(world);
     }
@@ -543,10 +542,11 @@ static void HookedLate(__int64 world)
 // Late compares the selected tool's build-menu name and calls its handler
 // every frame (one entry at 312823, one exit at 31496d). A handler drew from
 // the shared random stream and searched in the shared vectors (run 17, by
-// SoylentGreed), so every call in that stretch goes through a stub: in a
-// tick's shared Late it is skipped (the tool acts in the view pass after it,
-// as on a held frame); otherwise it calls straight through. The calls to the
-// name compare 84f520 are left alone.
+// SoylentGreed), so every call in that stretch goes through a stub: on a
+// tick's frame it runs in a tool scope (private draws, the private search
+// vectors, its actions made commands and its other changes found as on a held
+// frame); otherwise it calls straight through. The calls to the name compare
+// 84f520 are left alone.
 static const unsigned kToolCalls[][2] = {
     { 0x3128C1, 0x21C110 }, { 0x31294E, 0x214220 }, { 0x3129B8, 0x2BADE0 }, { 0x3129D8, 0x243570 },
     { 0x3129FC, 0x2F94C0 }, { 0x312A1E, 0x3A8A70 }, { 0x312A45, 0x3A8A70 }, { 0x312A6E, 0x3A8A70 },
@@ -604,11 +604,26 @@ static bool CallTo(unsigned int site, BYTE* target, unsigned char out[5]);
 static BYTE* g_toolStubs = nullptr;
 static unsigned __int64 g_toolTarget = 0, g_toolReturn = 0;
 static BYTE g_toolSaved[96] = {};
-static BYTE* g_toolSkip = nullptr; // xor eax, eax; xorps xmm0, xmm0; ret
+static bool g_toolActed = false;
+static PrivateView g_toolKept;
 
 static void ToolEnter()
 {
-    if (g_on && Determinism_IsStepFrame()) g_toolTarget = (unsigned __int64)g_toolSkip;
+    g_toolActed = g_on && Determinism_IsStepFrame();
+    if (!g_toolActed) return;
+    Determinism_ToolScopeBegin();
+    PrivateViewIn(g_toolKept);
+    Commands_RecordMoney(); // the tick's own charges are not the tool's
+    Commands_LateBegin();
+}
+
+static void ToolLeave()
+{
+    if (!g_toolActed) return;
+    g_toolActed = false;
+    Commands_LateEnd();
+    PrivateViewOut(g_toolKept);
+    Determinism_ToolScopeEnd();
 }
 
 static BYTE* Emit(BYTE* p, const unsigned char* bytes, size_t n)
@@ -627,8 +642,8 @@ static BYTE* EmitImm(BYTE* p, unsigned char rex, unsigned char op, unsigned __in
 
 // The common stub. Entered by jmp with the target in r11 and the caller's
 // return address on the stack: the target and the return are kept, the
-// argument registers saved around ToolEnter (which may swap the target for
-// the skip), and the target called with the caller's own stack.
+// argument registers saved around ToolEnter, the target called with the
+// caller's own stack, and the result saved around ToolLeave.
 static BYTE* EmitCommon(BYTE* p)
 {
     static const unsigned char storeR11[] = { 0x4D, 0x89, 0x1A }; // mov [r10], r11
@@ -645,6 +660,8 @@ static BYTE* EmitCommon(BYTE* p)
     static const unsigned char callRax[] = { 0xFF, 0xD0 };
     static const unsigned char addRsp[] = { 0x48, 0x83, 0xC4, 0x20 };
     static const unsigned char callMemR10[] = { 0x41, 0xFF, 0x12 }; // call [r10]
+    static const unsigned char saveResult[] = { 0x49, 0x89, 0x02, 0xF3, 0x41, 0x0F, 0x7F, 0x42, 0x20 }; // rax, xmm0
+    static const unsigned char loadResult[] = { 0x49, 0x8B, 0x02, 0xF3, 0x41, 0x0F, 0x6F, 0x42, 0x20 };
     static const unsigned char jmpMemR10[] = { 0x41, 0xFF, 0x22 }; // jmp [r10]
     p = EmitImm(p, 0x49, 0xBA, (unsigned __int64)&g_toolTarget);
     p = Emit(p, storeR11, sizeof(storeR11));
@@ -661,6 +678,14 @@ static BYTE* EmitCommon(BYTE* p)
     p = Emit(p, loadArgs, sizeof(loadArgs));
     p = EmitImm(p, 0x49, 0xBA, (unsigned __int64)&g_toolTarget);
     p = Emit(p, callMemR10, sizeof(callMemR10));
+    p = EmitImm(p, 0x49, 0xBA, (unsigned __int64)g_toolSaved);
+    p = Emit(p, saveResult, sizeof(saveResult));
+    p = Emit(p, subRsp, sizeof(subRsp));
+    p = EmitImm(p, 0x48, 0xB8, (unsigned __int64)&ToolLeave);
+    p = Emit(p, callRax, sizeof(callRax));
+    p = Emit(p, addRsp, sizeof(addRsp));
+    p = EmitImm(p, 0x49, 0xBA, (unsigned __int64)g_toolSaved);
+    p = Emit(p, loadResult, sizeof(loadResult));
     p = EmitImm(p, 0x49, 0xBA, (unsigned __int64)&g_toolReturn);
     return Emit(p, jmpMemR10, sizeof(jmpMemR10));
 }
@@ -682,9 +707,7 @@ static bool InstallToolStubs()
     DWORD old;
     VirtualProtect(g_toolStubs, size, PAGE_EXECUTE_READWRITE, &old);
     BYTE* common = g_toolStubs + TOOL_STUB_SIZE * TOOL_CALL_COUNT;
-    static const unsigned char skip[] = { 0x31, 0xC0, 0x0F, 0x57, 0xC0, 0xC3 };
-    g_toolSkip = EmitCommon(common);
-    Emit(g_toolSkip, skip, sizeof(skip));
+    EmitCommon(common);
     for (size_t i = 0; i < TOOL_CALL_COUNT; i++) {
         static const unsigned char jmpR10[] = { 0x41, 0xFF, 0xE2 };
         BYTE* p = g_toolStubs + TOOL_STUB_SIZE * i;
@@ -940,28 +963,12 @@ static bool DetPlacePress(void* input)
     if (pressed && Determinism_IsActive() && LocalBuilds_PlacementPress()) return false;
     return pressed;
 }
-// Each network manager keeps two lists of retired render objects and a
-// switch (+0x290): 542790, called once per Late for fifteen managers
-// (31561d..3156c5), frees the current list and flips the switch. A tick's
-// frame runs Late twice (the view pass), so both lists were freed in one
-// frame while the renderer still drew from them: every road, rail and paved
-// surface blinked once the game ran. The view pass skips it.
-static void DetNetworkRetired(void* manager)
-{
-    if (Determinism_InToolPass()) return;
-    ((void (*)(void*))(g_exeBase + 0x542790))(manager);
-}
-#define STEP_CALL_COUNT 31
+#define STEP_CALL_COUNT 16
 static const unsigned kStepCalls[STEP_CALL_COUNT] = { 0x30E3AC, 0x30E3B8, 0x30E3C4, 0x30D9DD, 0x30D9E7, 0x30D6BC, 0x30D6C4, 0x3155F4,
-                                                      0x6F91DF, 0x6F92C8, 0x6F940E, 0x6FA603, 0x6FA657, 0x7FCAE6, 0x7FCBDC, 0x7FCD00,
-                                                      0x31561D, 0x315629, 0x315635, 0x315641, 0x31564D, 0x315659, 0x315665, 0x315671,
-                                                      0x31567D, 0x315689, 0x315695, 0x3156A1, 0x3156AD, 0x3156B9, 0x3156C5 };
+                                                      0x6F91DF, 0x6F92C8, 0x6F940E, 0x6FA603, 0x6FA657, 0x7FCAE6, 0x7FCBDC, 0x7FCD00 };
 static const unsigned kStepTargets[STEP_CALL_COUNT] = { 0x547EF0, 0x547EF0, 0x547EF0, 0x333BD0, 0x5CFEA0, 0x12FD80, 0x12EC40, 0x40ECE0,
-                                                        0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0,
-                                                        0x542790, 0x542790, 0x542790, 0x542790, 0x542790, 0x542790, 0x542790, 0x542790,
-                                                        0x542790, 0x542790, 0x542790, 0x542790, 0x542790, 0x542790, 0x542790 };
-static const int kStepSlots[STEP_CALL_COUNT] = { 6, 6, 6, 7, 8, 9, 10, 11, 12, 12, 12, 12, 12, 12, 12, 12,
-                                                 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14 }; // relay slot of each site
+                                                        0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0 };
+static const int kStepSlots[STEP_CALL_COUNT] = { 6, 6, 6, 7, 8, 9, 10, 11, 12, 12, 12, 12, 12, 12, 12, 12 }; // relay slot of each site
 static bool VerifyStepCalls()
 {
     for (int i = 0; i < STEP_CALL_COUNT; i++) {
@@ -1006,18 +1013,18 @@ bool SimPatches_Install()
     if (sitesOk) g_relay = AllocNear(g_exeBase, 4096);
     if (g_relay) {
         DWORD old;
-        VirtualProtect(g_relay, 240, PAGE_EXECUTE_READWRITE, &old);
-        void* targets[15] = { (void*)&DetGetNode, (void*)&DetSaplingRender, (void*)&DetSaplingLate, (void*)&DetFrameLock,
+        VirtualProtect(g_relay, 224, PAGE_EXECUTE_READWRITE, &old);
+        void* targets[14] = { (void*)&DetGetNode, (void*)&DetSaplingRender, (void*)&DetSaplingLate, (void*)&DetFrameLock,
                               (void*)&DetUiRoutine, (void*)&DetPrepare, (void*)&DetPieceSpeed, (void*)&DetWeather, (void*)&DetRoadWeather,
                               (void*)&DetBuildingLinks, (void*)&DetConnectionChecks, (void*)&DetGroundPaint, (void*)&DetDisplayCost,
-                              (void*)&DetPlacePress, (void*)&DetNetworkRetired };
-        for (int i = 0; i < 15; i++) {
+                              (void*)&DetPlacePress };
+        for (int i = 0; i < 14; i++) {
             BYTE* r = g_relay + i * 16;
             r[0] = 0xff; r[1] = 0x25; r[2] = r[3] = r[4] = r[5] = 0;
             memcpy(r + 6, &targets[i], 8);
         }
-        VirtualProtect(g_relay, 240, PAGE_EXECUTE_READ, &old);
-        FlushInstructionCache(GetCurrentProcess(), g_relay, 240);
+        VirtualProtect(g_relay, 224, PAGE_EXECUTE_READ, &old);
+        FlushInstructionCache(GetCurrentProcess(), g_relay, 224);
         unsigned char getNode[6], render[5], lateCall[5], frameLock[6], uiCall[5], prepareCall[5], placePress[6];
         getNode[0] = 0x90;
         frameLock[0] = 0x90;
