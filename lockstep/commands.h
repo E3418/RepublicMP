@@ -38,6 +38,7 @@ enum LockstepCommandKind {
     LS_CMD_DIRECTION = 9,    // RoadSyncDirectionMsg: a factory connection's direction
     LS_CMD_TERRAIN = 10,     // terrain edits of one frame (terrain_hook)
     LS_CMD_MONEY = 11,       // LsMoneyDelta: what a local action paid or got
+    LS_CMD_PURCHASE = 12,    // purchase.cpp: a vehicle, licence or blueprint bought in a purchase window
 };
 
 // Money a local action changed on this PC (an interface purchase, a terrain

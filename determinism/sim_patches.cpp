@@ -3,6 +3,7 @@
 #include "sim_patches.h"
 #include "../lockstep/commands.h"
 #include "../world_sync/local_builds.h"
+#include "../lockstep/purchase.h"
 #include "determinism.h"
 #include <string.h>
 #include <limits.h>
@@ -963,6 +964,27 @@ static bool DetPlacePress(void* input)
     if (pressed && Determinism_IsActive() && LocalBuilds_PlacementPress()) return false;
     return pressed;
 }
+
+// The purchase window's Buy press (80cc60 reads it at 810943, from the
+// interface): in lockstep it becomes a purchase command (lockstep/purchase),
+// read from the caller's registers one frame up. (by SoylentGreed)
+#define BUY_PRESS_SITE 0x810943
+static const unsigned char kBuyPressOriginal[6] = { 0xff, 0x15, 0x6f, 0xbf, 0x05, 0x00 };
+
+static bool DetBuyPress(void* input)
+{
+    alignas(16) CONTEXT c = {};
+    RtlCaptureContext(&c);
+    bool pressed = (*(PressFn*)(g_exeBase + PLACE_PRESS_IMPORT))(input);
+    if (!pressed || !Determinism_IsActive()) return pressed;
+    DWORD64 base = 0;
+    PRUNTIME_FUNCTION f = RtlLookupFunctionEntry(c.Rip, &base, nullptr);
+    if (!f) return pressed;
+    void* data = nullptr;
+    DWORD64 frame = 0;
+    RtlVirtualUnwind(UNW_FLAG_NHANDLER, base, c.Rip, f, &c, &data, &frame, nullptr);
+    return Purchase_OnPress(pressed, &c);
+}
 #define STEP_CALL_COUNT 16
 static const unsigned kStepCalls[STEP_CALL_COUNT] = { 0x30E3AC, 0x30E3B8, 0x30E3C4, 0x30D9DD, 0x30D9E7, 0x30D6BC, 0x30D6C4, 0x3155F4,
                                                       0x6F91DF, 0x6F92C8, 0x6F940E, 0x6FA603, 0x6FA657, 0x7FCAE6, 0x7FCBDC, 0x7FCD00 };
@@ -1008,31 +1030,34 @@ bool SimPatches_Install()
                    memcmp(g_exeBase + FRAME_LOCK_SITE, kFrameLockOriginal, 6) == 0 &&
                    memcmp(g_exeBase + UI_ROUTINE_CALL, kUiCallOriginal, 5) == 0 &&
                    memcmp(g_exeBase + PREPARE_CALL, kPrepareCallOriginal, 5) == 0 &&
-                   memcmp(g_exeBase + PLACE_PRESS_SITE, kPlacePressOriginal, 6) == 0 && VerifyStepCalls();
+                   memcmp(g_exeBase + PLACE_PRESS_SITE, kPlacePressOriginal, 6) == 0 &&
+                   memcmp(g_exeBase + BUY_PRESS_SITE, kBuyPressOriginal, 6) == 0 && VerifyStepCalls();
     bool relays = false;
     if (sitesOk) g_relay = AllocNear(g_exeBase, 4096);
     if (g_relay) {
         DWORD old;
-        VirtualProtect(g_relay, 224, PAGE_EXECUTE_READWRITE, &old);
-        void* targets[14] = { (void*)&DetGetNode, (void*)&DetSaplingRender, (void*)&DetSaplingLate, (void*)&DetFrameLock,
+        VirtualProtect(g_relay, 240, PAGE_EXECUTE_READWRITE, &old);
+        void* targets[15] = { (void*)&DetGetNode, (void*)&DetSaplingRender, (void*)&DetSaplingLate, (void*)&DetFrameLock,
                               (void*)&DetUiRoutine, (void*)&DetPrepare, (void*)&DetPieceSpeed, (void*)&DetWeather, (void*)&DetRoadWeather,
                               (void*)&DetBuildingLinks, (void*)&DetConnectionChecks, (void*)&DetGroundPaint, (void*)&DetDisplayCost,
-                              (void*)&DetPlacePress };
-        for (int i = 0; i < 14; i++) {
+                              (void*)&DetPlacePress, (void*)&DetBuyPress };
+        for (int i = 0; i < 15; i++) {
             BYTE* r = g_relay + i * 16;
             r[0] = 0xff; r[1] = 0x25; r[2] = r[3] = r[4] = r[5] = 0;
             memcpy(r + 6, &targets[i], 8);
         }
-        VirtualProtect(g_relay, 224, PAGE_EXECUTE_READ, &old);
-        FlushInstructionCache(GetCurrentProcess(), g_relay, 224);
-        unsigned char getNode[6], render[5], lateCall[5], frameLock[6], uiCall[5], prepareCall[5], placePress[6];
+        VirtualProtect(g_relay, 240, PAGE_EXECUTE_READ, &old);
+        FlushInstructionCache(GetCurrentProcess(), g_relay, 240);
+        unsigned char getNode[6], render[5], lateCall[5], frameLock[6], uiCall[5], prepareCall[5], placePress[6], buyPress[6];
         getNode[0] = 0x90;
         frameLock[0] = 0x90;
         placePress[0] = 0x90;
+        buyPress[0] = 0x90;
         if (CallTo(GETNODE_SITE + 1, g_relay, getNode + 1) && CallTo(SAPLING_RENDER_CALL, g_relay + 16, render) &&
             CallTo(SAPLING_LATE_CALL, g_relay + 32, lateCall) && CallTo(FRAME_LOCK_SITE + 1, g_relay + 48, frameLock + 1) &&
             CallTo(UI_ROUTINE_CALL, g_relay + 64, uiCall) && CallTo(PREPARE_CALL, g_relay + 80, prepareCall) &&
-            CallTo(PLACE_PRESS_SITE + 1, g_relay + 13 * 16, placePress + 1)) {
+            CallTo(PLACE_PRESS_SITE + 1, g_relay + 13 * 16, placePress + 1) &&
+            CallTo(BUY_PRESS_SITE + 1, g_relay + 14 * 16, buyPress + 1)) {
             Write(g_exeBase + GETNODE_SITE, getNode, 6);
             Write(g_exeBase + SAPLING_RENDER_CALL, render, 5);
             Write(g_exeBase + SAPLING_LATE_CALL, lateCall, 5);
@@ -1040,6 +1065,7 @@ bool SimPatches_Install()
             Write(g_exeBase + UI_ROUTINE_CALL, uiCall, 5);
             Write(g_exeBase + PREPARE_CALL, prepareCall, 5);
             Write(g_exeBase + PLACE_PRESS_SITE, placePress, 6);
+            Write(g_exeBase + BUY_PRESS_SITE, buyPress, 6);
             relays = true;
             for (int i = 0; i < STEP_CALL_COUNT; i++) {
                 unsigned char call[5];
@@ -1049,7 +1075,7 @@ bool SimPatches_Install()
         }
     }
     bool tools = relays && InstallToolStubs();
-    Logf("republicmp  SIM_PATCHES: late hook %d, relays %d (building visibility, saplings, render before Early, interface searches, Prepare at speed 0, window cost display, placing press), tool stubs %d (%d calls)%s",
+    Logf("republicmp  SIM_PATCHES: late hook %d, relays %d (building visibility, saplings, render before Early, interface searches, Prepare at speed 0, window cost display, placing press, buy press), tool stubs %d (%d calls)%s",
          late, relays, tools, (int)TOOL_CALL_COUNT, sitesOk ? "" : " - unexpected bytes at a relay site");
     return late && relays && tools;
 }

@@ -9,12 +9,14 @@
 #include "../game/input_block.h"
 #include "../session/settings_sync.h"
 #include "../world_sync/terrain/terrain_hook.h"
+#include "purchase.h"
 #include <vector>
 #include <string.h>
 
 void Commands_Bind(const TsmHost* host)
 {
     TsmBind(host);
+    Purchase_Bind(host);
 }
 
 struct Command {
@@ -74,6 +76,7 @@ static const char* KindName(int kind)
     case LS_CMD_DIRECTION: return "factory connection direction";
     case LS_CMD_TERRAIN: return "terrain edits";
     case LS_CMD_MONEY: return "money";
+    case LS_CMD_PURCHASE: return "purchase";
     }
     return "?";
 }
@@ -164,6 +167,9 @@ static void Apply(const Command& c)
         break;
     case LS_CMD_MONEY:
         if (n == sizeof(LsMoneyDelta)) ok = ApplyMoney(*(const LsMoneyDelta*)p);
+        break;
+    case LS_CMD_PURCHASE:
+        ok = Purchase_ApplyCommand(p, n);
         break;
     }
     InputBlock_EndNeutral();

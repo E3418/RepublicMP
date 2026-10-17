@@ -213,6 +213,9 @@
     <ClCompile Include="lockstep\commands.cpp">
       <Filter>lockstep</Filter>
     </ClCompile>
+    <ClCompile Include="lockstep\purchase.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
     <ClCompile Include="lockstep\lockstep_net.cpp">
       <Filter>lockstep</Filter>
     </ClCompile>
@@ -381,6 +384,9 @@
       <Filter>determinism</Filter>
     </ClInclude>
     <ClInclude Include="lockstep\commands.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\purchase.h">
       <Filter>lockstep</Filter>
     </ClInclude>
     <ClInclude Include="lockstep\lockstep_net.h">
