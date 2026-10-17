@@ -8,6 +8,7 @@
 #include "../lockstep/game_calls.h"
 #include "../lockstep/vehicle_switches.h"
 #include "../lockstep/building_switches.h"
+#include "../lockstep/tree_tool.h"
 #include "determinism.h"
 #include <string.h>
 #include <intrin.h>
@@ -720,6 +721,7 @@ static bool InstallToolStubs()
         // The copy line and depot tools go through their routes (lockstep/route_tools), which call them.
         unsigned __int64 target = kToolCalls[i][1] == 0x2B4C60   ? (unsigned __int64)&RouteTools_LineCopyTool
                                   : kToolCalls[i][1] == 0x2B2DD0 ? (unsigned __int64)&RouteTools_DepotTool
+                                  : kToolCalls[i][1] == 0x2F94C0 ? (unsigned __int64)&TreeTool_Run
                                                                  : (unsigned __int64)(g_exeBase + kToolCalls[i][1]);
         p = EmitImm(p, 0x49, 0xBB, target); // mov r11, target
         p = EmitImm(p, 0x49, 0xBA, (unsigned __int64)common);                        // mov r10, common

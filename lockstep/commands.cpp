@@ -17,6 +17,7 @@
 #include "world_refs.h"
 #include "vehicle_switches.h"
 #include "building_switches.h"
+#include "tree_tool.h"
 #include <vector>
 #include <string.h>
 
@@ -30,6 +31,7 @@ void Commands_Bind(const TsmHost* host)
     WorldRefs_Bind(host);
     VehicleSwitches_Bind(host);
     BuildingSwitches_Bind(host);
+    TreeTool_Bind(host);
 }
 
 struct Command {
@@ -107,6 +109,7 @@ static const char* KindName(int kind)
     case LS_CMD_LINE_ACCEPT: return "line accept";
     case LS_CMD_VEHICLE_SWITCH: return "vehicle setting";
     case LS_CMD_BUILDING_SWITCH: return "window setting";
+    case LS_CMD_TREE: return "tree planting";
     }
     return "?";
 }
@@ -114,7 +117,7 @@ static const char* KindName(int kind)
 // Terrain brushes and their cost come every frame a tool is used: not logged one by one.
 static bool Frequent(int kind)
 {
-    return kind == LS_CMD_TERRAIN || kind == LS_CMD_MONEY;
+    return kind == LS_CMD_TERRAIN || kind == LS_CMD_MONEY || kind == LS_CMD_TREE;
 }
 
 void Commands_Submit(int kind, const void* data, size_t size)
@@ -225,6 +228,9 @@ static void Apply(const Command& c)
         break;
     case LS_CMD_BUILDING_SWITCH:
         ok = BuildingSwitches_ApplyCommand(p, n);
+        break;
+    case LS_CMD_TREE:
+        ok = TreeTool_ApplyCommand(p, n);
         break;
     }
     InputBlock_EndNeutral();
@@ -338,8 +344,10 @@ static const char* const kCarriedTools[] = { "vehicle_addstop", "line_addstop", 
 static const char* const kUncarriedTools[] = {
     "vehicle_", "worker_relocate", "building_addsource", "line_addstop", "second_road", "water_square",
     "bojka", "christmas_", "join_hub", "crossroad_add", "terrain_go_there", "terrain_demolish_trees",
-    "road_crossroad", "tree_", "palma", "jungle_", "fjord_", "afgan_", "tallkriak", "leafkriak",
+    "road_crossroad",
 };
+// The single-tree tools (tree_tool.cpp): put away only when the game's tree tool differs.
+static const char* const kTreeTools[] = { "tree_", "palma", "jungle_", "fjord_", "afgan_", "afghan_", "tallkriak", "leafkriak" };
 
 static void PutAwayUncarriedTool()
 {
@@ -355,6 +363,13 @@ static void PutAwayUncarriedTool()
     if (RouteTools_Ready())
         for (const char* carried : kCarriedTools)
             if (strcmp(name, carried) == 0) return;
+    if (!TreeTool_Ready())
+        for (const char* prefix : kTreeTools)
+            if (strncmp(name, prefix, strlen(prefix)) == 0) {
+                *tool = 0;
+                Logf("republicmp  LOCKSTEP: tool [%s] put away - the game's tree tool differs", name);
+                return;
+            }
     for (const char* prefix : kUncarriedTools) {
         if (strncmp(name, prefix, strlen(prefix)) != 0) continue;
         *tool = 0;

@@ -44,6 +44,7 @@ enum LockstepCommandKind {
     LS_CMD_LINE_ACCEPT = 15, // line_accept.cpp: the line window's Accept with its working copy
     LS_CMD_VEHICLE_SWITCH = 16, // vehicle_switches.cpp: vehicle words a window click changed
     LS_CMD_BUILDING_SWITCH = 17, // building_switches.cpp: building, storage slot or world setting words a click changed
+    LS_CMD_TREE = 18,        // tree_tool.cpp: one frame of a single-tree tool
 };
 
 // Money a local action changed on this PC (an interface purchase, a terrain
