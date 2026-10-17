@@ -757,10 +757,72 @@ static bool g_demolishDiffOverflow = false, g_demolishDiffOk = false;
 // A commit the engine marked invalid builds nothing anywhere. True when the
 // commit was taken (the original is then not called).
 static RoadSyncMsg g_commandSegment; // ~48 KB: main thread only
+
+// Lockstep: the demolition tool commits every frame while the button is held
+// over a piece, and the piece stays until its command is made at a tick
+// boundary - a piece already sent and not made yet is not sent again. Main
+// thread (the commit hook and the commands' boundary).
+#define DEMOLISH_PENDING_MAX 16
+#define DEMOLISH_PENDING_MS 5000
+struct PendingDemolish {
+    ULONGLONG at;
+    RoadSyncDemolishMsg msg;
+};
+static PendingDemolish g_pendingDemolish[DEMOLISH_PENDING_MAX];
+
+static bool SameDemolish(const RoadSyncDemolishMsg& a, const RoadSyncDemolishMsg& b)
+{
+    if (a.category != b.category || a.hasRange != b.hasRange || a.pieceCount != b.pieceCount) return false;
+    if (a.hasRange) return memcmp(a.rangeA, b.rangeA, sizeof(a.rangeA)) == 0 && memcmp(a.rangeB, b.rangeB, sizeof(a.rangeB)) == 0;
+    return memcmp(a.pieces, b.pieces, sizeof(a.pieces[0]) * (a.pieceCount > 0 ? a.pieceCount : 0)) == 0;
+}
+
+// True when this piece is still waiting for its command; else it is remembered.
+static bool DemolishAlreadySent(const RoadSyncDemolishMsg& m)
+{
+    ULONGLONG now = GetTickCount64();
+    int free = -1;
+    for (int i = 0; i < DEMOLISH_PENDING_MAX; i++) {
+        PendingDemolish& p = g_pendingDemolish[i];
+        if (p.at && now - p.at > DEMOLISH_PENDING_MS) p.at = 0;
+        if (!p.at) {
+            if (free < 0) free = i;
+            continue;
+        }
+        if (SameDemolish(p.msg, m)) return true;
+    }
+    if (free < 0) free = 0;
+    g_pendingDemolish[free].at = now;
+    g_pendingDemolish[free].msg = m;
+    return false;
+}
+
+void LocalBuilds_DemolishMade(const RoadSyncDemolishMsg& m)
+{
+    for (int i = 0; i < DEMOLISH_PENDING_MAX; i++)
+        if (g_pendingDemolish[i].at && SameDemolish(g_pendingDemolish[i].msg, m)) g_pendingDemolish[i].at = 0;
+}
+
+// The piece +0x380 is one of the network's segments (after a removal the tool
+// keeps its selection on the segment that is gone).
+static bool SegmentListed(__int64 manager, __int64 seg)
+{
+    __int64* it = *(__int64**)(manager + 0x2B0);
+    __int64* end = *(__int64**)(manager + 0x2B8);
+    for (; seg && it && it < end; ++it)
+        if (*it == seg) return true;
+    return false;
+}
+
 static bool TakeCommitAsCommand(__int64 manager, int category)
 {
     __try {
         if (IsDemolishToolActive()) {
+            bool multi = *(unsigned char*)(manager + MGR_UPG_MULTI_OFFSET) != 0;
+            __int64 seg = *(__int64*)(manager + MGR_UPG_SEGMENT_OFFSET);
+            // No piece under the brush, or the one just removed: nothing to carry.
+            if (!multi && (*(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) == 0 || !SegmentListed(manager, seg)))
+                return true;
             RoadSyncDemolishMsg m = {};
             __int64 thisPtr = GetPlacementManagerThisPtr();
             m.category = category;
@@ -769,8 +831,14 @@ static bool TakeCommitAsCommand(__int64 manager, int category)
             m.cursor[2] = *(float*)(thisPtr + CURSOR_Z_OFFSET);
             m.hasRange = ReadDemolishRange(manager, m.rangeA, m.rangeB) ? 1 : 0;
             m.pieceCount = m.hasRange ? 0 : ReadDemolishPieces(manager, m.pieces, 8);
-            if (m.hasRange || m.pieceCount > 0) Commands_Submit(LS_CMD_NET_DEMOLISH, &m, sizeof(m));
-            else NoteCommitSkip(category, "lockstep: demolition on a hovered node is not carried yet", -1, -1, -1);
+            if (m.hasRange || m.pieceCount > 0) {
+                if (!DemolishAlreadySent(m)) Commands_Submit(LS_CMD_NET_DEMOLISH, &m, sizeof(m));
+            } else {
+                int count = 0;
+                if (!multi && seg) count = (int)((*(__int64*)(seg + SEG_POINTS_END_OFFSET) - *(__int64*)(seg + SEG_POINTS_BEGIN_OFFSET)) / 0x18);
+                NoteCommitSkip(category, "lockstep: the demolition piece cannot be read (count, range start, range end)", count,
+                               *(int*)(manager + MGR_UPG_RANGE_START_OFFSET), *(int*)(manager + MGR_UPG_RANGE_END_OFFSET));
+            }
             return true;
         }
         if (*(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) != 0) {

@@ -5,6 +5,7 @@
 #include "../world_sync/networks/road_sync.h"
 #include "../world_sync/buildings/build_sync.h"
 #include "../world_sync/replay_menus.h"
+#include "../world_sync/local_builds.h"
 #include "lockstep_net.h"
 #include "../game/input_block.h"
 #include "../session/settings_sync.h"
@@ -145,6 +146,7 @@ static void Apply(const Command& c)
     bool ok = false;
     g_applyThread = GetCurrentThreadId();
     InterlockedIncrement(&g_applying);
+    double rubBefore = *Rubles(), usdBefore = *Dollars();
     InputBlock_BeginNeutral();
     // A drag the local player has under way would share the tool manager with
     // the replay and change what it builds on this PC only: it is cancelled.
@@ -163,7 +165,10 @@ static void Apply(const Command& c)
         if (n == sizeof(RoadSyncUpgradeMsg)) ok = RoadSync_ApplyCommandUpgrade(*(const RoadSyncUpgradeMsg*)p);
         break;
     case LS_CMD_NET_DEMOLISH:
-        if (n == sizeof(RoadSyncDemolishMsg)) ok = RoadSync_ApplyCommandDemolish(*(const RoadSyncDemolishMsg*)p);
+        if (n == sizeof(RoadSyncDemolishMsg)) {
+            ok = RoadSync_ApplyCommandDemolish(*(const RoadSyncDemolishMsg*)p);
+            LocalBuilds_DemolishMade(*(const RoadSyncDemolishMsg*)p);
+        }
         break;
     case LS_CMD_PLACE:
         if (n == sizeof(BuildSyncMsg)) ok = BuildSync_ApplyPlacementCommand(*(const BuildSyncMsg*)p);
@@ -208,9 +213,14 @@ static void Apply(const Command& c)
     InputBlock_EndNeutral();
     InterlockedDecrement(&g_applying);
     g_madeThisFrame = true;
+    // What the command paid or got: compared between the PCs' logs when the money differs.
+    double paidRub = *Rubles() - rubBefore, paidUsd = *Dollars() - usdBefore;
+    char money[96] = "";
+    if (paidRub != 0.0 || paidUsd != 0.0)
+        sprintf_s(money, " (money %+.4f rubles %+.4f dollars)", paidRub, paidUsd);
     if (!Frequent(c.kind) || !ok)
-        Logf("republicmp  LOCKSTEP: #%u %s after tick %llu - %s", c.seq, KindName(c.kind), c.afterTick,
-             ok ? "made" : "not made");
+        Logf("republicmp  LOCKSTEP: #%u %s after tick %llu - %s%s", c.seq, KindName(c.kind), c.afterTick,
+             ok ? "made" : "not made", money);
 }
 
 bool Commands_Due(unsigned long long completed)

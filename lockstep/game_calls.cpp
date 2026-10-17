@@ -18,7 +18,8 @@
 
 // Argument kinds: x ignored (0), W the world, M the pointer world+worldPointer
 // holds, V a vehicle, B a building, L a line, O a vehicle, building or line,
-// o the same or null, b a byte, I a 32-bit integer.
+// o the same or null, b a byte, I a 32-bit integer, F a float (the fourth
+// argument only: it travels in xmm3).
 struct GameCallSite {
     unsigned site, target;
     const char* name;
@@ -76,6 +77,8 @@ static const GameCallSite kSites[] = {
     { 0x7D1E6B, 0x499600, "line window: accept (name a private line)", "xL", 0, 0, false, CALL_PRESENTATION },
     { 0x3592F1, 0x499600, "lines list: delete line", "xL", 0, 0, false, CALL_DELETE_LINE },
     { 0x3592FF, 0x4962C0, "lines list: delete line (cleanup)", "Mb", 0x12800, 0, false, CALL_PRESENTATION },
+    // A late-phase tool (main thread): building_addfield adds the picked field to the farm +d298.
+    { 0x1D87D4, 0x162100, "field tool: add a field to a farm", "WBOF", 0, 0, false },
 };
 #define SITE_COUNT (sizeof(kSites) / sizeof(kSites[0]))
 
@@ -101,6 +104,28 @@ static BYTE* World() { return g_exeBase + WORLD_RVA; }
 static U64 Q(U64 at) { return *(U64*)at; }
 
 typedef U64 (*CallFn)(U64, U64, U64, U64, U64, U64, U64);
+typedef U64 (*CallF4Fn)(U64, U64, U64, float, U64, U64, U64);
+
+// A site whose fourth argument is a float (kept as its bits in a[3]).
+static bool Float4(const GameCallSite& s)
+{
+    return s.schema[0] && s.schema[1] && s.schema[2] && s.schema[3] == 'F';
+}
+
+static float AsFloat(U64 bits)
+{
+    unsigned b = (unsigned)bits;
+    float f;
+    memcpy(&f, &b, 4);
+    return f;
+}
+
+static U64 CallSite(const GameCallSite& s, const U64* a)
+{
+    if (Float4(s))
+        return ((CallF4Fn)(g_exeBase + s.target))(a[0], a[1], a[2], AsFloat(a[3]), a[4], a[5], a[6]);
+    return ((CallFn)(g_exeBase + s.target))(a[0], a[1], a[2], a[3], a[4], a[5], a[6]);
+}
 
 static bool ObjectRef(U64 object, unsigned char& kind, RouteRef& r)
 {
@@ -154,7 +179,7 @@ static const char* Capture(unsigned index, const U64* a, GameCallMsg& m)
             if (!ObjectRef(a[j], m.kinds[j], m.refs[j])) return "an object is not in the world's lists";
             break;
         case 'b': m.values[j] = (unsigned)(a[j] & 0xff); break;
-        case 'I': m.values[j] = (unsigned)a[j]; break;
+        case 'I': case 'F': m.values[j] = (unsigned)a[j]; break;
         default: return "unknown argument kind";
         }
     }
@@ -178,7 +203,7 @@ static const char* Rebuild(const GameCallMsg& m, U64* a)
             if (!(a[j] = ObjectAt(m.kinds[j], m.refs[j]))) return "an object is gone";
             break;
         case 'b': a[j] = m.values[j] & 0xff; break;
-        case 'I': a[j] = m.values[j]; break;
+        case 'I': case 'F': a[j] = m.values[j]; break;
         }
     }
     return nullptr;
@@ -187,8 +212,7 @@ static const char* Rebuild(const GameCallMsg& m, U64* a)
 static U64 Run(unsigned index, const U64* a)
 {
     const GameCallSite& s = kSites[index];
-    CallFn fn = (CallFn)(g_exeBase + s.target);
-    if (!Commands_TakeUi()) return fn(a[0], a[1], a[2], a[3], a[4], a[5], a[6]);
+    if (!Commands_TakeUi()) return CallSite(s, a);
     switch (s.special) {
     case CALL_PRESENTATION:
         return s.result;
@@ -227,10 +251,26 @@ static U64 Thunk(U64 a1, U64 a2, U64 a3, U64 a4, U64 a5, U64 a6, U64 a7)
     return Run(I, a);
 }
 
+// The same for a site whose fourth argument is a float (xmm3): its bits go in a[3].
+template <unsigned I>
+static U64 ThunkF4(U64 a1, U64 a2, U64 a3, float a4, U64 a5, U64 a6, U64 a7)
+{
+    unsigned bits;
+    memcpy(&bits, &a4, 4);
+    U64 a[MAX_ARGS] = { a1, a2, a3, bits, a5, a6, a7 };
+    return Run(I, a);
+}
+
 template <size_t... I>
 static constexpr std::array<void*, sizeof...(I)> MakeThunks(std::index_sequence<I...>)
 {
     return { { (void*)&Thunk<(unsigned)I>... } };
+}
+
+template <size_t... I>
+static constexpr std::array<void*, sizeof...(I)> MakeThunksF4(std::index_sequence<I...>)
+{
+    return { { (void*)&ThunkF4<(unsigned)I>... } };
 }
 
 bool GameCalls_ApplyCommand(const void* data, size_t size)
@@ -251,7 +291,7 @@ bool GameCalls_ApplyCommand(const void* data, size_t size)
         if (!why && s.special != CALL_PLAIN && s.special != CALL_DELETE_LINE) why = "not a command site";
         if (!why) {
             if (s.special == CALL_DELETE_LINE) *(BYTE*)(a[1] + 1) = 0;
-            r = ((CallFn)(g_exeBase + s.target))(a[0], a[1], a[2], a[3], a[4], a[5], a[6]);
+            r = CallSite(s, a);
             if (s.special == CALL_DELETE_LINE) {
                 typedef void (*CleanupFn)(U64, U64);
                 ((CleanupFn)(g_exeBase + DELETE_CLEANUP))(Q((U64)World() + LINES_OFFSET), 1);
@@ -271,6 +311,7 @@ bool GameCalls_ApplyCommand(const void* data, size_t size)
 bool GameCalls_Install()
 {
     static const auto thunks = MakeThunks(std::make_index_sequence<SITE_COUNT>());
+    static const auto thunksF4 = MakeThunksF4(std::make_index_sequence<SITE_COUNT>());
     BYTE* relay = AllocNear(g_exeBase, 4096);
     if (!relay) {
         Logf("republicmp  GAME CALL: no relay page near the executable - window buttons are not shared");
@@ -281,7 +322,7 @@ bool GameCalls_Install()
     for (size_t i = 0; i < SITE_COUNT; i++) {
         BYTE* r = relay + i * 16;
         r[0] = 0xff; r[1] = 0x25; r[2] = r[3] = r[4] = r[5] = 0;
-        void* to = thunks[i];
+        void* to = Float4(kSites[i]) ? thunksF4[i] : thunks[i];
         memcpy(r + 6, &to, 8);
     }
     VirtualProtect(relay, SITE_COUNT * 16, PAGE_EXECUTE_READ, &old);

@@ -221,11 +221,11 @@ static void SessionButtons(std::string& hostIp)
         ImGui::SetNextItemWidth(-1);
         ImGui::InputText("##hostIp", &hostIp);
         bool lockstep = SaveSync_GetLockstep();
-        if (ImGui::Checkbox("Lockstep (experimental)", &lockstep)) SaveSync_SetLockstep(lockstep);
+        if (ImGui::Checkbox("Host in lockstep (experimental)", &lockstep)) SaveSync_SetLockstep(lockstep);
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Host only: both games simulate the same ticks, so nothing drifts apart.\n"
-                              "Building, roads and demolition work; other actions are not carried yet.\n"
-                              "The game pauses for both while a construction tool is open.");
+            ImGui::SetTooltip("For the host: both games simulate the same ticks, so nothing drifts apart.\n"
+                              "The joining player follows the host's choice - nothing to tick there.\n"
+                              "Actions that are not carried yet are put away when selected.");
         if (!world) ImGui::TextColored(kGrey, "Host is available once a city is loaded.");
         return;
     }

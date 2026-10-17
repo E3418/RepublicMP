@@ -993,6 +993,24 @@ typedef __int64 (*NodeCtorFn)(__int64 node);
 // wrong pieces - a couple of spans stayed on the receiver (#23). Before the
 // node moves, put a fresh copy in its place, as the drag tick itself does
 // (0x4FE448..0x4FE48A).
+// A drag node of the manager (+0x428 / +0x430), made when missing.
+#define OPERATOR_NEW_RVA 0x84DECC
+#define NODE_CTOR_RVA 0x0FF950
+static const unsigned char kOperatorNewEntry[16] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b,
+                                                     0xd9, 0xeb, 0x21, 0x48, 0x8b, 0xcb, 0xe8, 0xd5 };
+static void EnsureDragNode(__int64 manager, int nodeOffset)
+{
+    if (*(__int64*)(manager + nodeOffset)) return;
+    if (memcmp((const void*)((uintptr_t)g_exe + OPERATOR_NEW_RVA), kOperatorNewEntry, sizeof(kOperatorNewEntry)) != 0) return;
+    typedef void* (*NewFn)(size_t);
+    typedef __int64 (*NodeCtorFn)(void*);
+    void* raw = ((NewFn)((uintptr_t)g_exe + OPERATOR_NEW_RVA))(0xE8);
+    if (!raw) return;
+    __int64 node = ((NodeCtorFn)((uintptr_t)g_exe + NODE_CTOR_RVA))(raw);
+    *(__int64*)(manager + nodeOffset) = node;
+    Logf("republicmp  ROAD_SYNC:   made the manager's %s drag node for the demolition", nodeOffset == MGR_START_NODE_OFFSET ? "start" : "end");
+}
+
 static void DetachDragNode(__int64 manager, int nodeOffset, int attachedOffset, const float target[3])
 {
     __int64 node = *(__int64*)(manager + nodeOffset);
@@ -1167,6 +1185,14 @@ static bool ApplyDemolishInner(const RoadSyncDemolishMsg& m, bool* outRemoved)
                         // (0x4FEA52: +0x380 piece, +0x388/+0x38c range, +0x390
                         // hit) - AdoptSenderRange then writes the sender's range,
                         // route and cut points - if the drag nodes are there.
+                        // The drag nodes exist only where this network's tool was
+                        // used: a PC without them made the fallback, the other did not
+                        // (a forklift junction stayed on one PC). They are made here
+                        // as fcaf0 makes them (operator new 0xe8, node constructor ff950).
+                        if (!viaNode) {
+                            EnsureDragNode(manager, MGR_START_NODE_OFFSET);
+                            EnsureDragNode(manager, MGR_END_NODE_OFFSET);
+                        }
                         if (!viaNode && *(__int64*)(manager + MGR_START_NODE_OFFSET) &&
                             *(__int64*)(manager + MGR_END_NODE_OFFSET)) {
                             *(__int64*)(manager + MGR_UPG_SEGMENT_OFFSET) = seg;
