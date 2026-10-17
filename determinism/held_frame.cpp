@@ -122,6 +122,47 @@ bool HeldFrame_Verify()
     return true;
 }
 
+// Early draws the road junctions' signs and traffic lights itself (30c851..30c8b7):
+// 228b50(junction manager [world+12808]) rebuilds the manager's list of
+// junctions on camera-visible road edges (+50, from the road network's view
+// list +aa0), and with the rule +14451 set, 2239d0(junction) queues each one's
+// sign or light meshes (41de40). A held frame has no Early, so the lights were
+// drawn only on tick frames and blinked; the held frame draws them the same way.
+static int g_junctionsChecked = -1;
+
+static bool CallTargets(unsigned site, unsigned target)
+{
+    BYTE* at = g_exeBase + site;
+    int rel = 0;
+    memcpy(&rel, at + 1, 4);
+    return at[0] == 0xE8 && site + 5 + rel == target;
+}
+
+static void DrawJunctions()
+{
+    if (g_junctionsChecked < 0) {
+        static const unsigned char load[7] = { 0x48, 0x8b, 0x8e, 0x08, 0x28, 0x01, 0x00 }; // mov rcx,[rsi+12808]
+        g_junctionsChecked = memcmp(g_exeBase + 0x30C851, load, sizeof(load)) == 0 && CallTargets(0x30C858, 0x228B50) &&
+                             CallTargets(0x30C89D, 0x2239D0) ? 1 : 0;
+        if (!g_junctionsChecked) Logf("republicmp  HELD FRAME: Early's junction drawing differs - junction lights drawn on tick frames only");
+    }
+    if (!g_junctionsChecked) return;
+    BYTE* world = g_exeBase + 0x9D4F10;
+    __try {
+        BYTE* manager = *(BYTE**)(world + 0x12808);
+        if (!manager) return;
+        ((void (*)(void*))(g_exeBase + 0x228B50))(manager);
+        if (!world[0x14451]) return;
+        BYTE** begin = *(BYTE***)(manager + 0x50);
+        size_t n = begin ? (size_t)(*(BYTE***)(manager + 0x58) - begin) : 0;
+        for (size_t i = 0; i < n; i++) {
+            BYTE* junction = (*(BYTE***)(manager + 0x50))[i];
+            if (junction) ((void (*)(void*))(g_exeBase + 0x2239D0))(junction);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
 // Early (30cb74..30cf4e) normally starts and joins this worker. On a held
 // frame its simulation vector exe+9e7738 and the queues at [9e7710]+60 and
 // [9e2350]+40 are empty. The vehicle render vector stays visible under the
@@ -172,6 +213,7 @@ bool HeldFrame_Draw(bool entitiesReady)
     }
     if (entitiesReady) {
         Determinism_PrivateScope privateRng;
+        DrawJunctions();
         BYTE* world = g_exeBase + 0x9D4F10;
         BYTE* list = world + (g_exeBase[0xA54BB5] ? 0x126A8 : 0x126C0);
         ((void (*)(void*, void*))(g_exeBase + 0x83CEA0))(nullptr, list);

@@ -45,6 +45,9 @@ enum LockstepCommandKind {
     LS_CMD_VEHICLE_SWITCH = 16, // vehicle_switches.cpp: vehicle words a window click changed
     LS_CMD_BUILDING_SWITCH = 17, // building_switches.cpp: building, storage slot or world setting words a click changed
     LS_CMD_BRUSH = 18,       // brush_tools.cpp: one frame of a terrain brush or a single-tree tool
+    LS_CMD_HOVER = 19,       // hover_tools.cpp: a click of a road sign, waypoint or rail signal tool
+    LS_CMD_JUNCTION = 20,    // junction_accept.cpp: the junction window's Accept with its working copy
+    LS_CMD_GAME_RULES = 21,  // commands.cpp: the game menu's settings page applied (its copy of the rules)
 };
 
 // Money a local action changed on this PC (an interface purchase, a terrain
@@ -67,6 +70,12 @@ bool Commands_TakeLocal();
 // For a window's call (the interface, any thread): should it become a command?
 // False only while this thread makes a command.
 bool Commands_TakeUi();
+
+// game_calls: the settings page applies its copy of the game rules (337170).
+void Commands_CaptureGameRules();
+// In a session: cheats off, and no save and reload after a critical rule
+// (called before the frame's commands and after the interface).
+void Commands_GuardSettings();
 
 // Counts the commands made so far (any thread): a comparison around the
 // interface that saw it change knows a command, not the interface, wrote.

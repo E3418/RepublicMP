@@ -5,6 +5,7 @@
 #include "commands.h"
 #include "world_refs.h"
 #include "line_accept.h"
+#include "junction_accept.h"
 #include <array>
 #include <limits.h>
 #include <string.h>
@@ -41,6 +42,10 @@ enum {
     CALL_ACCEPT_MEASURES,
     // The lines list's Delete: +1 = 0, 499600, then 4962c0(manager, 1).
     CALL_DELETE_LINE,
+    // The junction window's Accept: the copy goes to junction_accept.cpp.
+    CALL_JUNCTION_ACCEPT,
+    // The settings page applies its copy of the game rules: the copy goes to commands.cpp.
+    CALL_GAME_RULES,
 };
 
 // Appended only: a command names its site by index.
@@ -79,6 +84,22 @@ static const GameCallSite kSites[] = {
     { 0x3592FF, 0x4962C0, "lines list: delete line (cleanup)", "Mb", 0x12800, 0, false, CALL_PRESENTATION },
     // A late-phase tool (main thread): building_addfield adds the picked field to the farm +d298.
     { 0x1D87D4, 0x162100, "field tool: add a field to a farm", "WBOF", 0, 0, false },
+    // The junction window's Accept block (7595bb..7595f9): the copy into the junction is carried,
+    // the rest of the block is made by the command on every PC.
+    { 0x7595C2, 0x224300, "junction window: accept (reset the junction)", "x", 0, 0, false, CALL_PRESENTATION },
+    { 0x7595CD, 0x226530, "junction window: accept (copy into the junction)", "xx", 0, 0, false, CALL_JUNCTION_ACCEPT },
+    { 0x7595E5, 0x22A6D0, "junction window: accept (mark the junction changed)", "xx", 0, 0, false, CALL_PRESENTATION },
+    { 0x7595EC, 0x0F98D0, "junction window: accept (take the junction off the list)", "xx", 0, 0, false, CALL_PRESENTATION },
+    // The game menu's settings page: "Save settings", closing the window and the "Change settings?"
+    // popup apply the page's copy of the game rules with 337170(world).
+    { 0x33A5CF, 0x337170, "settings page: save settings", "W", 0, 0, false, CALL_GAME_RULES },
+    { 0x33710F, 0x337170, "settings page: close", "W", 0, 0, false, CALL_GAME_RULES },
+    { 0x7FEA3F, 0x337170, "settings popup: change settings", "W", 0, 0, false, CALL_GAME_RULES },
+    // Selling a vehicle: the confirm window's Yes (7f2d50) and the building windows' "sell all
+    // vehicles" prompts call 3dee50(world, vehicle, 1, 0, 0, 0, 0.0f), which queues the sale.
+    { 0x7F3280, 0x3DEE50, "sell a vehicle", "WObbbbF", 0, 0, false },
+    { 0x7F3D50, 0x3DEE50, "sell vehicles of a building", "WObbbbF", 0, 0, false },
+    { 0x7F3E4E, 0x3DEE50, "sell a listed vehicle", "WObbbbF", 0, 0, false },
     // Links and office assignments the building windows remove or make: lists of
     // the buildings (+f98/+fb0, the assigned building's +888), heap only.
     { 0x7447FF, 0x1C7E80, "building window: remove the building from its partner's list", "xOO", 0, 0, false },
@@ -238,6 +259,12 @@ static U64 Run(unsigned index, const U64* a)
         return s.result;
     case CALL_LINE_ACCEPT:
         LineAccept_Capture(a[1], a[2]);
+        return s.result;
+    case CALL_JUNCTION_ACCEPT:
+        JunctionAccept_Capture(a[0], a[1]);
+        return s.result;
+    case CALL_GAME_RULES:
+        Commands_CaptureGameRules();
         return s.result;
     case CALL_DELETE_LINE:
         // The list cleared the line's +1 before the call: put back until the delete is made.

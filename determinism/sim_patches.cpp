@@ -9,6 +9,7 @@
 #include "../lockstep/vehicle_switches.h"
 #include "../lockstep/building_switches.h"
 #include "../lockstep/brush_tools.h"
+#include "../lockstep/hover_tools.h"
 #include "determinism.h"
 #include <string.h>
 #include <intrin.h>
@@ -725,6 +726,12 @@ static bool InstallToolStubs()
                                   : kToolCalls[i][1] == 0x3A8A70 ? (unsigned __int64)&BrushTools_Terrain
                                   : kToolCalls[i][1] == 0x3ADF80 ? (unsigned __int64)&BrushTools_DemolishTrees
                                   : kToolCalls[i][1] == 0x3CCD70 ? (unsigned __int64)&BrushTools_Topsoil
+                                  : kToolCalls[i][1] == 0x417A70 ? (unsigned __int64)&HoverTools_Waypoint
+                                  : kToolCalls[i][1] == 0x4181D0 ? (unsigned __int64)&HoverTools_SignErase
+                                  : kToolCalls[i][1] == 0x417D80 ? (unsigned __int64)&HoverTools_Sign
+                                  : kToolCalls[i][1] == 0x4184C0 ? (unsigned __int64)&HoverTools_RailPlace
+                                  : kToolCalls[i][1] == 0x418F90 ? (unsigned __int64)&HoverTools_RailRemove
+                                  : kToolCalls[i][1] == 0x4182D0 ? (unsigned __int64)&HoverTools_Junction
                                                                  : (unsigned __int64)(g_exeBase + kToolCalls[i][1]);
         p = EmitImm(p, 0x49, 0xBB, target); // mov r11, target
         p = EmitImm(p, 0x49, 0xBA, (unsigned __int64)common);                        // mov r10, common
@@ -849,6 +856,7 @@ static __int64 DetUiRoutine(void* world)
     __int64 r = original(world);
     BuildingSwitches_After(g_inPhase);
     VehicleSwitches_After(g_inPhase);
+    Commands_GuardSettings();
     Determinism_UiSpeedEnd();
     memcpy(g_privateSearch, shared, sizeof(saved));
     memcpy(shared, saved, sizeof(saved));
@@ -871,6 +879,28 @@ static __int64 DetUiRoutine(void* world)
 #define WORLD_SPEED_OFFSET 0x5A4
 static const unsigned char kPrepareCallOriginal[5] = { 0xe8, 0x45, 0x27, 0x2d, 0x00 };
 
+// The frame controller gives the game timer (exe+9d4ee0) the tick's fixed rate
+// and pauses it on held frames, which is right for the simulation but not for
+// this PC's camera: Prepare moves the camera with the timer, so at 150 FPS the
+// keys moved it as if every frame were a whole tick (it flew off), or it stood
+// on held frames and jumped on tick frames. For Prepare the timer carries this
+// PC's real frame rate and runs; the tick's values are put back after it.
+// Prepare runs at speed 0, so nothing of the simulation advances with it.
+#define GAME_TIMER_RVA_VIEW 0x9D4EE0
+static LARGE_INTEGER g_viewClock = {}, g_viewFrequency = {};
+
+static float RealFrameRate()
+{
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    if (!g_viewFrequency.QuadPart) QueryPerformanceFrequency(&g_viewFrequency);
+    double dt = g_viewClock.QuadPart ? double(now.QuadPart - g_viewClock.QuadPart) / g_viewFrequency.QuadPart : 0.0;
+    g_viewClock = now;
+    if (dt < 0.001) dt = 0.001;  // at most 1000 FPS
+    if (dt > 0.25) dt = 0.25;    // a stall (loading, alt-tab) does not throw the camera away
+    return (float)(1.0 / dt);
+}
+
 static void DetPrepare(__int64 world)
 {
     typedef void (*PrepareFn)(__int64);
@@ -887,10 +917,19 @@ static void DetPrepare(__int64 world)
     PrivateViewIn(kept);
     bool scope = Determinism_IsStepFrame();
     if (scope) Determinism_ToolScopeBegin();
+    BYTE* timer = g_exeBase + GAME_TIMER_RVA_VIEW;
+    BYTE tickTimer[13];
+    memcpy(tickTimer, timer, sizeof(tickTimer));
+    float fps = RealFrameRate();
+    *(float*)timer = fps;
+    *(float*)(timer + 4) = fps;
+    *(int*)(timer + 8) = (int)fps;
+    timer[12] = 0;
     {
         Determinism_PrivateScope privateRng;
         original(world);
     }
+    memcpy(timer, tickTimer, sizeof(tickTimer));
     if (scope) Determinism_ToolScopeEnd();
     PrivateViewOut(kept);
 }

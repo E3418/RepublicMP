@@ -237,6 +237,12 @@
     <ClCompile Include="lockstep\brush_tools.cpp">
       <Filter>lockstep</Filter>
     </ClCompile>
+    <ClCompile Include="lockstep\hover_tools.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\junction_accept.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
     <ClCompile Include="lockstep\lockstep_net.cpp">
       <Filter>lockstep</Filter>
     </ClCompile>
@@ -429,6 +435,12 @@
       <Filter>lockstep</Filter>
     </ClInclude>
     <ClInclude Include="lockstep\brush_tools.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\hover_tools.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\junction_accept.h">
       <Filter>lockstep</Filter>
     </ClInclude>
     <ClInclude Include="lockstep\lockstep_net.h">

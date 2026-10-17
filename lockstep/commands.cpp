@@ -18,6 +18,8 @@
 #include "vehicle_switches.h"
 #include "building_switches.h"
 #include "brush_tools.h"
+#include "hover_tools.h"
+#include "junction_accept.h"
 #include <vector>
 #include <string.h>
 
@@ -32,6 +34,8 @@ void Commands_Bind(const TsmHost* host)
     VehicleSwitches_Bind(host);
     BuildingSwitches_Bind(host);
     BrushTools_Bind(host);
+    HoverTools_Bind(host);
+    JunctionAccept_Bind(host);
 }
 
 struct Command {
@@ -48,6 +52,7 @@ static std::vector<Command> g_record;    // probe run 1: made, in order
 static size_t g_replayAt = 0;            // probe run 2: next recorded command
 static size_t g_replayed = 0;
 static volatile bool g_capturing = false;
+static bool ApplyGameRules(const void* data, size_t size);
 static bool g_replaying = false;
 static volatile LONG g_applying = 0;
 static DWORD g_applyThread = 0;
@@ -110,6 +115,9 @@ static const char* KindName(int kind)
     case LS_CMD_VEHICLE_SWITCH: return "vehicle setting";
     case LS_CMD_BUILDING_SWITCH: return "window setting";
     case LS_CMD_BRUSH: return "brush";
+    case LS_CMD_HOVER: return "road hover tool";
+    case LS_CMD_JUNCTION: return "junction accept";
+    case LS_CMD_GAME_RULES: return "game rules";
     }
     return "?";
 }
@@ -232,6 +240,15 @@ static void Apply(const Command& c)
     case LS_CMD_BRUSH:
         ok = BrushTools_ApplyCommand(p, n);
         break;
+    case LS_CMD_HOVER:
+        ok = HoverTools_ApplyCommand(p, n);
+        break;
+    case LS_CMD_JUNCTION:
+        ok = JunctionAccept_ApplyCommand(p, n);
+        break;
+    case LS_CMD_GAME_RULES:
+        ok = ApplyGameRules(p, n);
+        break;
     }
     InputBlock_EndNeutral();
     InterlockedDecrement(&g_applying);
@@ -346,8 +363,7 @@ static const char* const kCarriedTools[] = { "vehicle_addstop", "line_addstop", 
                                               "second_road_l3", "second_road_l4" };
 static const char* const kUncarriedTools[] = {
     "vehicle_", "worker_relocate", "building_addsource", "line_addstop", "second_road", "water_square",
-    "bojka", "christmas_", "join_hub", "crossroad_add", "terrain_go_there",
-    "road_crossroad",
+    "bojka", "christmas_", "join_hub", "terrain_go_there",
 };
 // The single-tree tools and the tree demolition brush (brush_tools.cpp): put away only when their routine differs.
 static const char* const kTreeTools[] = { "tree_", "palma", "jungle_", "fjord_", "afgan_", "afghan_", "tallkriak", "leafkriak" };
@@ -380,9 +396,95 @@ static void PutAwayUncarriedTool()
     }
 }
 
+// The game rules (the game menu's settings page: realistic mode, traffic,
+// research and the rest): the page edits a copy (world +c81c..+c852) and
+// "Save settings", closing the window or the "Change settings?" popup apply it
+// with 337170(world) (game_calls takes those three calls). In a session the
+// copy travels as a command and every PC writes it and calls 337170, so the
+// rules and their side effects (road lanes, citizens, buildings) change alike.
+// The popup's save-and-reload for a critical rule (+14d3c..+14d3f, made by the
+// next Late body) is not made in a session. The cheats switch (world +9: cheat
+// page, cheat keys and window actions on one PC) stays off. (by SoylentGreed)
+struct GameRulePair {
+    unsigned copy, rule, bytes;
+};
+static const GameRulePair kGameRules[] = {
+    { 0xC81C, 0x5B0, 4 }, { 0xC844, 0x5B4, 4 }, { 0xC848, 0x5B8, 4 }, { 0xC84C, 0x5BC, 4 }, { 0xC820, 0x5C0, 4 },
+    { 0xC824, 0x5C4, 4 }, { 0xC828, 0x5C8, 4 }, { 0xC82C, 0x5CC, 4 }, { 0xC830, 0x5D0, 4 }, { 0xC834, 0x5D4, 4 },
+    { 0xC838, 0x5D8, 4 }, { 0xC83C, 0x5DC, 4 }, { 0xC840, 0x5E0, 4 }, { 0xC850, 0x14451, 1 }, { 0xC851, 0x14453, 1 },
+    { 0xC852, 0x14452, 1 },
+};
+#define CHEATS_OFFSET 0x9
+
+#define RELOAD_FLAGS_OFFSET 0x14D3C // 4 bytes: a critical rule's save and reload
+#define GAME_RULES_APPLY_RVA 0x337170
+
+#pragma pack(push, 1)
+struct LsGameRules {
+    BYTE copy[sizeof(kGameRules) / sizeof(kGameRules[0])][4];
+};
+#pragma pack(pop)
+
+void Commands_GuardSettings()
+{
+    static int s_logged = 0;
+    if (!g_capturing) return;
+    BYTE* world = g_exeBase + 0x9D4F10;
+    bool reload = false, cheats = false;
+    __try {
+        if (world[CHEATS_OFFSET]) {
+            world[CHEATS_OFFSET] = 0;
+            cheats = true;
+        }
+        if (*(unsigned*)(world + RELOAD_FLAGS_OFFSET)) {
+            *(unsigned*)(world + RELOAD_FLAGS_OFFSET) = 0;
+            reload = true;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return;
+    }
+    if ((reload || cheats) && s_logged < 8) {
+        ++s_logged;
+        Logf("republicmp  LOCKSTEP: %s", reload ? "the game's save and reload after a critical rule is not made in a session"
+                                                : "cheats stay off in a session");
+    }
+}
+
+// game_calls, the interface's 337170 call: the page's copy as a command.
+void Commands_CaptureGameRules()
+{
+    LsGameRules m = {};
+    BYTE* world = g_exeBase + 0x9D4F10;
+    __try {
+        for (size_t i = 0; i < sizeof(kGameRules) / sizeof(kGameRules[0]); i++)
+            memcpy(m.copy[i], world + kGameRules[i].copy, kGameRules[i].bytes);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Logf("republicmp  LOCKSTEP: the game rules could not be read - not changed");
+        return;
+    }
+    Commands_Submit(LS_CMD_GAME_RULES, &m, sizeof(m));
+}
+
+static bool ApplyGameRules(const void* data, size_t size)
+{
+    if (size != sizeof(LsGameRules)) return false;
+    const LsGameRules& m = *(const LsGameRules*)data;
+    BYTE* world = g_exeBase + 0x9D4F10;
+    __try {
+        for (size_t i = 0; i < sizeof(kGameRules) / sizeof(kGameRules[0]); i++)
+            memcpy(world + kGameRules[i].copy, m.copy[i], kGameRules[i].bytes);
+        ((void (*)(void*))(g_exeBase + GAME_RULES_APPLY_RVA))(world);
+        *(unsigned*)(world + RELOAD_FLAGS_OFFSET) = 0;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 void Commands_Collect()
 {
     if (!g_capturing) return;
+    Commands_GuardSettings();
     PutAwayUncarriedTool();
     TerrainHook_LockstepFlush();
     if (!g_haveFrameRecord) return;
