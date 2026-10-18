@@ -80,7 +80,20 @@ static void OnSimStep()
     g_simThreadId = GetCurrentThreadId(); // the main thread, which runs Early and Late
 }
 
-// jmp [rip+0] / the gate's address, near the exe so a rel32 call reaches it.
+// The relay near the exe (a rel32 call reaches it). The game's callers (2fd517 in
+// 2fd2e0) keep rdx, r9 and r11 across the call, which 8244f0 leaves alone; the gate
+// is an ordinary function, so the relay saves every volatile register around it
+// (a building window crashed reading a citizen through the clobbered rdx).
+static const unsigned char kRelayHead[] = {
+    0x50, 0x51, 0x52, 0x41, 0x50, 0x41, 0x51, 0x41, 0x52, 0x41, 0x53, // push rax rcx rdx r8 r9 r10 r11
+    0x48, 0x83, 0xec, 0x20,                                           // sub rsp, 20h
+    0x48, 0xb8 };                                                     // mov rax, imm64 (the gate)
+static const unsigned char kRelayTail[] = {
+    0xff, 0xd0,                                                       // call rax
+    0x48, 0x83, 0xc4, 0x20,                                           // add rsp, 20h
+    0x41, 0x5b, 0x41, 0x5a, 0x41, 0x59, 0x41, 0x58, 0x5a, 0x59, 0x58, // pop r11 r10 r9 r8 rdx rcx rax
+    0xc3 };                                                           // ret
+
 static bool PrepareGate()
 {
     if (g_gateRelay) return true;
@@ -94,12 +107,14 @@ static bool PrepareGate()
     long long rel = (long long)relay - (long long)(g_exeBase + CITIZEN_INIT_GATED_CALL + 5);
     if (rel < INT_MIN || rel > INT_MAX) return false;
     DWORD old;
-    if (!VirtualProtect(relay, 16, PAGE_EXECUTE_READWRITE, &old)) return false;
+    const size_t size = sizeof(kRelayHead) + 8 + sizeof(kRelayTail);
+    if (!VirtualProtect(relay, size, PAGE_EXECUTE_READWRITE, &old)) return false;
     unsigned long long to = (unsigned long long)&CitizenInitGate;
-    relay[0] = 0xff; relay[1] = 0x25; relay[2] = relay[3] = relay[4] = relay[5] = 0;
-    memcpy(relay + 6, &to, 8);
-    VirtualProtect(relay, 16, PAGE_EXECUTE_READ, &old);
-    FlushInstructionCache(GetCurrentProcess(), relay, 16);
+    memcpy(relay, kRelayHead, sizeof(kRelayHead));
+    memcpy(relay + sizeof(kRelayHead), &to, 8);
+    memcpy(relay + sizeof(kRelayHead) + 8, kRelayTail, sizeof(kRelayTail));
+    VirtualProtect(relay, size, PAGE_EXECUTE_READ, &old);
+    FlushInstructionCache(GetCurrentProcess(), relay, size);
     SessionPatch& p = kPatches[sizeof(kPatches) / sizeof(kPatches[0]) - 1];
     int rel32 = (int)rel;
     p.patch[0] = 0xe8;
