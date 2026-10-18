@@ -7,7 +7,7 @@ from there both games run the same simulation tick by tick (**lockstep**),
 or each game simulates on its own and the players' actions are repeated on
 the other side (**replay mode**).
 
-**Status:** alpha, tested with two players. Current version: **0.5.2**
+**Status:** alpha, tested with two players. Current version: **0.5.3**
 ([changelog](CHANGELOG.md)).
 
 ## Support and community
@@ -22,18 +22,21 @@ you can do it on [Buy Me a Coffee](https://buymeacoffee.com/3418).
 | --- | --- | --- |
 | How | Both games run the same ticks; every player action is a command both games make after the same tick | Each game simulates on its own; actions are sent and repeated on the other side |
 | Vehicles, citizens, production | The same on both PCs | Drift apart; a re-sync brings them back |
-| Speed and pause | The host's; the player's keys are requests | The host's; the player's keys are requests |
-| Checks | Both games compare a state hash every 60 ticks; the first difference is shown | A drift check every game hour |
+| Speed and pause | The host's (Hyper and Plaid included); the player's keys are requests | The host's; the player's keys are requests |
+| Checks | Both games compare a state hash every 60 ticks; a difference is shown on both PCs and can re-sync after a set time | A drift check every game hour |
 
-The host chooses the mode with **Host in lockstep** before pressing **Host**;
-the joining player follows the host's choice.
+The host picks **Lockstep** or **Replay** in the RepublicMP window before
+pressing **Host**; the joining player follows the host's choice.
 
 ## Lockstep
 
 A determinism layer makes the game simulate the same way on every PC: a fixed
 time step, random numbers per call site, pinned math, zeroed allocations, and
-the camera and the windows kept out of the simulation. The host admits the
-ticks (at most 10 ahead of the player) and orders the players' commands.
+the camera and the windows kept out of the simulation - for the simulation
+every building is off the camera on every PC, while each PC still draws what
+its own camera sees. The host admits the ticks (at most 10 ahead of the
+player) and orders the players' commands. The lockstep panel shows the tick,
+the ping, how the ticks flow and whether the games match.
 
 Carried as commands:
 
@@ -53,6 +56,7 @@ Carried as commands:
   traffic lights) from the junction window and the decoration tool, rail
   signals.
 - **Game rules** - changes on the settings page apply on both PCs.
+- **Names** - renaming buildings, vehicles, lines, cities and crossroads.
 - **Vehicles** - purchases (new and used vehicles, licences, factory
   blueprints), the vehicle window's buttons (send to depot, release, stop /
   start, clear line, next skin), vehicle settings changed in its window
@@ -114,13 +118,17 @@ mismatch refuses it.
 
 1. Both players start the game with TesmioLoader and the same
    `RepublicMP.dll` installed.
-2. The host loads a city, optionally ticks **Host in lockstep**, and presses
+2. The host loads a city, picks **Lockstep** or **Replay**, and presses
    **Host** in the RepublicMP window.
 3. The other player enters the host's IP (LAN or VPN) and presses **Connect**.
    Both games pause behind the join screen while the city is saved, sent and
    loaded.
 4. Once both sides resume, the session runs. **Disconnect** (client) or
    **Stop hosting** (host) ends it.
+
+Both games need the same DLCs: with **Check DLCs** ticked on both PCs (the
+default) a join with different DLCs is refused and names the difference;
+either player can untick it to play a map that needs no DLC content.
 
 Firewalls must allow TCP ports 5556-5559 on the host, and 5560 for lockstep.
 

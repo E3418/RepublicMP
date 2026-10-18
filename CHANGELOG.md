@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.5.3
+
+Lockstep that no longer depends on the camera, a reworked window and a DLC
+check. Protocol 28 - both players need this build.
+
+- **Camera-free simulation** - for the simulation every building is off the
+  camera on every PC, so moving the cameras apart no longer splits the games
+  (tested for 54,000 ticks with the cameras far apart); every citizen is
+  updated every tick, so citizens walk smoothly; each PC draws the citizens,
+  stops included, and building doors near its own camera (by SoylentGreed).
+- **Fewer desyncs** - the game's K debug key no longer changes the
+  simulation on one PC; city and crossroad renames are shared (by
+  SoylentGreed).
+- **Hyper and Plaid** - Ctrl+Numpad1 / Ctrl+Numpad2 (or the fast button held)
+  work in lockstep; the host's, the player's keys are requests.
+- **DLC check** - a join with different DLCs is refused while both players
+  keep "Check DLCs" ticked; either can untick it to play anyway (#30).
+- **Window** - text wraps; the mode is chosen as Lockstep or Replay; a
+  lockstep panel shows the simulation, the ping, the tick flow and a desync
+  on both PCs, with a re-sync a set time after a desync (1 minute by
+  default); replay-only indicators stay in replay mode.
+- **Fixes** - a session whose load refused the patches no longer leaves the
+  host paused; the F8 / F9 / F10 dev hotkeys and the heartbeat log are gone
+  (the terrain log is in the Debug window).
+
 ## 0.5.2
 
 More of the game shared in lockstep. Protocol 23 - both players need this
