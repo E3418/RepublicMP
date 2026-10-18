@@ -60,6 +60,12 @@ static const DetPatch kPatches[] = {
     { 0x66e74c, 7, { 0x0f, 0xb6, 0x83, 0xd8, 0x13, 0x00, 0x00 }, { 0x31, 0xc0, NOP5 }, "vehicle checked flag" },
     // jne (piece on the camera) -> nop
     { 0x548b36, 2, { 0x75, 0x10 }, { NOP2 }, "road sign zones" },
+    // The building pass's visible branch (13ce79..13cec7) stores the camera distance (+115c) and
+    // +115a = 1: it stores the off-camera values (100000.0 and 0) instead and still pushes the
+    // building on the visible list: mov dword [rax+115c],47c35000; mov byte [rax+115a],0; nop3
+    { 0x13cea7, 20, { 0xf3, 0x0f, 0x11, 0x80, 0x5c, 0x11, 0x00, 0x00, 0x48, 0x8b, 0x44, 0x24, 0x40, 0xc6, 0x80, 0x5a, 0x11, 0x00, 0x00, 0x01 },
+      { 0xc7, 0x80, 0x5c, 0x11, 0x00, 0x00, 0x00, 0x50, 0xc3, 0x47, 0xc6, 0x80, 0x5a, 0x11, 0x00, 0x00, 0x00, 0x0f, 0x1f, 0x00 },
+      "building pass: off-camera flags on the visible branch" },
     // the camera's own update of a followed vehicle -> nop5; the worker's skip -> nop
     { 0x10e4f, 5, { 0xe8, 0xdc, 0xc6, 0x65, 0x00 }, { NOP5 }, "follow camera: train head" },
     { 0x10e87, 5, { 0xe8, 0xa4, 0xc6, 0x65, 0x00 }, { NOP5 }, "follow camera: wagon" },
@@ -123,29 +129,27 @@ static void Write(BYTE* at, const unsigned char* bytes, size_t n)
 // The Early building pass asks the camera's quadtree for a building's node
 // and reads its visible byte (+0x25); the visible branch writes the
 // building's visibility and distance (+115a/+115c), which decide how often
-// its agents update. The call `call [GetNode]` (6 bytes) becomes nop + call
-// to this relay: on the simulation thread it answers an all-zero node (off
-// the camera), as for every building nobody looks at, on every PC whatever
-// its camera (by SoylentGreed). With this PC's camera the visible branch put
-// the agents tied to a building on the every-frame list (832ae0), ran the
-// building's update every tick instead of every third (16e3b0 -> 82e590:
-// citizen targets, positions and random draws) and animated it - on that PC
-// only. Construction sites take the same branch through game/session_patches
-// (13d963). This PC's view for its tools is the preview scope below; the doors
-// the pass no longer moves are moved and drawn for this PC by held_frame.cpp.
+// its agents update, and pushes the building on the frame's visible list
+// (world +11dc0). With this PC's camera those flags put the agents tied to a
+// building on the every-frame list (832ae0), ran the building's update every
+// tick instead of every third (16e3b0 -> 82e590: citizen targets, positions
+// and random draws) and animated it - on that PC only. The branch now stores
+// the off-camera values on every PC (the patch at 13cea7, by SoylentGreed)
+// but still fills the visible list: the forklift paths' port search reads it
+// and finds no port with it empty. The call `call [GetNode]` (6 bytes) is
+// still relayed (nop + call) and answers the native node. Construction sites
+// take the same branch through game/session_patches (13d963). This PC's view
+// for its tools is the preview scope below; the doors the pass no longer
+// moves are moved and drawn for this PC by held_frame.cpp.
 
 #define GETNODE_SITE 0x13CE50
 #define GETNODE_IMPORT 0x86C560 // the import slot the site calls through
 typedef void* (*GetNodeFn)(void* tree, int index);
 static const unsigned char kGetNodeOriginal[6] = { 0xff, 0x15, 0x0a, 0xf7, 0x72, 0x00 };
-static const unsigned char kOffscreenNode[72] = {};
 
 static void* DetGetNode(void* tree, int index)
 {
-    void* node = (*(GetNodeFn*)(g_exeBase + GETNODE_IMPORT))(tree, index);
-    if (g_on && node && GetCurrentThreadId() == g_simThread)
-        return (void*)kOffscreenNode;
-    return node;
+    return (*(GetNodeFn*)(g_exeBase + GETNODE_IMPORT))(tree, index);
 }
 
 // ---------------------------------------------------------------------------

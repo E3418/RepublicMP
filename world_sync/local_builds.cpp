@@ -195,7 +195,7 @@ static volatile LONG g_upgradePending = 0;
 
 // Reason the last tool commit was not captured, logged from the game thread.
 static volatile LONG g_commitSkipPending = 0;
-static struct { int category; const char* reason; int count; int valid; int type; } g_commitSkip;
+static struct { int category; const char* reason; int count; int valid; int type; int error; unsigned subcode; int attached[2]; } g_commitSkip;
 
 static void NoteCommitSkip(int category, const char* reason, int count, int valid, int type)
 {
@@ -205,6 +205,9 @@ static void NoteCommitSkip(int category, const char* reason, int count, int vali
     g_commitSkip.count = count;
     g_commitSkip.valid = valid;
     g_commitSkip.type = type;
+    g_commitSkip.error = -1;
+    g_commitSkip.subcode = 0;
+    g_commitSkip.attached[0] = g_commitSkip.attached[1] = -1;
     InterlockedExchange(&g_commitSkipPending, 1);
 }
 
@@ -351,6 +354,11 @@ static bool FillSegment(__int64 manager, int category, RoadSyncSegment& seg)
     }
     if (valid != 1) {
         NoteCommitSkip(category, "engine marked the route invalid", count, valid, type);
+        // The game's own reason: its error category and subcode, and which ends are attached.
+        g_commitSkip.error = *(int*)(manager + 0x318);
+        g_commitSkip.subcode = *(unsigned*)(manager + 0x31c);
+        g_commitSkip.attached[0] = *(unsigned char*)(manager + 0x748);
+        g_commitSkip.attached[1] = *(unsigned char*)(manager + 0x749);
         return false;
     }
     if (type >= TOOL_TYPE_DEMOLISH_MIN) {
@@ -935,9 +943,10 @@ void HookedRoadCommit(__int64 manager,
 static void FlushCommitCaptures()
 {
     if (InterlockedCompareExchange(&g_commitSkipPending, 0, 0) != 0) {
-        Logf("republicmp  ROAD_COMMIT: %s commit not sent - %s (points=%d valid=%d type=%d)",
+        Logf("republicmp  ROAD_COMMIT: %s commit not sent - %s (points=%d valid=%d type=%d error=%d subcode=0x%x attached=%d/%d)",
              RoadSync_GetCategoryInfo(g_commitSkip.category)->name, g_commitSkip.reason,
-             g_commitSkip.count, g_commitSkip.valid, g_commitSkip.type);
+             g_commitSkip.count, g_commitSkip.valid, g_commitSkip.type, g_commitSkip.error, g_commitSkip.subcode,
+             g_commitSkip.attached[0], g_commitSkip.attached[1]);
         InterlockedExchange(&g_commitSkipPending, 0);
     }
 
