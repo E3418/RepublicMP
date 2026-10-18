@@ -39,3 +39,5 @@ unsigned __int64 BrushTools_Tree(unsigned __int64 world, unsigned __int64 a2);
 
 // The command (lockstep/commands).
 bool BrushTools_ApplyCommand(const void* data, size_t size);
+// A stroke's construction ledger row, written on every PC (see brush_tools.cpp).
+bool BrushTools_ApplyLedger(const void* data, size_t size);

@@ -127,6 +127,7 @@ static const char* KindName(int kind)
     case LS_CMD_CARGO_SETTINGS: return "cargo settings";
     case LS_CMD_SOURCE_SLOTS: return "source slots";
     case LS_CMD_RENAME: return "rename";
+    case LS_CMD_LEDGER: return "ledger row";
     }
     return "?";
 }
@@ -134,7 +135,7 @@ static const char* KindName(int kind)
 // Terrain brushes and their cost come every frame a tool is used: not logged one by one.
 static bool Frequent(int kind)
 {
-    return kind == LS_CMD_TERRAIN || kind == LS_CMD_MONEY || kind == LS_CMD_BRUSH;
+    return kind == LS_CMD_TERRAIN || kind == LS_CMD_MONEY || kind == LS_CMD_BRUSH || kind == LS_CMD_LEDGER;
 }
 
 void Commands_Submit(int kind, const void* data, size_t size)
@@ -266,6 +267,9 @@ static void Apply(const Command& c)
         break;
     case LS_CMD_RENAME:
         ok = Rename_ApplyCommand(p, n);
+        break;
+    case LS_CMD_LEDGER:
+        ok = BrushTools_ApplyLedger(p, n);
         break;
     }
     InputBlock_EndNeutral();

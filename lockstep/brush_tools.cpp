@@ -48,6 +48,12 @@ struct InputSite {
 static const InputSite kInputSites[3] = { { 0x3AA850, 0 }, { 0x3AAA58, 1 }, { 0x3AAAA9, 1 } };
 static const unsigned kInputSlots[2] = { 0x86C8B0, 0x86C8B8 };
 
+// 3a8a70's two construction ledger rows (call 2fdb00, 5 bytes): the stroke's
+// cost in dollars (world +11330) and in rubles (+11360), written when it pays.
+#define LEDGER_RVA 0x2FDB00
+#define RESOURCE_BY_NAME_RVA 0x2AA830 // (world, name) -> resource definition
+static const unsigned kLedgerCalls[2] = { 0x3AABCD, 0x3AACE3 };
+
 #pragma pack(push, 1)
 struct BrushState {
     float held, cost, timers[10], tree;
@@ -67,9 +73,20 @@ struct BrushMsg {
     char name[NAME_BYTES];    // and its name, a check
     BrushSample sample;
 };
+// A construction ledger row the stroke wrote on its own PC (see RelayLedger).
+struct LedgerMsg {
+    unsigned ledger;          // world offset: 0x11330 dollars, 0x11360 rubles
+    char resource[64];        // the row's resource definition, by name
+    float value8;             // the row's floats
+    unsigned valueC;
+    float a4, a6;             // 2fdb00's other arguments
+    unsigned a5, a7;
+};
 #pragma pack(pop)
 
 typedef U64 (*ToolFn)(U64 world, U64 a2);
+typedef U64 (*LedgerFn)(U64 world, U64 row, U64 ledger, float a4, U64 a5, float a6, U64 a7);
+typedef U64 (*ResourceByNameFn)(U64 world, const char* name);
 typedef bool (*GetterFn)(void* input);
 
 static int g_ready[KINDS] = { -1, -1, -1, -1 };
@@ -113,6 +130,61 @@ static bool Answer(int getter, void* input)
 static bool RelayPressOff(void* input) { return Answer(0, input); }
 static bool RelayPress(void* input) { return Answer(1, input); }
 
+// A stroke pays its cost on this PC's own run of the tool, the one with the
+// button hidden (to the tool the button was let go): the money it takes becomes
+// a command (lockstep/commands), and the row it writes into the construction
+// ledger - which the construction sites' payments read - stayed on this PC
+// alone: every site paid a little more there, the money split. The row is a
+// command too, written on every PC; the replays (button down) write none.
+static U64 RelayLedger(U64 world, U64 row, U64 ledger, float a4, U64 a5, float a6, U64 a7)
+{
+    LedgerFn original = (LedgerFn)(g_exeBase + LEDGER_RVA);
+    if (!Commands_TakeLocal()) return original(world, row, ledger, a4, a5, a6, a7);
+    LedgerMsg m = {};
+    __try {
+        m.ledger = (unsigned)(ledger - world);
+        U64 resource = *(U64*)row;
+        if ((m.ledger != 0x11330 && m.ledger != 0x11360) || !resource) return original(world, row, ledger, a4, a5, a6, a7);
+        strncpy_s(m.resource, (const char*)resource, _TRUNCATE);
+        m.value8 = *(float*)(row + 8);
+        m.valueC = *(unsigned*)(row + 12);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return original(world, row, ledger, a4, a5, a6, a7);
+    }
+    m.a4 = a4;
+    m.a5 = (unsigned)(unsigned char)a5;
+    m.a6 = a6;
+    m.a7 = (unsigned)(unsigned char)a7;
+    Commands_Submit(LS_CMD_LEDGER, &m, sizeof(m));
+    return 0;
+}
+
+bool BrushTools_ApplyLedger(const void* data, size_t size)
+{
+    if (size != sizeof(LedgerMsg)) return false;
+    LedgerMsg m;
+    memcpy(&m, data, sizeof(m));
+    m.resource[sizeof(m.resource) - 1] = 0;
+    if (m.ledger != 0x11330 && m.ledger != 0x11360) return false;
+    U64 world = (U64)World();
+    __try {
+        U64 resource = ((ResourceByNameFn)(g_exeBase + RESOURCE_BY_NAME_RVA))(world, m.resource);
+        if (!resource) {
+            Logf("republicmp  BRUSH: no resource [%s] here - the ledger row is not written", m.resource);
+            return false;
+        }
+        unsigned char row[16];
+        memcpy(row, &resource, 8);
+        memcpy(row + 8, &m.value8, 4);
+        memcpy(row + 12, &m.valueC, 4);
+        ((LedgerFn)(g_exeBase + LEDGER_RVA))(world, (U64)row, world + m.ledger, m.a4, m.a5, m.a6, m.a7);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Logf("republicmp  BRUSH: writing a ledger row faulted");
+        return false;
+    }
+    return true;
+}
+
 bool BrushTools_Install()
 {
     for (const InputSite& s : kInputSites) {
@@ -124,22 +196,44 @@ bool BrushTools_Install()
             return false;
         }
     }
+    for (unsigned site : kLedgerCalls) {
+        BYTE* at = g_exeBase + site;
+        int rel = 0;
+        memcpy(&rel, at + 1, 4);
+        if (at[0] != 0xE8 || site + 5 + rel != LEDGER_RVA) {
+            Logf("republicmp  BRUSH: the terrain tool's ledger call at 0x%X differs - terrain brushes stay as before", site);
+            return false;
+        }
+    }
     for (int g = 0; g < 2; g++) {
         g_getters[g] = *(GetterFn*)(g_exeBase + kInputSlots[g]);
         if (!g_getters[g]) return false;
     }
     BYTE* relay = AllocNear(g_exeBase, 4096);
     if (!relay) return false;
-    void* targets[2] = { (void*)&RelayPressOff, (void*)&RelayPress };
+    void* targets[3] = { (void*)&RelayPressOff, (void*)&RelayPress, (void*)&RelayLedger };
     DWORD old;
-    VirtualProtect(relay, 32, PAGE_EXECUTE_READWRITE, &old);
-    for (int g = 0; g < 2; g++) {
+    VirtualProtect(relay, 48, PAGE_EXECUTE_READWRITE, &old);
+    for (int g = 0; g < 3; g++) {
         BYTE* r = relay + g * 16;
         r[0] = 0xFF; r[1] = 0x25; r[2] = r[3] = r[4] = r[5] = 0;
         memcpy(r + 6, &targets[g], 8);
     }
-    VirtualProtect(relay, 32, PAGE_EXECUTE_READ, &old);
-    FlushInstructionCache(GetCurrentProcess(), relay, 32);
+    VirtualProtect(relay, 48, PAGE_EXECUTE_READ, &old);
+    FlushInstructionCache(GetCurrentProcess(), relay, 48);
+    for (unsigned site : kLedgerCalls) {
+        BYTE* at = g_exeBase + site;
+        long long to = (long long)(relay + 2 * 16) - (long long)(at + 5);
+        if (to < INT_MIN || to > INT_MAX) return false;
+        unsigned char code[5] = { 0xE8, 0, 0, 0, 0 };
+        int rel32 = (int)to;
+        memcpy(code + 1, &rel32, 4);
+        DWORD prot;
+        VirtualProtect(at, 5, PAGE_EXECUTE_READWRITE, &prot);
+        memcpy(at, code, 5);
+        VirtualProtect(at, 5, prot, &prot);
+        FlushInstructionCache(GetCurrentProcess(), at, 5);
+    }
     for (const InputSite& s : kInputSites) {
         BYTE* at = g_exeBase + s.site;
         long long to = (long long)(relay + s.getter * 16) - (long long)(at + 5);
