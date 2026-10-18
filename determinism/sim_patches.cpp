@@ -13,6 +13,7 @@
 #include "../lockstep/cargo_settings.h"
 #include "../lockstep/source_slots.h"
 #include "determinism.h"
+#include "held_frame.h"
 #include <string.h>
 #include <intrin.h>
 #include <limits.h>
@@ -113,12 +114,14 @@ static void Write(BYTE* at, const unsigned char* bytes, size_t n)
 // building's visibility and distance (+115a/+115c), which decide how often
 // its agents update. The call `call [GetNode]` (6 bytes) becomes nop + call
 // to this relay: on the simulation thread it answers an all-zero node (off
-// the camera), as for every building nobody looks at. This remains the
-// isolated simulation probe's policy (by SoylentGreed). Command sessions and
-// the interactive probe instead keep the native return value: 13ce79 then
-// fills the game's visible list, and the later building branches retain the
-// same lifecycle used before lockstep. Camera-independent simulation in this
-// restored mode has not been established.
+// the camera), as for every building nobody looks at, on every PC whatever
+// its camera (by SoylentGreed). With this PC's camera the visible branch put
+// the agents tied to a building on the every-frame list (832ae0), ran the
+// building's update every tick instead of every third (16e3b0 -> 82e590:
+// citizen targets, positions and random draws) and animated it - on that PC
+// only. Construction sites take the same branch through game/session_patches
+// (13d963). This PC's view for its tools is the preview scope below; the doors
+// the pass no longer moves are moved and drawn for this PC by held_frame.cpp.
 
 #define GETNODE_SITE 0x13CE50
 #define GETNODE_IMPORT 0x86C560 // the import slot the site calls through
@@ -129,7 +132,7 @@ static const unsigned char kOffscreenNode[72] = {};
 static void* DetGetNode(void* tree, int index)
 {
     void* node = (*(GetNodeFn*)(g_exeBase + GETNODE_IMPORT))(tree, index);
-    if (g_on && !Commands_Capturing() && node && GetCurrentThreadId() == g_simThread)
+    if (g_on && node && GetCurrentThreadId() == g_simThread)
         return (void*)kOffscreenNode;
     return node;
 }
@@ -760,6 +763,7 @@ void SimPatches_BeforeEarly(__int64 world)
 void SimPatches_AfterEarly()
 {
     g_inPhase = false;
+    if (g_on) HeldFrame_Doors(); // the pass left every building off the camera
     g_visibleFresh = false; // the native pass may have removed buildings
 }
 

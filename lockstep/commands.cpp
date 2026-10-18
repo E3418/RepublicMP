@@ -22,6 +22,7 @@
 #include "junction_accept.h"
 #include "cargo_settings.h"
 #include "source_slots.h"
+#include "rename.h"
 #include <vector>
 #include <string.h>
 
@@ -40,6 +41,7 @@ void Commands_Bind(const TsmHost* host)
     JunctionAccept_Bind(host);
     CargoSettings_Bind(host);
     SourceSlots_Bind(host);
+    Rename_Bind(host);
 }
 
 struct Command {
@@ -124,6 +126,7 @@ static const char* KindName(int kind)
     case LS_CMD_GAME_RULES: return "game rules";
     case LS_CMD_CARGO_SETTINGS: return "cargo settings";
     case LS_CMD_SOURCE_SLOTS: return "source slots";
+    case LS_CMD_RENAME: return "rename";
     }
     return "?";
 }
@@ -260,6 +263,9 @@ static void Apply(const Command& c)
         break;
     case LS_CMD_SOURCE_SLOTS:
         ok = SourceSlots_ApplyCommand(p, n);
+        break;
+    case LS_CMD_RENAME:
+        ok = Rename_ApplyCommand(p, n);
         break;
     }
     InputBlock_EndNeutral();

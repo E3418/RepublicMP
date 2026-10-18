@@ -163,14 +163,13 @@ static void DrawJunctions()
     }
 }
 
-// Early's building pass (139a70) moves the doors of the buildings on camera
-// itself: 138b90(building, seconds) steps each door's opening (+1238, +1250)
-// toward the vehicles at it and queues the door meshes on the frame's render
-// list ([exe+995268]+a8), which every frame empties. A held frame has no Early,
-// so the doors were drawn on tick frames only and blinked; the held frame
-// queues them with no time step (the openings stay as the last tick left
-// them). A building whose openings the pass has not sized yet is left out
-// (the call would allocate them on this PC only).
+// Early's building pass (139a70) moves the doors of the buildings on camera:
+// 138b90(building, seconds) steps each door's opening (+1238, +1250; read by
+// nothing else) toward the vehicles at it and queues the door meshes on the
+// frame's render list ([exe+995268]+a8), which every frame empties. The
+// simulation now sees every building off the camera (sim_patches.cpp), so the
+// pass moves no door; every frame (after Early, or on a held frame) the doors
+// of the buildings this PC sees are moved by its own frame time and queued.
 #define BUILDINGS_BEGIN_RVA 0x9E6A18
 #define BUILDINGS_END_RVA 0x9E6A20
 #define ENGINE_RVA 0x9941F0       // engine object: +ff8 models, +ee0 map quadtree
@@ -186,6 +185,15 @@ static size_t Count(const BYTE* vector, size_t elem)
 
 static void DrawDoors()
 {
+    // This PC's frame time since the last call (once a frame), at most a quarter second.
+    static LARGE_INTEGER s_last = {};
+    LARGE_INTEGER now, frequency;
+    QueryPerformanceCounter(&now);
+    QueryPerformanceFrequency(&frequency);
+    float seconds = s_last.QuadPart && frequency.QuadPart ? (float)(now.QuadPart - s_last.QuadPart) / frequency.QuadPart : 0.0f;
+    s_last = now;
+    if (seconds < 0.0f) seconds = 0.0f;
+    if (seconds > 0.25f) seconds = 0.25f;
     if (g_doorsChecked < 0) {
         static const unsigned char list[14] = { 0x48, 0x8b, 0x1d, 0xe2, 0xbc, 0x85, 0x00, 0x48, 0x81, 0xc3, 0xa8, 0x00, 0x00, 0x00 };
         g_doorsChecked = CallTargets(0x13DB61, 0x138B90) && memcmp(g_exeBase + 0x13957F, list, sizeof(list)) == 0 ? 1 : 0;
@@ -205,15 +213,19 @@ static void DrawDoors()
             BYTE* type = b ? *(BYTE**)(b + 0x318) : nullptr;
             // As the pass (13db03..13db61): a finished building (+604 1.0, no site +5d0) with doors.
             if (!type || *(float*)(b + 0x604) != 1.0f || *(void**)(b + 0x5D0)) continue;
-            size_t doors = Count(type + 0xA18, 0x28), passages = Count(type + 0xA30, 0x30);
-            if (!doors && !passages) continue;
-            if (Count(b + 0x1238, 4) != doors || Count(b + 0x1250, 4) != passages) continue;
+            if (!Count(type + 0xA18, 0x28) && !Count(type + 0xA30, 0x30)) continue;
             BYTE* f = fragment(*(void**)(engine + 0xFF8), *(int*)(type + 0x410), *(int*)(b + 0x5F4));
             BYTE* node = f ? getNode(*(void**)(engine + 0xEE0), *(int*)(f + 0x3C)) : nullptr;
-            if (node && node[0x25]) ((void (*)(void*, float))(g_exeBase + 0x138B90))(b, 0.0f);
+            if (node && node[0x25]) ((void (*)(void*, float))(g_exeBase + 0x138B90))(b, seconds);
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
+}
+
+void HeldFrame_Doors()
+{
+    Determinism_PrivateScope privateRng;
+    DrawDoors();
 }
 
 // Early (30cb74..30cf4e) normally starts and joins this worker. On a held

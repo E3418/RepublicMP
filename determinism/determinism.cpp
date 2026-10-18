@@ -366,6 +366,7 @@ static bool g_probeFuzz = false;
 // simulation; then ticks come from the host (lockstep/lockstep_net).
 static volatile bool g_sessionLoadPending = false;
 static volatile bool g_sessionRunning = false;
+static volatile bool g_sessionArmed = false; // BeginSession turned the layer on for a session
 static bool g_sessionHost = false;
 #define LOCKSTEP_SEED 0x5EED10C557E90001ull
 static bool g_probeRecord = false;
@@ -805,6 +806,7 @@ bool Determinism_BeginSession(bool host)
     if (!g_framesReady || g_probeBusy) return false;
     g_sessionHost = host;
     g_sessionRunning = false;
+    g_sessionArmed = true;
     Determinism_SetActive(true, LOCKSTEP_SEED);
     g_sessionLoadPending = true;
     Logf("republicmp  LOCKSTEP: the next load starts the shared simulation (%s)", host ? "host" : "player");
@@ -823,7 +825,10 @@ bool Determinism_SessionRunning()
 
 void Determinism_EndSession()
 {
-    if (!g_sessionRunning && !g_sessionLoadPending) return;
+    // A session whose load refused the simulation patches left the layer on
+    // with nothing running: the game stayed paused (no ticks admitted).
+    if (!g_sessionRunning && !g_sessionLoadPending && !g_sessionArmed) return;
+    g_sessionArmed = false;
     g_sessionRunning = false;
     g_sessionLoadPending = false;
     Commands_SetSession(COMMANDS_OFF);

@@ -6,6 +6,7 @@
 #include "world_refs.h"
 #include "line_accept.h"
 #include "junction_accept.h"
+#include "rename.h"
 #include <array>
 #include <limits.h>
 #include <string.h>
@@ -52,6 +53,8 @@ enum {
     // The routine reads the depot window's dragged vehicle (exe+996b98): it travels as argument 0,
     // and every PC puts it in its own global for the call.
     CALL_DRAG,
+    // The rename window's write (5290 = swprintf): a city's or a crossroad's name goes to rename.cpp.
+    CALL_RENAME,
 };
 
 // Appended only: a command names its site by index.
@@ -140,6 +143,7 @@ static const GameCallSite kSites[] = {
     { 0x7C8205, 0x1AAAA0, "depot window: replace tool (replace by the row's vehicle)", "WoOb", 0, 0, false },
     { 0x7C8458, 0x497B10, "depot window: line copy tool (put the row's vehicle on the line)", "MLVbo", 0x12800, 0, false },
     { 0x7C846C, 0x3BB330, "depot window: line copy tool (refresh the vehicle)", "WO", 0, 0, false },
+    { 0x8018D0, 0x5290, "rename window: write the name", "xxx", 0, 0, false, CALL_RENAME },
 };
 #define SITE_COUNT (sizeof(kSites) / sizeof(kSites[0]))
 
@@ -288,6 +292,9 @@ static U64 Run(unsigned index, const U64* a)
         return s.result;
     case CALL_LOCAL:
         return CallSite(s, a);
+    case CALL_RENAME:
+        // Other names (buildings, vehicles, line copies) are written here and carried as they were.
+        return Rename_Capture(a[0], a[1], a[2]) ? 0 : CallSite(s, a);
     case CALL_ACCEPT_MEASURES:
         LineAccept_RestoreMeasures();
         return s.result;

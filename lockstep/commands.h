@@ -50,6 +50,7 @@ enum LockstepCommandKind {
     LS_CMD_GAME_RULES = 21,  // commands.cpp: the game menu's settings page applied (its copy of the rules)
     LS_CMD_CARGO_SETTINGS = 22, // cargo_settings.cpp: a stop's or link's loading or unloading half
     LS_CMD_SOURCE_SLOTS = 23,   // source_slots.cpp: a building's specific sources (add-source tool, windows)
+    LS_CMD_RENAME = 24,         // rename.cpp: a city's or a crossroad's new name
 };
 
 // Money a local action changed on this PC (an interface purchase, a terrain
