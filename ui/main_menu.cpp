@@ -100,7 +100,10 @@ static void LockstepPanel(bool host)
     Determinism_SessionSpeed(&paused, &speed);
     unsigned long long tick = Determinism_StepCount();
     if (paused) Wrapped(kYellow, "Simulation: paused at tick %llu", tick);
-    else Wrapped(kGreen, "Simulation: running, tick %llu (speed %d)", tick, speed);
+    else {
+        static const char* const kSpeeds[] = { "", "normal", "fast", "Hyper", "Plaid" };
+        Wrapped(kGreen, "Simulation: running, tick %llu (%s)", tick, kSpeeds[speed < 1 ? 1 : speed > 4 ? 4 : speed]);
+    }
 
     unsigned long long rtt = 0;
     if (LockstepNet_RoundTrip(&rtt)) {

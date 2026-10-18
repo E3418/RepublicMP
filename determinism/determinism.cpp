@@ -20,6 +20,15 @@
 
 #define GAME_TIMER_RVA 0x9D4EE0
 #define FAST_FACTOR_RVA 0x909D5C
+// The main loop's other speed-2 factors (105d66 / 105d9f): Hyper (left Ctrl +
+// Numpad1, or turbo) and Plaid (left Ctrl + Numpad2, or the fast button held).
+#define HYPER_FACTOR_RVA 0x909C14   // 0.05
+#define PLAID_FACTOR_RVA 0x909B90   // 0.01
+#define KEYS_RVA 0xA54B90           // C3D_INPUT key bytes
+#define KEY_LCTRL 0x1D
+#define KEY_NUMPAD1 0x4F
+#define KEY_NUMPAD2 0x50
+#define FAST_HELD_RVA (0x9D4F10 + 0x5A2) // the speed panel's fast button held
 #define SIM_STEP_RVA 0x30C790   // FUN_14030c790(world): one simulation step
 #define LOAD_WORLD_RVA 0x430FC0 // FUN_140430fc0(): loads the save named in the load globals
 
@@ -374,6 +383,23 @@ static size_t g_commandsRecorded = 0, g_commandsReplayed = 0;
 static bool g_frameStep = false, g_frameEarly = false, g_frameFault = false, g_haveStep = false;
 static bool g_framesReady = false, g_paused = false, g_buttonsArmed = false;
 static int g_tickSpeed = 1, g_requestedSpeed = 1;
+// Lockstep tick speeds: 1 normal, 2 fast, 3 Hyper, 4 Plaid (the last two only on
+// top of fast, as in the game). The host's boost is its own keys or the player's
+// request (a speed request of 10 + boost); the grant carries the tick speed.
+static int g_remoteBoost = 0, g_sentBoost = 0;
+
+// This PC's boost from the same inputs the main loop reads: 0 none, 1 Hyper, 2 Plaid.
+static int LocalBoost()
+{
+    const BYTE* keys = g_exeBase + KEYS_RVA;
+    if (keys[KEY_LCTRL] && keys[KEY_NUMPAD2]) return 2;
+    if (g_exeBase[FAST_HELD_RVA]) return 2;
+    if (keys[KEY_LCTRL] && keys[KEY_NUMPAD1]) return 1;
+    return 0;
+}
+
+// The game's own speed (world +5a4) for a tick speed: Hyper and Plaid are fast with a smaller step.
+static int GameSpeedOf(int tickSpeed) { return tickSpeed > 2 ? 2 : tickSpeed; }
 static unsigned g_holdsLeft = 0, g_menuFrames = 0;
 static unsigned long long g_holdCount[2] = {}, g_speedChanges[2] = {};
 static volatile LONG g_pauseRequests = 0;
@@ -804,6 +830,7 @@ void Determinism_ToolScopeEnd()
 bool Determinism_BeginSession(bool host)
 {
     if (!g_framesReady || g_probeBusy) return false;
+    g_remoteBoost = g_sentBoost = 0;
     g_sessionHost = host;
     g_sessionRunning = false;
     g_sessionArmed = true;
@@ -971,7 +998,8 @@ void Determinism_BeforePrepare()
     else ProbeAdmission(timer);
     // Speed 2 scales the timer by the game's own factor (105db9: exe+909d5c,
     // 0.345268), as the native loop would have done before this point.
-    *(float*)timer = DETERMINISM_FIXED_FPS * (g_tickSpeed == 2 ? *(float*)(g_exeBase + FAST_FACTOR_RVA) : 1.0f);
+    unsigned factor = g_tickSpeed == 4 ? PLAID_FACTOR_RVA : g_tickSpeed == 3 ? HYPER_FACTOR_RVA : FAST_FACTOR_RVA;
+    *(float*)timer = DETERMINISM_FIXED_FPS * (g_tickSpeed >= 2 ? *(float*)(g_exeBase + factor) : 1.0f);
     *(float*)(timer + 4) = DETERMINISM_FIXED_FPS;
     *(int*)(timer + 8) = (int)DETERMINISM_FIXED_FPS;
     timer[12] = g_frameStep ? 0 : 1;
@@ -1034,13 +1062,19 @@ static void SessionAdmission(BYTE* timer)
         }
         if (!menu && !g_frameFault && LockstepNet_TakeGrant(g_stepCount + 1, &speed)) {
             g_frameStep = true;
-            g_tickSpeed = speed > 1 ? 2 : 1;
+            g_tickSpeed = speed < 1 ? 1 : speed > 4 ? 4 : speed;
+        }
+        int boost = LocalBoost();
+        if (boost != g_sentBoost) {
+            LockstepNet_SendSpeed(10 + boost);
+            g_sentBoost = boost;
         }
         return;
     }
     if (LockstepNet_TakePauseToggles() & 1) g_paused = !g_paused;
     int wanted = LockstepNet_TakeSpeedRequest();
-    if (wanted > 0) g_requestedSpeed = wanted > 1 ? 2 : 1;
+    if (wanted >= 10) g_remoteBoost = wanted - 10 > 2 ? 2 : wanted - 10;
+    else if (wanted > 0) g_requestedSpeed = wanted > 1 ? 2 : 1;
     static int s_sentPaused = -1, s_sentSpeed = -1;
     if ((int)g_paused != s_sentPaused || g_requestedSpeed != s_sentSpeed) {
         LockstepNet_SendState(g_paused, g_requestedSpeed);
@@ -1053,7 +1087,8 @@ static void SessionAdmission(BYTE* timer)
     if (!hold && !g_frameFault && g_tickDebt >= 1.0 && LockstepNet_MayRun(g_stepCount + 1)) {
         g_frameStep = true;
         g_tickDebt -= 1.0;
-        g_tickSpeed = g_requestedSpeed > 1 ? 2 : 1;
+        int boost = LocalBoost() > g_remoteBoost ? LocalBoost() : g_remoteBoost;
+        g_tickSpeed = g_requestedSpeed > 1 ? 2 + boost : 1;
         LockstepNet_Grant(g_stepCount + 1, g_tickSpeed);
     }
 }
@@ -1081,7 +1116,7 @@ static void HookedSimStep(__int64 world)
     }
     if (g_probeState == PROBE_RUNNING && g_runStep == 0) ProbeWatch_Step(g_probeRun, 0, false);
     g_framePhase = 2;
-    WriteGameSpeed(g_tickSpeed);
+    WriteGameSpeed(GameSpeedOf(g_tickSpeed));
     // Early keeps the tool: its one read that changed the simulation (the
     // building pass, 13cc11) is patched in sim_patches. (by SoylentGreed)
     SimPatches_BeforeEarly(world);
@@ -1108,7 +1143,7 @@ void Determinism_BeforeLate()
     // does: at speed 0 with no time step 159070 treats the game as paused
     // (159234) and skips the building update, so construction never advanced
     // and nothing was charged for it.
-    if (g_frameStep && g_frameEarly) WriteGameSpeed(g_tickSpeed);
+    if (g_frameStep && g_frameEarly) WriteGameSpeed(GameSpeedOf(g_tickSpeed));
 }
 
 void Determinism_AfterLate()
@@ -1119,7 +1154,7 @@ void Determinism_AfterLate()
     if (g_frameStep && g_frameEarly) {
         // A speed the Late body changed itself stays as input for the next frame.
         int* speed = (int*)(g_exeBase + 0x9D54B4);
-        if (*speed == g_tickSpeed) WriteGameSpeed(0);
+        if (*speed == GameSpeedOf(g_tickSpeed)) WriteGameSpeed(0);
         ++g_stepCount;
         for (int i = 0; i < g_stepObserverCount; i++) g_stepObservers[i]();
         if (g_sessionRunning) {
