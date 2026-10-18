@@ -7,7 +7,7 @@ from there both games run the same simulation tick by tick (**lockstep**),
 or each game simulates on its own and the players' actions are repeated on
 the other side (**replay mode**).
 
-**Status:** alpha, tested with two players. Current version: **0.5.3**
+**Status:** alpha, tested with two players. Current version: **0.5.4**
 ([changelog](CHANGELOG.md)).
 
 ## Support and community
@@ -139,7 +139,9 @@ Firewalls must allow TCP ports 5556-5559 on the host, and 5560 for lockstep.
 | **Insert** | Show / hide the RepublicMP overlay |
 
 The **Debug** button in the main window opens manual reconnect controls, the
-determinism probe and the detailed log. A full log is written to
+determinism probe, the money trace (both players tick it; on a desync each log
+gets the balances and construction sites of the ticks before it) and the
+detailed log. A full log is written to
 `tesmioloader.log`; when reporting a problem, attach the logs of both
 players and say which mode you were in.
 

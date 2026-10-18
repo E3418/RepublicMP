@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.5.4
+
+Desync fixes for building and terraforming in lockstep. Protocol 35 - both
+players need this build.
+
+- **Forklift paths** - factory connections attach to buildings again in
+  lockstep; the buildings' connection points were missing.
+- **Placement** - a building's access road or path is laid the same way on
+  both PCs, whatever the cameras' angles and whatever each player's mouse
+  points at (bus stops, substations and garages next to roads split the
+  games); the building tool no longer sees what one camera sees while a
+  placement is made.
+- **Construction sites** - a site under one player's camera no longer runs
+  differently on that PC; sites under construction no longer flicker while
+  more of the same building is placed.
+- **Terraforming** - a paid terrain stroke's entry in the construction
+  ledger is shared, so the construction sites pay the same on both PCs
+  after terraforming.
+- **Fixes** - opening a building window in a session no longer crashes the
+  game.
+- **Debug** - a money trace (off by default): on a desync each PC logs its
+  balances and construction sites of the ticks before it; a placement's log
+  line lists the objects it made.
+
 ## 0.5.3
 
 Lockstep that no longer depends on the camera, a reworked window and a DLC
