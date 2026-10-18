@@ -226,6 +226,12 @@ static void SessionButtons(std::string& hostIp)
             ImGui::SetTooltip("For the host: both games simulate the same ticks, so nothing drifts apart.\n"
                               "The joining player follows the host's choice - nothing to tick there.\n"
                               "Actions that are not carried yet are put away when selected.");
+        bool dlcCheck = SaveSync_GetDlcCheck();
+        if (ImGui::Checkbox("Check DLCs", &dlcCheck)) SaveSync_SetDlcCheck(dlcCheck);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Refuse a join when the two games have different DLCs installed:\n"
+                              "without a DLC its maps, buildings and vehicles are drawn wrong or not at all.\n"
+                              "Untick it on either PC to play anyway, on a map with no DLC content.");
         if (!world) ImGui::TextColored(kGrey, "Host is available once a city is loaded.");
         return;
     }

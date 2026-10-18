@@ -20,6 +20,8 @@
 #include <stdlib.h>
 #include <time.h>
 #include <vector>
+#include <string>
+#include <algorithm>
 #include <filesystem>
 #include <system_error>
 
@@ -77,6 +79,7 @@ static volatile ULONGLONG g_lastWorldSentTick = 0; // host: when the player last
 // the same ticks (lockstep/lockstep_net) instead of the live sync channels.
 // The host chooses; the player follows the host's hello.
 static volatile bool g_lockstepChosen = false;
+static volatile bool g_dlcCheck = true; // refuse a join when the DLCs differ (both players' choice)
 static volatile bool g_lockstep = false; // the current session's mode
 #define LOCKSTEP_CONNECT_TIMEOUT_MS 180000 // the host loads the world again before it listens
 #define LOCKSTEP_SILENCE_MS 20000          // a game that sent nothing (not even a keepalive) is gone
@@ -480,6 +483,78 @@ static bool GetGameSaveDir(char* outPath, size_t outSize, const char* saveName)
     return _snprintf_s(outPath, outSize, _TRUNCATE, "%s\\media_soviet\\save\\%s", exePath, saveName) >= 0;
 }
 
+// ---------------------------------------------------------------------------
+// DLCs
+// ---------------------------------------------------------------------------
+//
+// The game's DLCs are folders media_soviet\dlcN (buildings, vehicles,
+// terrains). A player without one cannot draw the other's DLC map, buildings
+// and vehicles, and in lockstep the vehicle type table (commands name types by
+// their index in it) differs. After the version check both sides send their
+// list and their checker choice; the join is refused when the lists differ
+// and both players keep the checker on.
+
+struct SessionDlcs {
+    char magic[8];  // "RPMPDLC"
+    int check;      // this player's checker is on
+    char list[248]; // the dlcN folder names, sorted, comma-separated
+};
+
+static void ListDlcs(char* out, size_t outSize)
+{
+    out[0] = 0;
+    char exePath[MAX_PATH] = {};
+    DWORD len = GetModuleFileNameA(g_exe, exePath, MAX_PATH);
+    if (len == 0 || len == MAX_PATH) return;
+    char* lastSlash = strrchr(exePath, '\\');
+    if (!lastSlash) return;
+    *lastSlash = '\0';
+    std::vector<std::string> names;
+    std::error_code ec;
+    for (const auto& e : std::filesystem::directory_iterator(std::string(exePath) + "\\media_soviet", ec)) {
+        std::string name = e.path().filename().string();
+        if (_strnicmp(name.c_str(), "dlc", 3) != 0 || !e.is_directory(ec)) continue;
+        if (std::filesystem::directory_iterator(e.path(), ec) == std::filesystem::directory_iterator()) continue; // empty
+        for (char& c : name) c = (char)tolower((unsigned char)c);
+        names.push_back(name);
+    }
+    std::sort(names.begin(), names.end());
+    for (const std::string& n : names) {
+        if (out[0]) strncat_s(out, outSize, ",", _TRUNCATE);
+        strncat_s(out, outSize, n.c_str(), _TRUNCATE);
+    }
+}
+
+static void MakeDlcs(SessionDlcs* d)
+{
+    memset(d, 0, sizeof(*d));
+    memcpy(d->magic, "RPMPDLC", 8);
+    d->check = g_dlcCheck ? 1 : 0;
+    ListDlcs(d->list, sizeof(d->list));
+}
+
+// Both sides decide alike: false refuses the join (why says what differs).
+static bool DlcsMatch(const SessionDlcs& mine, const SessionDlcs& theirs, bool host, char* why, size_t whySize)
+{
+    char peer[sizeof(theirs.list) + 1] = {};
+    memcpy(peer, theirs.list, sizeof(theirs.list));
+    const char* hostList = host ? mine.list : peer;
+    const char* playerList = host ? peer : mine.list;
+    Logf("republicmp  SESSION: DLCs - host [%s], player [%s]", hostList[0] ? hostList : "none", playerList[0] ? playerList : "none");
+    if (strcmp(mine.list, peer) == 0) return true;
+    bool refuse = mine.check && theirs.check;
+    _snprintf_s(why, whySize, _TRUNCATE,
+                "the DLCs differ - host [%s], player [%s]. DLC maps, buildings and vehicles cannot be shown without the DLC%s",
+                hostList[0] ? hostList : "none", playerList[0] ? playerList : "none",
+                refuse ? "; install the same DLCs, or untick \"Check DLCs\" on either PC to play a map that needs none"
+                       : " (the DLC check is off - playing anyway)");
+    if (!refuse) {
+        Logf("republicmp  SESSION: %s", why);
+        SaveStatus("%s %s", host ? "[HOST]" : "[CLIENT]", why);
+    }
+    return !refuse;
+}
+
 // A save name that will not collide with the player's own saves.
 static void GenerateRandomSaveName(char* out, size_t outSize)
 {
@@ -568,6 +643,19 @@ static bool RunHostJoin(SOCKET sock)
         if (!HelloMatches(theirs, why, sizeof(why))) {
             SetSessionError("join refused: %s", why);
             SaveStatus("[HOST] join refused: %s", why);
+            break;
+        }
+        SessionDlcs myDlcs, theirDlcs;
+        MakeDlcs(&myDlcs);
+        if (!NetworkSendExact(sock, &myDlcs, sizeof(myDlcs)) || !NetworkRecvExact(sock, &theirDlcs, sizeof(theirDlcs)) ||
+            memcmp(theirDlcs.magic, "RPMPDLC", 8) != 0) {
+            SetSessionError("the player dropped during the DLC check");
+            break;
+        }
+        char dlcWhy[512];
+        if (!DlcsMatch(myDlcs, theirDlcs, true, dlcWhy, sizeof(dlcWhy))) {
+            SetSessionError("join refused: %s", dlcWhy);
+            SaveStatus("[HOST] join refused: %s", dlcWhy);
             break;
         }
 
@@ -844,6 +932,19 @@ static bool RunClientJoin(bool rejoin)
         if (!HelloMatches(theirs, why, sizeof(why))) {
             SetSessionError("join refused: %s", why);
             SaveStatus("[CLIENT] join refused: %s", why);
+            break;
+        }
+        SessionDlcs myDlcs, theirDlcs;
+        MakeDlcs(&myDlcs);
+        if (!NetworkSendExact(sock, &myDlcs, sizeof(myDlcs)) || !NetworkRecvExact(sock, &theirDlcs, sizeof(theirDlcs)) ||
+            memcmp(theirDlcs.magic, "RPMPDLC", 8) != 0) {
+            SetSessionError("the host dropped during the DLC check");
+            break;
+        }
+        char dlcWhy[512];
+        if (!DlcsMatch(myDlcs, theirDlcs, false, dlcWhy, sizeof(dlcWhy))) {
+            SetSessionError("join refused: %s", dlcWhy);
+            SaveStatus("[CLIENT] join refused: %s", dlcWhy);
             break;
         }
         g_lockstep = theirs.lockstep != 0;
@@ -1149,6 +1250,8 @@ void SaveSync_Tick()
 
 SessionState SaveSync_GetState() { return g_state; }
 void SaveSync_SetLockstep(bool on) { g_lockstepChosen = on; }
+void SaveSync_SetDlcCheck(bool on) { g_dlcCheck = on; }
+bool SaveSync_GetDlcCheck() { return g_dlcCheck; }
 bool SaveSync_GetLockstep() { return g_lockstepChosen; }
 bool SaveSync_IsLockstepSession() { return g_lockstep && g_state != SESSION_IDLE; }
 bool SaveSync_IsBusy()           { return g_state != SESSION_IDLE; }

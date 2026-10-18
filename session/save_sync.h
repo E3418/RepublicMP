@@ -91,6 +91,9 @@ void SaveSync_Tick();
 // lockstep/lockstep_net). The player follows the host's choice.
 void SaveSync_SetLockstep(bool on);
 bool SaveSync_GetLockstep();
+// Refuse a join when the two games' DLCs differ (on by default; a join goes ahead when either player turns it off).
+void SaveSync_SetDlcCheck(bool on);
+bool SaveSync_GetDlcCheck();
 // The current session runs in lockstep.
 bool SaveSync_IsLockstepSession();
 
