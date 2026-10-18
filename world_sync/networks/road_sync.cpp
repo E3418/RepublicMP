@@ -294,6 +294,15 @@ static void HoverGlobals_Clear()
     }
 }
 
+void RoadSync_ClearHover()
+{
+    HoverGlobals_Clear();
+    __try {
+        *(long long*)((uintptr_t)g_exe + HOVER_PORT_BUILDING_RVA) = 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
 // Local building at `pos` (0.5m in x/z, 1m in y), or 0.
 static __int64 FindLocalBuildingAt(const float pos[3])
 {

@@ -93,6 +93,9 @@ struct BuildSyncMsg {
     double moneyUsd;            // thisPtr+0x580
     // SETTING only
     SettingWire setting;
+    // PLACE (lockstep command): the sender's pick modes, world +f600 (bit 0) and +f698 (bit 1) -
+    // two of the player's own switches the network pick 3c4850 reads when the access road is laid
+    int pickModes;
 };
 
 // Longest a received message waits for its terrain fence before it is

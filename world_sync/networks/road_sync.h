@@ -334,6 +334,12 @@ bool RoadSync_SegmentExists(const RoadSyncSegment& seg);
 // (0x9E4590 / 0x9E4598 / 0x9E45A0). Clears both links for other networks.
 void RoadSync_ReadFootpathLinks(__int64 manager, int category, RoadSyncSegment& seg);
 
+// Clears the hover globals the local mouse leaves (the node, edge and road
+// under the cursor, the hovered building port): the road planner reads them
+// when it lays a path, a building's access road included. Not restored - the
+// game recomputes them on the next frame.
+void RoadSync_ClearHover();
+
 // Hooks FUN_1405258e0 / FUN_140525c30 (see RoadSyncPlanStartMsg). Call once
 // from TsmPluginStart.
 bool RoadSync_InstallPlanStartHooks();

@@ -500,6 +500,53 @@ static void VisibleOut(bool swapped)
     g_visibleIn = false;
 }
 
+// Commands are made before Prepare (Determinism_BeforePrepare), with the
+// visible list Early left: the buildings on this PC's camera. The building
+// tool reads it when a placement is made (2b3106: a pick along this PC's
+// mouse ray; 2c8942: the buildings around it that are on the camera), so the
+// same placement did different things on each PC. While commands are made the
+// list reads empty on every PC; the buildings that still exist go back on it
+// after.
+static std::vector<BYTE*> g_commandKept;
+static bool g_commandFrame = false; // commands are being made (around Determinism_BeforePrepare)
+
+static bool CommandViewIn()
+{
+    if (g_visibleIn || Determinism_WorldLoading()) return false;
+    BYTE* world = g_exeBase + WORLD_RVA;
+    BYTE** begin = *(BYTE***)(world + VISIBLE_OFFSET);
+    BYTE** end = *(BYTE***)(world + VISIBLE_OFFSET + 8);
+    g_commandKept.assign(begin, end);
+    *(BYTE***)(world + VISIBLE_OFFSET + 8) = begin;
+    return true;
+}
+
+static void CommandViewOut(bool emptied, BYTE** buildingsBegin, BYTE** buildingsEnd)
+{
+    if (!emptied) return;
+    BYTE* world = g_exeBase + WORLD_RVA;
+    BYTE** begin = *(BYTE***)(world + VISIBLE_OFFSET);
+    BYTE** end = *(BYTE***)(world + VISIBLE_OFFSET + 8);
+    BYTE** listed = *(BYTE***)(g_exeBase + BUILDINGS_BEGIN_RVA);
+    BYTE** listedEnd = *(BYTE***)(g_exeBase + BUILDINGS_END_RVA);
+    if (g_commandKept.empty() || Determinism_WorldLoading()) {
+        g_commandKept.clear();
+        return;
+    }
+    if (begin == end && listed == buildingsBegin && listedEnd == buildingsEnd) {
+        // Nothing was made or removed: the list's memory is as it was.
+        *(BYTE***)(world + VISIBLE_OFFSET + 8) = begin + g_commandKept.size();
+    } else {
+        typedef void (*PushFn)(void* vector, void* value);
+        PushFn push = (PushFn)(g_exeBase + 0xB0E90);
+        std::unordered_set<BYTE*> still(listed, listedEnd);
+        std::unordered_set<BYTE*> there(begin, end);
+        for (BYTE* b : g_commandKept)
+            if (still.count(b) && !there.count(b)) push(world + VISIBLE_OFFSET, &b);
+    }
+    g_commandKept.clear();
+}
+
 struct PrivateView {
     BYTE search[72];
     bool visible;
@@ -951,7 +998,13 @@ static void DetPrepare(__int64 world)
         original(world);
         return;
     }
+    BYTE** buildingsBegin = *(BYTE***)(g_exeBase + BUILDINGS_BEGIN_RVA);
+    BYTE** buildingsEnd = *(BYTE***)(g_exeBase + BUILDINGS_END_RVA);
+    bool emptied = CommandViewIn();
+    g_commandFrame = true;
     Determinism_BeforePrepare();
+    g_commandFrame = false;
+    CommandViewOut(emptied, buildingsBegin, buildingsEnd);
     // Keep the native tool for previews. Held frames have no Early pass,
     // so refresh the local preview list before Prepare.
     g_visibleFresh = false;
@@ -1110,6 +1163,41 @@ static U64 DetDepotMark(U64 w, U64 depot, U64 a3, U64 a4, U64 a5)
     U64* ret = (U64*)_AddressOfReturnAddress();
     return RouteTools_DepotMark(w, depot, a3, a4, a5, (U64)(ret + 1), *ret);
 }
+// The network picks take the node or edge nearest the line through the cursor
+// along this PC's mouse ray (world +f60 minus the camera's position, then
+// C3DVec3Normalize): 3c4850 (the hovered node or edge) and 3d4b40 (the road
+// under a point), which the building tool calls to find what a building's
+// access road joins, and 3ae610 and 3d05d0, which the planner's update 4fcaf0
+// calls. With the cameras at other angles the same placement laid its access
+// road on one PC only (a bus stop: one more construction site there, and the
+// money split). While commands are made the ray points straight down on every
+// PC; this PC's own hover and previews keep its mouse ray.
+#define PICK_RAY_SITES 4
+#define NORMALIZE_IMPORT 0x86C108 // C3DVec3Normalize
+static const unsigned kPickRaySites[PICK_RAY_SITES] = { 0x3C49A1, 0x3D4C4F, 0x3AE6E4, 0x3D0770 };
+static const unsigned char kPickRayOriginal[PICK_RAY_SITES][6] = { { 0xff, 0x15, 0x61, 0x77, 0x4a, 0x00 },
+                                                                   { 0xff, 0x15, 0xb3, 0x74, 0x49, 0x00 },
+                                                                   { 0xff, 0x15, 0x1e, 0xda, 0x4b, 0x00 },
+                                                                   { 0xff, 0x15, 0x92, 0xb9, 0x49, 0x00 } };
+static bool PickRaySitesAre()
+{
+    for (int i = 0; i < PICK_RAY_SITES; i++)
+        if (memcmp(g_exeBase + kPickRaySites[i], kPickRayOriginal[i], 6) != 0) return false;
+    return true;
+}
+typedef float* (*NormalizeFn)(float* out, const float* in);
+
+static float* DetPickRay(float* out, const float* in)
+{
+    if (g_on && g_commandFrame) {
+        out[0] = 0.0f;
+        out[1] = -1.0f;
+        out[2] = 0.0f;
+        return out;
+    }
+    return (*(NormalizeFn*)(g_exeBase + NORMALIZE_IMPORT))(out, in);
+}
+
 #define STEP_CALL_COUNT 20
 static const unsigned kStepCalls[STEP_CALL_COUNT] = { 0x30E3AC, 0x30E3B8, 0x30E3C4, 0x30D9DD, 0x30D9E7, 0x30D6BC, 0x30D6C4, 0x3155F4,
                                                       0x6F91DF, 0x6F92C8, 0x6F940E, 0x6FA603, 0x6FA657, 0x7FCAE6, 0x7FCBDC, 0x7FCD00,
@@ -1135,7 +1223,7 @@ static bool VerifyStepCalls()
 
 // A relay page near the exe: one `jmp [rip+0]` per target, 16 bytes apart.
 static BYTE* g_relay = nullptr;
-#define RELAY_SLOTS 19
+#define RELAY_SLOTS 20
 
 static bool CallTo(unsigned int site, BYTE* target, unsigned char out[5])
 {
@@ -1159,7 +1247,8 @@ bool SimPatches_Install()
                    memcmp(g_exeBase + UI_ROUTINE_CALL, kUiCallOriginal, 5) == 0 &&
                    memcmp(g_exeBase + PREPARE_CALL, kPrepareCallOriginal, 5) == 0 &&
                    memcmp(g_exeBase + PLACE_PRESS_SITE, kPlacePressOriginal, 6) == 0 &&
-                   memcmp(g_exeBase + BUY_PRESS_SITE, kBuyPressOriginal, 6) == 0 && VerifyStepCalls();
+                   memcmp(g_exeBase + BUY_PRESS_SITE, kBuyPressOriginal, 6) == 0 &&
+                   PickRaySitesAre() && VerifyStepCalls();
     bool relays = false;
     if (sitesOk) g_relay = AllocNear(g_exeBase, 4096);
     if (g_relay) {
@@ -1169,7 +1258,7 @@ bool SimPatches_Install()
                               (void*)&DetUiRoutine, (void*)&DetPrepare, (void*)&DetPieceSpeed, (void*)&DetWeather, (void*)&DetRoadWeather,
                               (void*)&DetBuildingLinks, (void*)&DetConnectionChecks, (void*)&DetGroundPaint, (void*)&DetDisplayCost,
                               (void*)&DetPlacePress, (void*)&DetBuyPress, (void*)&DetStopPickVehicle, (void*)&DetStopPickLine,
-                              (void*)&DetLineMark, (void*)&DetDepotMark };
+                              (void*)&DetLineMark, (void*)&DetDepotMark, (void*)&DetPickRay };
         for (int i = 0; i < RELAY_SLOTS; i++) {
             BYTE* r = g_relay + i * 16;
             r[0] = 0xff; r[1] = 0x25; r[2] = r[3] = r[4] = r[5] = 0;
@@ -1177,8 +1266,14 @@ bool SimPatches_Install()
         }
         VirtualProtect(g_relay, RELAY_SLOTS * 16, PAGE_EXECUTE_READ, &old);
         FlushInstructionCache(GetCurrentProcess(), g_relay, RELAY_SLOTS * 16);
-        unsigned char getNode[6], render[5], lateCall[5], frameLock[6], uiCall[5], prepareCall[5], placePress[6], buyPress[6];
+        unsigned char getNode[6], render[5], lateCall[5], frameLock[6], uiCall[5], prepareCall[5], placePress[6], buyPress[6],
+            pickRay[PICK_RAY_SITES][6];
         getNode[0] = 0x90;
+        bool pickRayOk = true;
+        for (int i = 0; i < PICK_RAY_SITES; i++) {
+            pickRay[i][0] = 0x90;
+            pickRayOk = pickRayOk && CallTo(kPickRaySites[i] + 1, g_relay + 19 * 16, pickRay[i] + 1);
+        }
         frameLock[0] = 0x90;
         placePress[0] = 0x90;
         buyPress[0] = 0x90;
@@ -1186,7 +1281,7 @@ bool SimPatches_Install()
             CallTo(SAPLING_LATE_CALL, g_relay + 32, lateCall) && CallTo(FRAME_LOCK_SITE + 1, g_relay + 48, frameLock + 1) &&
             CallTo(UI_ROUTINE_CALL, g_relay + 64, uiCall) && CallTo(PREPARE_CALL, g_relay + 80, prepareCall) &&
             CallTo(PLACE_PRESS_SITE + 1, g_relay + 13 * 16, placePress + 1) &&
-            CallTo(BUY_PRESS_SITE + 1, g_relay + 14 * 16, buyPress + 1)) {
+            CallTo(BUY_PRESS_SITE + 1, g_relay + 14 * 16, buyPress + 1) && pickRayOk) {
             Write(g_exeBase + GETNODE_SITE, getNode, 6);
             Write(g_exeBase + SAPLING_RENDER_CALL, render, 5);
             Write(g_exeBase + SAPLING_LATE_CALL, lateCall, 5);
@@ -1195,6 +1290,7 @@ bool SimPatches_Install()
             Write(g_exeBase + PREPARE_CALL, prepareCall, 5);
             Write(g_exeBase + PLACE_PRESS_SITE, placePress, 6);
             Write(g_exeBase + BUY_PRESS_SITE, buyPress, 6);
+            for (int i = 0; i < PICK_RAY_SITES; i++) Write(g_exeBase + kPickRaySites[i], pickRay[i], 6);
             relays = true;
             for (int i = 0; i < STEP_CALL_COUNT; i++) {
                 unsigned char call[5];
@@ -1206,7 +1302,7 @@ bool SimPatches_Install()
     bool tools = relays && InstallToolStubs();
     GameCalls_Install(); // window buttons; a site that differs is only left alone
     BrushTools_Install(); // the terrain brush's press reads; without them the terrain brushes stay as before
-    Logf("republicmp  SIM_PATCHES: late hook %d, relays %d (building visibility, saplings, render before Early, interface searches, Prepare at speed 0, window cost display, placing press, buy press, route tools), tool stubs %d (%d calls)%s",
+    Logf("republicmp  SIM_PATCHES: late hook %d, relays %d (building visibility, saplings, render before Early, interface searches, Prepare at speed 0, window cost display, placing press, buy press, route tools, pick ray), tool stubs %d (%d calls)%s",
          late, relays, tools, (int)TOOL_CALL_COUNT, sitesOk ? "" : " - unexpected bytes at a relay site");
     return late && relays && tools;
 }

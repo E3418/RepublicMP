@@ -602,6 +602,34 @@ static void* PickMainNewObject(float x, float z, int* newCount, float* dist)
     return best;
 }
 
+// For the log: the new objects of a placement - category (-1: no type, as a
+// construction site's), offset from the cursor and construction progress - so
+// the two PCs' logs show which object one of them made and the other did not.
+static void DescribeNewObjects(float x, float z, char* out, size_t outSize)
+{
+    out[0] = 0;
+    size_t used = 0;
+    int shown = 0;
+    __try {
+        void** it = *(void***)((uintptr_t)g_exeBase + VEC_BUILDINGS_BEGIN_RVA);
+        void** end = *(void***)((uintptr_t)g_exeBase + VEC_BUILDINGS_END_RVA);
+        for (; it && it < end && shown < 6; ++it) {
+            char* obj = (char*)*it;
+            if (!obj || WasBeforePlacement(obj)) continue;
+            __int64 type = *(__int64*)(obj + OBJ_TYPE_OFFSET);
+            int cat = type ? *(int*)(type + TYPE_CATEGORY_OFFSET) : -1;
+            float dx = *(float*)(obj + OBJ_POS_OFFSET) - x;
+            float dz = *(float*)(obj + OBJ_POS_OFFSET + 8) - z;
+            int n = _snprintf_s(out + used, outSize - used, _TRUNCATE, "%s[cat %d at %+.1f,%+.1f progress %.3f]",
+                                shown ? " " : "", cat, dx, dz, *(float*)(obj + 0x604));
+            if (n < 0) break;
+            used += (size_t)n;
+            shown++;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
 // True while the placement function would return without doing anything.
 static bool PlacementGuardBusy(__int64 thisPtr)
 {
@@ -1094,6 +1122,9 @@ bool BuildSync_ApplyPlacementCommand(const BuildSyncMsg& msg)
         float savedYaw = *yaw;
         unsigned char savedMirror = *mirror, savedHeld = *held, savedPressed = *pressed;
         __int64 savedSelected = *selected;
+        // The clicking PC's pick modes (see BuildSyncMsg::pickModes).
+        unsigned char* pickModes[2] = { (unsigned char*)(thisPtr + 0xF600), (unsigned char*)(thisPtr + 0xF698) };
+        unsigned char savedPickModes[2] = { *pickModes[0], *pickModes[1] };
         // This PC's open menus would make the placement return at once
         // (replay_menus.h); they read closed for the call.
         unsigned char* menus = (unsigned char*)thisPtr;
@@ -1110,12 +1141,17 @@ bool BuildSync_ApplyPlacementCommand(const BuildSyncMsg& msg)
             *mirror = msg.mirrored ? 1 : 0;
             *held = 0;
             *pressed = 0;
+            *pickModes[0] = (msg.pickModes & 1) ? 1 : 0;
+            *pickModes[1] = (msg.pickModes & 2) ? 1 : 0;
             BuildMode_Write(msg.mode);
             memset(g_replayEntry, 0, sizeof(g_replayEntry));
             memcpy(g_replayEntry, typeName, strnlen(typeName, 63));
             *selected = (__int64)g_replayEntry;
             for (int i = 0; i < REPLAY_UI_FLAG_COUNT; i++) menus[kReplayUiFlagOffsets[i]] = 0;
             SnapshotBeforePlacement();
+            // The access road's planner reads what this PC's mouse hovers (the clicking PC's road under
+            // the cursor, the other PC's whatever it points at): one PC laid two pieces, the other one.
+            RoadSync_ClearHover();
             bool scoped = ViewListScope_Begin(msg.cursorX - PLACE_SCOPE_MARGIN, msg.cursorZ - PLACE_SCOPE_MARGIN,
                                               msg.cursorX + PLACE_SCOPE_MARGIN, msg.cursorZ + PLACE_SCOPE_MARGIN);
             LocalBuilds_BeginBuildingPlacement();
@@ -1143,10 +1179,12 @@ bool BuildSync_ApplyPlacementCommand(const BuildSyncMsg& msg)
                 if (scoped) ViewListScope_End();
             }
             char modeText[96];
-            Logf("republicmp  BUILD_SYNC: command placement type=[%s] pay=%s cursor=(%.2f,%.2f,%.2f) - %s (objects %d, click result %d,%d,%d, result %d,%d,%d)",
+            char made[320];
+            DescribeNewObjects(msg.cursorX, msg.cursorZ, made, sizeof(made));
+            Logf("republicmp  BUILD_SYNC: command placement type=[%s] pay=%s cursor=(%.2f,%.2f,%.2f) - %s (objects %d, click result %d,%d,%d, result %d,%d,%d) %s",
                  typeName, BuildMode_Describe(msg.mode, modeText, sizeof(modeText)), msg.cursorX, msg.cursorY, msg.cursorZ,
                  withRoads ? "placed by the click frame" : placed ? "placed by the replay call, without access roads" : "refused by the engine",
-                 newCount, clickResult[0], clickResult[1], clickResult[2], result[0], result[1], result[2]);
+                 newCount, clickResult[0], clickResult[1], clickResult[2], result[0], result[1], result[2], made);
         } __finally {
             cursor[0] = savedCursor[0]; cursor[1] = savedCursor[1]; cursor[2] = savedCursor[2];
             cursorCopy[0] = savedCopy[0]; cursorCopy[1] = savedCopy[1]; cursorCopy[2] = savedCopy[2];
@@ -1155,6 +1193,8 @@ bool BuildSync_ApplyPlacementCommand(const BuildSyncMsg& msg)
             *held = savedHeld;
             *pressed = savedPressed;
             *selected = savedSelected;
+            *pickModes[0] = savedPickModes[0];
+            *pickModes[1] = savedPickModes[1];
             for (int i = 0; i < REPLAY_UI_FLAG_COUNT; i++) menus[kReplayUiFlagOffsets[i]] = savedMenus[i];
             BuildMode_Write(mine);
         }
