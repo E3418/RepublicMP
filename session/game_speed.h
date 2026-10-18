@@ -61,11 +61,8 @@ int ReadGameSpeed();       // 0 = paused, 1/2
 int ReadGameSpeedSaved();  // speed saved before pause (-1 = none)
 void WriteGameSpeed(int speed);
 
-void ForceTogglePause();   // mirrors the game's own TOGGLE_PAUSE behavior
 void EnsureGamePaused();   // idempotent
 void EnsureGameUnpaused(); // idempotent
-
-DWORD WINAPI GameSpeedHotkeyThread(LPVOID); // F10 test hotkey
 
 // Per-frame (game thread, Present hook, after BuildSync_Tick): detects local
 // speed changes and sends them (host: SET, client: REQUEST), sends the local

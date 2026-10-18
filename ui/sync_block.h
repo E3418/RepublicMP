@@ -8,7 +8,7 @@
 //   - the game's input (C3D_INPUT) answers "nothing pressed"
 //     (game/input_block), and window messages are swallowed
 //     (game/imgui_hook);
-//   - building placement and the F10 pause hotkey refuse while active.
+//   - building placement refuses while active.
 #pragma once
 
 // Raises/lowers the block. reason (if given) becomes the stage text. Any thread.

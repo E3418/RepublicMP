@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// True only while the game window has focus, so the dev hotkeys (F9, F10,
-// INSERT) do not fire while alt-tabbed.
+// True only while the game window has focus, so INSERT does not toggle the
+// overlay while alt-tabbed.
 #pragma once
 
 #include "tesmio_plugin.h"

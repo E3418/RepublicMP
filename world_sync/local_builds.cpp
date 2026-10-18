@@ -3,7 +3,6 @@
 #include "local_builds.h"
 #include "../game/present_hook.h"
 #include "../session/game_speed.h"
-#include "../game/window_focus.h"
 #include "buildings/build_sync.h"
 #include "networks/road_sync.h"
 #include "view_list_scope.h"
@@ -140,32 +139,6 @@ static long long BuildingCount(void* begin, void* end)
 }
 
 // ---------------------------------------------------------------------------
-// Heartbeat
-// ---------------------------------------------------------------------------
-
-static volatile long long g_universalCallCount = 0;
-static volatile long long g_universalMultiPushCount = 0;
-
-DWORD WINAPI HeartbeatThread(LPVOID)
-{
-    long long lastUniversalCalls = 0;
-    long long lastPresentCalls = 0;
-    for (;;) {
-        Sleep(2000);
-        long long curUniversalCalls = g_universalCallCount;
-        long long curPresentCalls = g_presentCallCount;
-        Logf("republicmp  heartbeat: universalCalls total=%lld (+%lld) universalMultiPush total=%lld presentCalls total=%lld (+%lld) gameSpeed=%d gameSpeedSaved=%d",
-             curUniversalCalls, curUniversalCalls - lastUniversalCalls,
-             g_universalMultiPushCount,
-             curPresentCalls, curPresentCalls - lastPresentCalls,
-             ReadGameSpeed(), ReadGameSpeedSaved());
-        lastUniversalCalls = curUniversalCalls;
-        lastPresentCalls = curPresentCalls;
-    }
-    return 0;
-}
-
-// ---------------------------------------------------------------------------
 // Building type name helpers
 // ---------------------------------------------------------------------------
 
@@ -198,59 +171,6 @@ static void SafeReadCStringDirect(const char* ptr, char* outBuf, size_t outBufSi
 static bool LooksLikeValidType(const char* s)
 {
     return s[0] != '<' && strlen(s) >= 2;
-}
-
-// ---------------------------------------------------------------------------
-// F9 debug spawn
-// ---------------------------------------------------------------------------
-
-#define DEBUG_SPAWN_VK VK_F9
-#define DEBUG_SPAWN_POLL_MS 50
-#define DEBUG_SPAWN_TEST_TYPE_NAME "residental_brick_1"
-#define DEBUG_SPAWN_OFFSET_METERS_X 5.0f
-
-static volatile LONG g_debugSpawnPending = 0;
-
-// Places a test building 5m from the current cursor through the real
-// placement function. Game thread only.
-static void RunDebugSpawn(__int64 thisPtr)
-{
-    __try {
-        float* xField = (float*)(thisPtr + CURSOR_X_OFFSET);
-        float savedX = *xField;
-        *xField = savedX + DEBUG_SPAWN_OFFSET_METERS_X;
-
-        char typeName[] = DEBUG_SPAWN_TEST_TYPE_NAME;
-        void** vecBeginPtr = (void**)((uintptr_t)g_exeBase + VEC_BUILDINGS_BEGIN_RVA);
-        void** vecEndPtr   = (void**)((uintptr_t)g_exeBase + VEC_BUILDINGS_END_RVA);
-        long long countBefore = BuildingCount(*vecBeginPtr, *vecEndPtr);
-
-        g_origUniversal(thisPtr, typeName, 0, 1, 0, 0xffffffff, 0, 1);
-
-        long long countAfter = BuildingCount(*vecBeginPtr, *vecEndPtr);
-        int resultCode = *(int*)(thisPtr + PLACEMENT_RESULT_OFFSET);
-        Logf("republicmp  DEBUG_SPAWN: type=[%s] buildings %lld -> %lld result=%d",
-             typeName, countBefore, countAfter, resultCode);
-
-        *xField = savedX;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        Logf("republicmp  DEBUG_SPAWN: <exception during synthetic placement>");
-    }
-}
-
-DWORD WINAPI DebugSpawnThread(LPVOID)
-{
-    bool keyWasDown = false;
-    for (;;) {
-        Sleep(DEBUG_SPAWN_POLL_MS);
-        bool keyIsDown = IsGameWindowFocused() && (GetAsyncKeyState(DEBUG_SPAWN_VK) & 0x8000) != 0;
-        if (keyIsDown && !keyWasDown) {
-            InterlockedExchange(&g_debugSpawnPending, 1);
-            Logf("republicmp  DEBUG_SPAWN: request queued (F9)");
-        }
-        keyWasDown = keyIsDown;
-    }
-    return 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -1119,9 +1039,6 @@ void LocalBuilds_Tick()
 
     FlushCommitCaptures();
 
-    // A placement on this PC alone: not with the determinism layer on.
-    if (InterlockedExchange(&g_debugSpawnPending, 0) != 0 && !Determinism_IsActive())
-        RunDebugSpawn(thisPtr);
 }
 
 // ---------------------------------------------------------------------------
@@ -1206,7 +1123,6 @@ void HookedUniversal(__int64 param_1, char* param_2, char param_3, char param_4,
         return;
     }
 
-    g_universalCallCount++;
 
     char typeName[64];
     SafeReadCStringDirect(param_2, typeName, sizeof(typeName));
@@ -1257,7 +1173,6 @@ void HookedUniversal(__int64 param_1, char* param_2, char param_3, char param_4,
         if (countBefore < 0 || countAfter <= countBefore) return; // preview frame or refused
 
         long long countDelta = countAfter - countBefore;
-        if (countDelta > 1) g_universalMultiPushCount++;
 
         // The main object is the one created on the cursor; helper objects
         // of a multi-push sit elsewhere.

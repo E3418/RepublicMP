@@ -2,15 +2,12 @@
 // See game_speed.h.
 #include "game_speed.h"
 #include "../determinism/determinism.h"
-#include "../game/window_focus.h"
 #include "../ui/sync_block.h"
 #include "../world_sync/buildings/build_sync.h"
 #include <math.h>
 
 #pragma comment(lib, "User32.lib")
 
-#define GAME_SPEED_TOGGLE_VK VK_F10
-#define GAME_SPEED_POLL_MS 50
 
 void GameSpeed_Bind(const TsmHost* host)
 {
@@ -94,22 +91,6 @@ static void MeasureClockRate()
     s_lastMs = now;
 }
 static const char* const kBoostNames[] = { "none", "Hyper", "Plaid" };
-
-void ForceTogglePause()
-{
-    if (Determinism_RequestPauseToggle()) return;
-    int cur = ReadGameSpeed();
-    if (cur == 0) {
-        int restore = ReadGameSpeedSaved();
-        if (restore <= 0) restore = 1; // 0/-1/uninitialized all mean "no real saved speed"
-        WriteGameSpeed(restore);
-        Logf("republicmp  GAME_SPEED: ForceTogglePause -> unpaused, speed=%d", restore);
-    } else {
-        WriteGameSpeedSaved(cur);
-        WriteGameSpeed(0);
-        Logf("republicmp  GAME_SPEED: ForceTogglePause -> paused (was speed %d)", cur);
-    }
-}
 
 // Called every frame by the sync screen - logs only when it changes something.
 void EnsureGamePaused()
@@ -319,25 +300,3 @@ void GameSpeed_OnRemote(int kind, int speed, int speedSaved, int turbo)
     }
 }
 
-DWORD WINAPI GameSpeedHotkeyThread(LPVOID)
-{
-    bool keyWasDown = false;
-    for (;;) {
-        Sleep(GAME_SPEED_POLL_MS);
-        bool keyIsDown = IsGameWindowFocused() && (GetAsyncKeyState(GAME_SPEED_TOGGLE_VK) & 0x8000) != 0;
-        bool keyJustPressed = keyIsDown && !keyWasDown;
-        keyWasDown = keyIsDown;
-        if (!keyJustPressed) {
-            continue;
-        }
-        if (SyncBlock_IsActive()) {
-            // F10 is polled, not routed through WndProc, so the sync block must be
-            // checked here explicitly.
-            Logf("republicmp  GAME_SPEED: F10 pressed but ignored - a save-sync is in progress");
-            continue;
-        }
-        Logf("republicmp  GAME_SPEED: F10 pressed");
-        ForceTogglePause();
-    }
-    return 0;
-}

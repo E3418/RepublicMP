@@ -7,6 +7,7 @@
 #include "../world_sync/buildings/build_sync.h"
 #include "../world_sync/networks/road_sync.h"
 #include "../world_sync/terrain/terrain_sync.h"
+#include "../world_sync/terrain/terrain_hook.h"
 #include "../session/save_sync.h"
 #include "../determinism/determinism.h"
 #include "../session/settings_sync.h"
@@ -207,8 +208,18 @@ void DebugWindow::Draw()
         ImGui::EndDisabled();
         ImGui::TextWrapped("Saves the game as 'mp_probe', then loads and simulates it twice and compares the "
                            "state after complete ticks. Fuzz holds 0-3 frames in run 2 and changes speed every 300 ticks. "
-                           "Space/F10 may pause; avoid other actions. Not during a multiplayer session.");
+                           "Space may pause; avoid other actions. Not during a multiplayer session.");
         ImGui::TextWrapped("Result: %s", Probe_Status());
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // --- Terrain call log (world_sync/terrain/terrain_hook) ---
+        static const char* const kTerrainLog[] = { "Off", "Per frame", "Per call" };
+        int terrainLog = TerrainHook_GetLogMode();
+        ImGui::SetNextItemWidth(130);
+        if (ImGui::Combo("Terrain call log", &terrainLog, kTerrainLog, IM_ARRAYSIZE(kTerrainLog))) TerrainHook_SetLogMode(terrainLog);
 
         ImGui::Spacing();
         ImGui::Separator();

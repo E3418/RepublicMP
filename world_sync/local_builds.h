@@ -61,8 +61,6 @@ void LocalBuilds_BeginBuildingPlacement();
 void LocalBuilds_EndBuildingPlacement();
 bool LocalBuilds_InBuildingPlacement();
 
-DWORD WINAPI HeartbeatThread(LPVOID);  // logs call counters every 2s
-DWORD WINAPI DebugSpawnThread(LPVOID); // polls F9 for the debug spawn
 
 // Per-frame (game thread, Present hook): tracks the drag-active flag, sends
 // captured commits and services F9 requests.

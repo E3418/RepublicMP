@@ -129,9 +129,6 @@ Firewalls must allow TCP ports 5556-5559 on the host, and 5560 for lockstep.
 | Key | Action |
 | --- | --- |
 | **Insert** | Show / hide the RepublicMP overlay |
-| **F8** | Terrain sync log: off / per frame / per call |
-| **F9** | Debug: spawn a test building next to the cursor (replay mode) |
-| **F10** | Pause / unpause |
 
 The **Debug** button in the main window opens manual reconnect controls, the
 determinism probe and the detailed log. A full log is written to

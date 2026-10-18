@@ -118,16 +118,6 @@ extern "C" __declspec(dllexport) int TsmPluginStart(void)
     HANDLE presentHook = CreateThread(nullptr, 0, PresentHookThread, nullptr, 0, nullptr);
     Logf("republicmp  present hook thread started: %d", presentHook != nullptr);
 
-    HANDLE hb = CreateThread(nullptr, 0, HeartbeatThread, nullptr, 0, nullptr);
-    Logf("republicmp  heartbeat thread started: %d", hb != nullptr);
-
-    // Dev hotkeys: F9 debug spawn, F10 pause toggle.
-    HANDLE debugSpawn = CreateThread(nullptr, 0, DebugSpawnThread, nullptr, 0, nullptr);
-    Logf("republicmp  debug spawn thread started: %d (hotkey F9)", debugSpawn != nullptr);
-
-    HANDLE gameSpeedHotkey = CreateThread(nullptr, 0, GameSpeedHotkeyThread, nullptr, 0, nullptr);
-    Logf("republicmp  game speed hotkey thread started: %d (hotkey F10)", gameSpeedHotkey != nullptr);
-
     if (!okUniversal) return 1;
     return 0;
 }

@@ -8,7 +8,6 @@
 #include "terrain_hook.h"
 #include "../../lockstep/commands.h"
 #include <vector>
-#include "../../game/window_focus.h"
 #include "terrain_sync.h"
 #include <intrin.h>
 #pragma intrinsic(_ReturnAddress)
@@ -17,7 +16,6 @@
 #define TERRAIN_HOLDER_RVA 0x9941F0 // *(exe+0x9941F0) + 0xED8 = C3D_TERRAIN*
 #define TERRAIN_HOLDER_OFFSET 0xED8
 #define ACTIVE_TOOL_OFFSET 0xD428 // *(char**)(thisPtr+0xD428) = active tool name (FUN_14030d1a0 strcmp's it)
-#define VERBOSE_TOGGLE_VK VK_F8
 
 volatile long g_terrainApplyingRemote = 0;
 
@@ -680,23 +678,23 @@ bool InstallTerrainHooks()
         if (PatchIat(g_exe, DLL_ENGINE, defs[k].symbol, defs[k].detour, defs[k].original, defs[k].label))
             ok++;
 
-    Logf("republicmp  TERRAIN: %d/%d hooks installed (log off; F8 cycles off -> per frame -> per call)", ok, total);
+    Logf("republicmp  TERRAIN: %d/%d hooks installed (log off; the Debug window sets it)", ok, total);
     return ok == total;
 }
 
 // ------------------------------------------------------------------ tick
 
+void TerrainHook_SetLogMode(int mode)
+{
+    long v = mode < 0 || mode > 2 ? 0 : mode;
+    InterlockedExchange(&g_logMode, v);
+    Logf("republicmp  TERRAIN: log %s", v == 0 ? "OFF" : v == 1 ? "aggregated per frame" : "verbose (one line per call)");
+}
+
+int TerrainHook_GetLogMode() { return (int)g_logMode; }
+
 void TerrainHook_Tick()
 {
-    static bool s_keyWasDown = false;
-    bool keyIsDown = IsGameWindowFocused() && (GetAsyncKeyState(VERBOSE_TOGGLE_VK) & 0x8000) != 0;
-    if (keyIsDown && !s_keyWasDown) {
-        long v = (g_logMode + 1) % 3;
-        InterlockedExchange(&g_logMode, v);
-        Logf("republicmp  TERRAIN: log %s", v == 0 ? "OFF" : v == 1 ? "aggregated per frame" : "verbose (one line per call)");
-    }
-    s_keyWasDown = keyIsDown;
-
     AcquireSRWLockExclusive(&g_aggLock);
     FlushLocked();
     ReleaseSRWLockExclusive(&g_aggLock);

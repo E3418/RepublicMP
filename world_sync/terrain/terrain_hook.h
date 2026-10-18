@@ -73,6 +73,9 @@ bool InstallTerrainHooks();
 // Per-frame (game thread, Present hook): flushes the aggregated calls of the
 // frame that just ended and polls the F8 log-mode key.
 void TerrainHook_Tick();
+// The terrain call log: 0 off, 1 aggregated per frame, 2 one line per call.
+void TerrainHook_SetLogMode(int mode);
+int TerrainHook_GetLogMode();
 
 // The live C3D_TERRAIN object, *(*(exe+0x9941F0)+0xED8), or nullptr before a
 // world is loaded.
