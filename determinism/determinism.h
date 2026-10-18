@@ -74,6 +74,14 @@ void Determinism_SessionSpeed(bool* paused, int* speed);
 typedef void (*StepObserverFn)(void);
 void Determinism_AddStepObserver(StepObserverFn fn);
 
+// Money trace (Debug window, off by default): every PC keeps its balances and
+// its construction sites after each tick of a lockstep session, and on a
+// desync logs the ticks up to the one that differed - the two PCs' logs then
+// show the tick and the amount where the money split.
+void Determinism_SetMoneyTrace(bool on);
+bool Determinism_GetMoneyTrace();
+void Determinism_DumpMoneyTrace(unsigned long long tick);
+
 // Probe control (UI). steps: complete ticks per run, interval: ticks between hashes.
 // Fuzz: run 2 inserts held frames; both runs change speed every 300 ticks.
 // recordCommands: the player builds during run 1; the actions become commands

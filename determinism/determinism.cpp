@@ -952,6 +952,73 @@ static void MakeCommands(unsigned long long completed)
 static void ProbeAdmission(BYTE* timer);
 static void SessionAdmission(BYTE* timer);
 
+// ---------------------------------------------------------------------------
+// Money trace (see determinism.h)
+// ---------------------------------------------------------------------------
+
+struct MoneyTick {
+    unsigned long long tick;
+    double rub, usd;
+    double progress; // construction progress (+0x604) of the sites, summed
+    int sites, paid;
+};
+#define MONEY_TRACE_TICKS 256
+#define MONEY_TRACE_DUMPED 70
+static MoneyTick g_moneyTicks[MONEY_TRACE_TICKS];
+static unsigned long long g_moneyTickCount = 0;
+static bool g_moneyTrace = false;
+
+void Determinism_SetMoneyTrace(bool on)
+{
+    g_moneyTrace = on;
+    g_moneyTickCount = 0;
+}
+
+bool Determinism_GetMoneyTrace() { return g_moneyTrace; }
+
+static void RecordMoneyTick()
+{
+    MoneyTick t = {};
+    t.tick = g_stepCount;
+    __try {
+        BYTE* world = g_exeBase + 0x9D4F10;
+        t.usd = *(double*)(world + 0x580);
+        t.rub = *(double*)(world + 0x588);
+        BYTE** it = *(BYTE***)(g_exeBase + 0x9E6A18);
+        BYTE** end = *(BYTE***)(g_exeBase + 0x9E6A20);
+        for (; it && it < end; ++it) {
+            if (!*it) continue;
+            float p = *(float*)(*it + 0x604);
+            if (p >= 1.0f) continue;
+            t.progress += p;
+            t.sites++;
+            if (*(*it + 0x608) || *(*it + 0x609)) t.paid++;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return;
+    }
+    g_moneyTicks[g_moneyTickCount++ % MONEY_TRACE_TICKS] = t;
+}
+
+void Determinism_DumpMoneyTrace(unsigned long long tick)
+{
+    if (!g_moneyTrace || !g_moneyTickCount) return;
+    unsigned long long first = g_moneyTickCount > MONEY_TRACE_TICKS ? g_moneyTickCount - MONEY_TRACE_TICKS : 0;
+    Logf("republicmp  MONEY_TRACE: the ticks before %llu on this PC", tick);
+    const MoneyTick* prev = nullptr;
+    for (unsigned long long i = first; i < g_moneyTickCount; i++) {
+        const MoneyTick& t = g_moneyTicks[i % MONEY_TRACE_TICKS];
+        if (t.tick > tick || t.tick + MONEY_TRACE_DUMPED <= tick) {
+            prev = &t;
+            continue;
+        }
+        double dRub = prev ? t.rub - prev->rub : 0, dUsd = prev ? t.usd - prev->usd : 0;
+        Logf("republicmp  MONEY_TRACE: tick %llu rubles %.6f (%+.6f) dollars %.6f (%+.6f), %d site(s) (%d paid), progress %.9g",
+             t.tick, t.rub, dRub, t.usd, dUsd, t.sites, t.paid, t.progress);
+        prev = &t;
+    }
+}
+
 // Session log every 300 ticks: whether time, money and construction move -
 // the sum of the construction progress (building +0x604, 0..1) of every
 // building still under construction.
@@ -1158,6 +1225,7 @@ void Determinism_AfterLate()
         ++g_stepCount;
         for (int i = 0; i < g_stepObserverCount; i++) g_stepObservers[i]();
         if (g_sessionRunning) {
+            if (g_moneyTrace) RecordMoneyTick();
             if (!g_sessionHost) LockstepNet_Ack(g_stepCount);
             if (g_stepCount % LOCKSTEP_HASH_TICKS == 0) {
                 StateSummary s;

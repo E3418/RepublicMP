@@ -2,6 +2,7 @@
 // See lockstep_net.h.
 #include "lockstep_net.h"
 #include "commands.h"
+#include "../determinism/determinism.h"
 #include "../transport/network.h"
 #include <deque>
 #include <vector>
@@ -132,6 +133,8 @@ static DWORD WINAPI RecvThread(LPVOID)
             memcpy(g_desync, m.data.data(), n);
             g_desync[n] = 0;
             Logf("republicmp  LOCKSTEP: the host reports - %s", g_desync);
+            unsigned long long tick = 0;
+            if (sscanf_s(g_desync, "the games differ after tick %llu", &tick) == 1) Determinism_DumpMoneyTrace(tick);
             continue;
         }
         if (h.type == LS_BYE) {
@@ -265,6 +268,7 @@ static void Compare(const LsHash& theirs)
     Logf("republicmp  LOCKSTEP:   host day %d %.4f rubles %.4f dollars %.4f, player day %d %.4f rubles %.4f dollars %.4f", a.day,
          a.dayProgress, a.rub, a.usd, b.day, b.dayProgress, b.rub, b.usd);
     Send(LS_DESYNC, g_desync, strlen(g_desync)); // the player shows it too
+    Determinism_DumpMoneyTrace(theirs.tick);
 }
 
 void LockstepNet_StateAfter(unsigned long long tick, const StateSummary& s)

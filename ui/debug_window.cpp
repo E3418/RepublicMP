@@ -225,6 +225,13 @@ void DebugWindow::Draw()
         ImGui::Separator();
         ImGui::Spacing();
 
+        // --- Money trace (determinism) ---
+        bool moneyTrace = Determinism_GetMoneyTrace();
+        if (ImGui::Checkbox("Money trace (lockstep desyncs)", &moneyTrace)) Determinism_SetMoneyTrace(moneyTrace);
+        ImGui::TextWrapped("Both players turn it on: on a desync each log gets the balances and construction sites "
+                           "of the ticks before it, and every command that changed the money.");
+        ImGui::Spacing();
+
         // --- Field diff (session/settings_sync) ---
         bool fieldDiff = SettingsSync_GetFieldDiff();
         if (ImGui::Checkbox("Log building fields changed by clicks (FIELD_DIFF)", &fieldDiff))

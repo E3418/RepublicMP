@@ -280,7 +280,7 @@ static void Apply(const Command& c)
     char money[96] = "";
     if (paidRub != 0.0 || paidUsd != 0.0)
         sprintf_s(money, " (money %+.4f rubles %+.4f dollars)", paidRub, paidUsd);
-    if (!Frequent(c.kind) || !ok)
+    if (!Frequent(c.kind) || !ok || (money[0] && Determinism_GetMoneyTrace()))
         Logf("republicmp  LOCKSTEP: #%u %s after tick %llu - %s%s", c.seq, KindName(c.kind), c.afterTick,
              ok ? "made" : "not made", money);
 }
