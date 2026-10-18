@@ -74,6 +74,8 @@ static volatile bool g_resyncSent = false;
 static volatile bool g_resyncAnnounced = false; // client: the host announced one
 static volatile bool g_resyncing = false;
 static volatile int g_autoResyncMinutes = 0;
+static volatile int g_desyncResyncSeconds = 60;    // lockstep: re-sync this long after a desync (-1 off)
+static volatile ULONGLONG g_desyncSince = 0;       // GetTickCount64 of the desync this session saw (0 none)
 static volatile ULONGLONG g_lastWorldSentTick = 0; // host: when the player last got the world
 // Lockstep: both PCs load the sent save with the determinism layer on and run
 // the same ticks (lockstep/lockstep_net) instead of the live sync channels.
@@ -342,6 +344,7 @@ static const char* MonitorLockstep(bool client)
 {
     bool reported = false;
     ULONGLONG lastPing = 0;
+    g_desyncSince = 0;
     while (LockstepNet_IsConnected()) {
         if (g_disconnectRequested) return nullptr;
         ULONGLONG now = GetTickCount64();
@@ -359,10 +362,13 @@ static const char* MonitorLockstep(bool client)
         const char* desync = LockstepNet_Desync();
         if (desync[0] && !reported) {
             reported = true;
+            g_desyncSince = now;
             SaveStatus("[LOCKSTEP] %s", desync);
         }
-        bool onDesync = desync[0] && SyncCheck_GetAutoResyncPercent() > 0 && SyncCheck_GetResyncCooldownMs() == 0;
-        if (!client && (ResyncDue() || onDesync)) {
+        // In lockstep the games match or not: a re-sync comes on request, or a set time after a desync.
+        int delay = g_desyncResyncSeconds;
+        bool onDesync = desync[0] && delay >= 0 && now - g_desyncSince >= (ULONGLONG)delay * 1000;
+        if (!client && (g_resyncRequested || onDesync)) {
             g_resyncRequested = false;
             SaveStatus(onDesync ? "[HOST] the games differ - re-syncing" : "[HOST] re-syncing");
             LockstepNet_SendResync();
@@ -1182,6 +1188,18 @@ void SaveSync_RequestDisconnect()
 void SaveSync_RequestResync()
 {
     if (g_isHost && g_state == SESSION_HOST_IN_GAME) g_resyncRequested = true;
+}
+
+void SaveSync_SetDesyncResyncSeconds(int seconds) { g_desyncResyncSeconds = seconds < 0 ? -1 : seconds; }
+int SaveSync_GetDesyncResyncSeconds() { return g_desyncResyncSeconds; }
+
+ULONGLONG SaveSync_GetMsUntilDesyncResync()
+{
+    int delay = g_desyncResyncSeconds;
+    ULONGLONG since = g_desyncSince;
+    if (!g_isHost || !since || delay < 0 || !LockstepNet_Desync()[0]) return 0;
+    ULONGLONG elapsed = GetTickCount64() - since, wait = (ULONGLONG)delay * 1000;
+    return elapsed >= wait ? 1 : wait - elapsed;
 }
 
 void SaveSync_SetAutoResyncMinutes(int minutes)

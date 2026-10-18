@@ -63,6 +63,8 @@ void Determinism_Restart();
 
 // Simulation steps since the layer was last activated (main thread).
 unsigned long long Determinism_StepCount();
+// A lockstep session's pause and tick speed (this PC's view; the host's on the player).
+void Determinism_SessionSpeed(bool* paused, int* speed);
 
 // Called after a complete tick (Early + Late) while active; after native Early otherwise.
 // Main thread, whether or not the layer

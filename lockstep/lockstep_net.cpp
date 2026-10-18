@@ -20,7 +20,8 @@ enum LockstepMsgType {
     LS_ACK = 4,   // player -> host: unsigned long long completed
     LS_HASH = 5,  // player -> host: LsHash
     LS_RESYNC = 6, // host -> player: the world is sent again (no payload)
-    LS_PING = 11,  // either way: still here (no payload)
+    LS_PING = 11,  // either way: still here (LsPing; a request is answered with the same time)
+    LS_DESYNC = 12, // host -> player: the first state difference (text)
     LS_PAUSE = 7, // player -> host: a pause toggle
     LS_SPEED = 8, // player -> host: int speed
     LS_STATE = 9, // host -> player: LsState
@@ -33,6 +34,7 @@ struct LsGrant { unsigned long long tick; int speed; };
 struct LsCommandHead { unsigned long long afterTick; int kind; };
 struct LsHash { unsigned long long tick; StateSummary s; };
 struct LsState { int paused; int speed; };
+struct LsPing { unsigned long long sentMs; int reply; };
 #pragma pack(pop)
 
 #define LS_MAX_PAYLOAD (1u << 20)
@@ -69,6 +71,15 @@ static volatile ULONGLONG g_lastReceived = 0;    // GetTickCount64 of the last m
 static bool g_hostStateKnown = false;
 static LsState g_hostState = { 1, 1 };
 
+// Both sides: the round trip of the last answered ping, the host's waits for the
+// player (the admission window full) and the ticks granted so far.
+static volatile ULONGLONG g_rttMs = 0;
+static volatile bool g_rttKnown = false;
+static volatile ULONGLONG g_lastStallMs = 0;
+static volatile LONG g_stalls = 0;
+static unsigned long long g_lastGranted = 0;
+static volatile LONG g_grantBacklog = 0; // the player's grants not run yet (for the interface)
+
 static void Locks()
 {
     if (g_locksReady) return;
@@ -102,7 +113,27 @@ static DWORD WINAPI RecvThread(LPVOID)
         m.data.resize(h.size);
         if (h.size && !NetworkRecvExact(g_sock, m.data.data(), h.size)) break;
         g_lastReceived = GetTickCount64();
-        if (h.type == LS_PING) continue;
+        if (h.type == LS_PING) {
+            if (m.data.size() == sizeof(LsPing)) {
+                LsPing p = *(const LsPing*)m.data.data();
+                if (p.reply) {
+                    ULONGLONG now = GetTickCount64();
+                    g_rttMs = now >= p.sentMs ? now - p.sentMs : 0;
+                    g_rttKnown = true;
+                } else {
+                    p.reply = 1;
+                    Send(LS_PING, &p, sizeof(p));
+                }
+            }
+            continue;
+        }
+        if (h.type == LS_DESYNC) {
+            size_t n = m.data.size() < sizeof(g_desync) - 1 ? m.data.size() : sizeof(g_desync) - 1;
+            memcpy(g_desync, m.data.data(), n);
+            g_desync[n] = 0;
+            Logf("republicmp  LOCKSTEP: the host reports - %s", g_desync);
+            continue;
+        }
         if (h.type == LS_BYE) {
             Logf("republicmp  LOCKSTEP: the other player left");
             break;
@@ -140,6 +171,12 @@ static void ResetState()
     g_hostState.speed = 1;
     g_resyncReceived = false;
     g_lastReceived = GetTickCount64();
+    g_rttMs = 0;
+    g_rttKnown = false;
+    g_lastStallMs = 0;
+    g_stalls = 0;
+    g_lastGranted = 0;
+    g_grantBacklog = 0;
 }
 
 static bool Started(SOCKET s, bool host)
@@ -227,6 +264,7 @@ static void Compare(const LsHash& theirs)
          a.buildings, a.vehicles, a.citizens, b.buildings, b.vehicles, b.citizens);
     Logf("republicmp  LOCKSTEP:   host day %d %.4f rubles %.4f dollars %.4f, player day %d %.4f rubles %.4f dollars %.4f", a.day,
          a.dayProgress, a.rub, a.usd, b.day, b.dayProgress, b.rub, b.usd);
+    Send(LS_DESYNC, g_desync, strlen(g_desync)); // the player shows it too
 }
 
 void LockstepNet_StateAfter(unsigned long long tick, const StateSummary& s)
@@ -268,6 +306,7 @@ void LockstepNet_Poll()
         switch (m.type) {
         case LS_GRANT:
             if (n == sizeof(LsGrant)) g_grants.push_back(*(const LsGrant*)p);
+            g_grantBacklog = (LONG)g_grants.size();
             break;
         case LS_CMD:
             if (n >= sizeof(LsCommandHead))
@@ -303,11 +342,18 @@ void LockstepNet_Poll()
 
 bool LockstepNet_MayRun(unsigned long long tick)
 {
-    return g_connected && g_playerCompleted + LOCKSTEP_WINDOW >= tick;
+    bool may = g_connected && g_playerCompleted + LOCKSTEP_WINDOW >= tick;
+    if (!may && g_connected) {
+        ULONGLONG now = GetTickCount64();
+        if (now - g_lastStallMs > 1000) InterlockedIncrement(&g_stalls); // one per second of waiting
+        g_lastStallMs = now;
+    }
+    return may;
 }
 
 void LockstepNet_Grant(unsigned long long tick, int speed)
 {
+    g_lastGranted = tick;
     LsGrant g = { tick, speed };
     Send(LS_GRANT, &g, sizeof(g));
 }
@@ -338,12 +384,30 @@ bool LockstepNet_TakeGrant(unsigned long long tick, int* speed)
     if (g_grants.empty() || g_grants.front().tick != tick) return false;
     *speed = g_grants.front().speed;
     g_grants.pop_front();
+    g_grantBacklog = (LONG)g_grants.size();
     return true;
 }
 
 void LockstepNet_Ping()
 {
-    Send(LS_PING, nullptr, 0);
+    LsPing p = { GetTickCount64(), 0 };
+    Send(LS_PING, &p, sizeof(p));
+}
+
+bool LockstepNet_RoundTrip(unsigned long long* ms)
+{
+    *ms = g_rttMs;
+    return g_rttKnown;
+}
+
+LockstepFlow LockstepNet_Flow()
+{
+    LockstepFlow f = {};
+    f.stalls = (int)g_stalls;
+    f.msSinceStall = g_lastStallMs ? GetTickCount64() - g_lastStallMs : ~0ull;
+    if (g_isHost) f.behind = g_lastGranted > g_playerCompleted ? g_lastGranted - g_playerCompleted : 0;
+    else f.behind = (unsigned long long)g_grantBacklog;
+    return f;
 }
 
 ULONGLONG LockstepNet_MsSinceReceived()

@@ -1232,6 +1232,12 @@ void Determinism_SetActive(bool active, unsigned long long seed)
 bool Determinism_IsActive() { return g_active; }
 void Determinism_Restart() { InterlockedIncrement(&g_epoch); }
 unsigned long long Determinism_StepCount() { return g_stepCount; }
+
+void Determinism_SessionSpeed(bool* paused, int* speed)
+{
+    *paused = g_paused;
+    *speed = g_tickSpeed;
+}
 void Determinism_AddStepObserver(StepObserverFn fn)
 {
     if (g_stepObserverCount < DETERMINISM_MAX_OBSERVERS) g_stepObservers[g_stepObserverCount++] = fn;

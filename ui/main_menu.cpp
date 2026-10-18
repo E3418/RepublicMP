@@ -11,6 +11,7 @@
 #include "../world_sync/networks/road_sync.h"
 #include "../world_sync/terrain/terrain_sync.h"
 #include "../session/sync_check.h"
+#include "../determinism/determinism.h"
 
 #include "imgui.h"
 #include <misc/cpp/imgui_stdlib.h> // ImGui::InputText(const char*, std::string*)
@@ -18,6 +19,7 @@
 #include <vector>
 #include <string>
 #include <cstdio>
+#include <cstdarg>
 
 MainMenu g_mainMenu;
 
@@ -26,6 +28,19 @@ static const ImVec4 kBlue   = ImVec4(0.4f, 0.75f, 0.95f, 1.0f);
 static const ImVec4 kYellow = ImVec4(0.95f, 0.8f, 0.25f, 1.0f);
 static const ImVec4 kGreen  = ImVec4(0.35f, 0.9f, 0.35f, 1.0f);
 static const ImVec4 kRed    = ImVec4(0.95f, 0.4f, 0.35f, 1.0f);
+
+// Text in a colour that wraps at the window's edge.
+static void Wrapped(const ImVec4& color, const char* fmt, ...)
+{
+    char text[512];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(text, sizeof(text), fmt, args);
+    va_end(args);
+    ImGui::PushStyleColor(ImGuiCol_Text, color);
+    ImGui::TextWrapped("%s", text);
+    ImGui::PopStyleColor();
+}
 
 // A coloured dot followed by text on the same line.
 static void StatusDot(const ImVec4& color)
@@ -38,7 +53,7 @@ static void StatusDot(const ImVec4& color)
     ImGui::SameLine();
 }
 
-// "Buildings  Roads  Terrain" with a green/red dot each.
+// Replay mode: "Buildings  Roads  Terrain" with a green/red dot each (lockstep uses none of them).
 static void ChannelIndicators()
 {
     struct { const char* name; bool up; } ch[] = {
@@ -63,8 +78,8 @@ static void JoinStepLine()
         ImGui::TextColored(kGrey, "Preparing...");
         return;
     }
-    if (total > 0) ImGui::Text("Step %d/%d - %s", step, total, text);
-    else ImGui::TextUnformatted(text);
+    if (total > 0) Wrapped(ImGui::GetStyleColorVec4(ImGuiCol_Text), "Step %d/%d - %s", step, total, text);
+    else Wrapped(ImGui::GetStyleColorVec4(ImGuiCol_Text), "%s", text);
     if (percent >= 0) {
         char overlay[16];
         _snprintf_s(overlay, sizeof(overlay), _TRUNCATE, "%d%%", percent);
@@ -72,8 +87,79 @@ static void JoinStepLine()
     }
 }
 
-// Host with a player in the game: re-sync now, and the automatic interval.
-static void ResyncControls()
+static void MinutesSeconds(char* out, size_t n, unsigned long long ms)
+{
+    _snprintf_s(out, n, _TRUNCATE, "%llu:%02llu", ms / 60000, (ms / 1000) % 60);
+}
+
+// Lockstep in the game: the simulation, the connection, how the ticks flow and the comparison.
+static void LockstepPanel(bool host)
+{
+    bool paused = true;
+    int speed = 1;
+    Determinism_SessionSpeed(&paused, &speed);
+    unsigned long long tick = Determinism_StepCount();
+    if (paused) Wrapped(kYellow, "Simulation: paused at tick %llu", tick);
+    else Wrapped(kGreen, "Simulation: running, tick %llu (speed %d)", tick, speed);
+
+    unsigned long long rtt = 0;
+    if (LockstepNet_RoundTrip(&rtt)) {
+        ImVec4 col = rtt < 80 ? kGreen : rtt < 250 ? kYellow : kRed;
+        Wrapped(col, "Ping: %llu ms", rtt);
+    } else {
+        Wrapped(kGrey, "Ping: measuring...");
+    }
+
+    LockstepFlow f = LockstepNet_Flow();
+    if (host) {
+        if (f.msSinceStall < 5000)
+            Wrapped(kYellow, "Flow: waiting for the player (%llu ticks behind) - the slower PC sets the pace", f.behind);
+        else
+            Wrapped(kGreen, "Flow: steady (player %llu tick(s) behind)", f.behind);
+    } else {
+        if (f.behind > LOCKSTEP_WINDOW / 2)
+            Wrapped(kYellow, "Flow: catching up, %llu tick(s) waiting", f.behind);
+        else
+            Wrapped(kGreen, "Flow: steady");
+    }
+
+    const char* desync = LockstepNet_Desync();
+    unsigned long long matched = LockstepNet_LastMatchedTick();
+    if (desync[0]) {
+        Wrapped(kRed, "Sync: %s", desync);
+        ULONGLONG left = host ? SaveSync_GetMsUntilDesyncResync() : 0;
+        if (left) {
+            char t[16];
+            MinutesSeconds(t, sizeof(t), left);
+            Wrapped(kYellow, "The game goes on; re-sync in %s.", t);
+        } else {
+            Wrapped(kGrey, host ? "The game goes on; re-sync when you choose." : "The game goes on until the host re-syncs.");
+        }
+    } else if (host && matched) {
+        Wrapped(kGreen, "Sync: the games match (checked after tick %llu)", matched);
+    } else {
+        Wrapped(kGrey, "Sync: compared every %d ticks%s", LOCKSTEP_HASH_TICKS, host ? "" : " by the host");
+    }
+
+    if (!host) return;
+    ImGui::Spacing();
+    if (ImGui::Button("Re-sync now")) SaveSync_RequestResync();
+    ImGui::SameLine();
+    static const int kSeconds[] = { -1, 0, 60, 120, 300 };
+    static const char* const kLabels[] = { "Off", "immediately", "after 1 min", "after 2 min", "after 5 min" };
+    int current = 0;
+    for (int i = 0; i < IM_ARRAYSIZE(kSeconds); i++)
+        if (kSeconds[i] == SaveSync_GetDesyncResyncSeconds()) current = i;
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("After a desync:");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(130);
+    if (ImGui::Combo("##desyncResync", &current, kLabels, IM_ARRAYSIZE(kLabels))) SaveSync_SetDesyncResyncSeconds(kSeconds[current]);
+    Wrapped(kGrey, "Re-sync sends your world to the player again; both games then go on from it.");
+}
+
+// Replay mode, host with a player in the game: re-sync now, the interval and the drift.
+static void ReplayResyncControls()
 {
     static const int kMinutes[] = { 0, 5, 10, 15, 30, 60 };
     static const char* const kLabels[] = { "Off", "every 5 min", "every 10 min", "every 15 min",
@@ -93,30 +179,20 @@ static void ResyncControls()
         SaveSync_SetAutoResyncMinutes(kMinutes[current]);
     ULONGLONG left = SaveSync_GetMsUntilAutoResync();
     if (left) {
+        char t[16];
+        MinutesSeconds(t, sizeof(t), left);
         ImGui::SameLine();
-        ImGui::TextColored(kGrey, "next in %llu:%02llu", left / 60000, (left / 1000) % 60);
+        ImGui::TextColored(kGrey, "next in %s", t);
     }
-    ImGui::TextColored(kGrey, "Re-sync sends your world to the player again (vehicles, citizens, production).");
+    Wrapped(kGrey, "Re-sync sends your world to the player again (vehicles, citizens, production).");
 
-    // Drift measured by the hourly sync check (session/sync_check). In
-    // lockstep the games either match or not: the state summaries compared
-    // every LOCKSTEP_HASH_TICKS ticks say which.
-    bool lockstep = SaveSync_IsLockstepSession();
     SyncDrift d = SyncCheck_GetDrift();
-    if (lockstep) {
-        const char* desync = LockstepNet_Desync();
-        unsigned long long matched = LockstepNet_LastMatchedTick();
-        if (desync[0]) ImGui::TextColored(kRed, "Lockstep: %s", desync);
-        else if (matched) ImGui::TextColored(kGreen, "Lockstep: in sync (checked after tick %llu)", matched);
-        else ImGui::TextColored(kGrey, "Lockstep: compared every %d ticks", LOCKSTEP_HASH_TICKS);
-    } else if (d.valid) {
+    if (d.valid) {
         ImVec4 col = d.total < 2.0f ? kGreen : d.total < 10.0f ? kYellow : kRed;
-        ImGui::TextColored(col, "Drift %.1f%%", d.total);
-        ImGui::SameLine();
-        ImGui::TextColored(kGrey, "(day %d %02d:00 - citizens %d/%d, vehicles %d/%d, storage %.1f%%)", d.day,
-                           d.hour, d.hostCitizens, d.clientCitizens, d.hostVehicles, d.clientVehicles, d.storage);
+        Wrapped(col, "Drift %.1f%% (day %d %02d:00 - citizens %d/%d, vehicles %d/%d, storage %.1f%%)", d.total, d.day, d.hour,
+                d.hostCitizens, d.clientCitizens, d.hostVehicles, d.clientVehicles, d.storage);
     } else {
-        ImGui::TextColored(kGrey, "Drift: measured every game hour");
+        Wrapped(kGrey, "Drift: measured every game hour");
     }
     static const int kLimits[] = { 0, 2, 5, 10, 20 };
     static const char* const kLimitLabels[] = { "Off", "above 2%", "above 5%", "above 10%", "above 20%" };
@@ -124,19 +200,21 @@ static void ResyncControls()
     for (int i = 0; i < IM_ARRAYSIZE(kLimits); i++)
         if (kLimits[i] == SyncCheck_GetAutoResyncPercent()) limit = i;
     ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(lockstep ? "Re-sync when the games differ:" : "Re-sync on drift:");
+    ImGui::TextUnformatted("Re-sync on drift:");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(110);
     if (ImGui::Combo("##driftResync", &limit, kLimitLabels, IM_ARRAYSIZE(kLimitLabels)))
         SyncCheck_SetAutoResyncPercent(kLimits[limit]);
     // Why an automatic re-sync has not happened yet (see session/sync_check.h).
     if (kLimits[limit] > 0 && d.valid && d.overLimitChecks > 0) {
-        ImGui::SameLine();
         unsigned long long wait = SyncCheck_GetResyncCooldownMs();
         if (d.overLimitChecks < SYNC_CHECK_CONFIRM_CHECKS)
-            ImGui::TextColored(kYellow, "above for %d/%d hours", d.overLimitChecks, SYNC_CHECK_CONFIRM_CHECKS);
-        else if (wait)
-            ImGui::TextColored(kYellow, "waiting %llu:%02llu after the last re-sync", wait / 60000, (wait / 1000) % 60);
+            Wrapped(kYellow, "above for %d/%d hours", d.overLimitChecks, SYNC_CHECK_CONFIRM_CHECKS);
+        else if (wait) {
+            char t[16];
+            MinutesSeconds(t, sizeof(t), wait);
+            Wrapped(kYellow, "waiting %s after the last re-sync", t);
+        }
     }
 }
 
@@ -145,51 +223,56 @@ static void StatusPanel()
     SessionState st = SaveSync_GetState();
     const char* peer = SaveSync_GetPeerIp();
     const char* lastError = SaveSync_GetLastError();
+    bool lockstep = SaveSync_IsLockstepSession();
+    const char* mode = lockstep ? "lockstep" : "replay mode";
 
     switch (st) {
     case SESSION_IDLE:
         StatusDot(kGrey);
         ImGui::TextColored(kGrey, "Not in a multiplayer session");
-        if (lastError[0]) ImGui::TextColored(kRed, "Last session: %s", lastError);
+        if (lastError[0]) Wrapped(kRed, "Last session: %s", lastError);
         break;
 
     case SESSION_HOST_LISTENING:
         if (SaveSync_IsResyncing()) {
             StatusDot(kYellow);
-            ImGui::TextColored(kYellow, "Re-syncing - waiting for %s to reconnect", peer[0] ? peer : "the player");
+            Wrapped(kYellow, "Re-syncing - waiting for %s to reconnect", peer[0] ? peer : "the player");
             break;
         }
         StatusDot(kBlue);
-        ImGui::TextColored(kBlue, "Hosting - waiting for a player");
-        ImGui::TextColored(kGrey, "Your game keeps running. Players connect to your IP (port %d).", SAVE_SYNC_PORT);
-        if (lastError[0]) ImGui::TextColored(kYellow, "%s", lastError);
+        Wrapped(kBlue, "Hosting (%s) - waiting for a player", SaveSync_GetLockstep() ? "lockstep" : "replay mode");
+        Wrapped(kGrey, "Your game keeps running. Players connect to your IP (port %d).", SAVE_SYNC_PORT);
+        if (lastError[0]) Wrapped(kYellow, "%s", lastError);
         break;
 
     case SESSION_HOST_JOINING:
         StatusDot(kYellow);
-        ImGui::TextColored(kYellow, SaveSync_IsResyncing() ? "Re-syncing - sending the world to %s"
-                                                           : "Hosting - %s is joining", peer[0] ? peer : "a player");
+        Wrapped(kYellow, SaveSync_IsResyncing() ? "Re-syncing - sending the world to %s" : "Hosting - %s is joining",
+                peer[0] ? peer : "a player");
         JoinStepLine();
         break;
 
     case SESSION_HOST_IN_GAME:
         StatusDot(kGreen);
-        ImGui::TextColored(kGreen, "Hosting - %s is in the game", peer[0] ? peer : "a player");
-        ChannelIndicators();
-        ResyncControls();
+        Wrapped(kGreen, "Hosting (%s) - %s is in the game", mode, peer[0] ? peer : "a player");
+        if (lockstep) LockstepPanel(true);
+        else {
+            ChannelIndicators();
+            ReplayResyncControls();
+        }
         break;
 
     case SESSION_CLIENT_JOINING:
         StatusDot(kYellow);
-        ImGui::TextColored(kYellow, SaveSync_IsResyncing() ? "Re-syncing with %s" : "Joining %s",
-                           peer[0] ? peer : SaveSync_GetTargetIp());
+        Wrapped(kYellow, SaveSync_IsResyncing() ? "Re-syncing with %s" : "Joining %s", peer[0] ? peer : SaveSync_GetTargetIp());
         JoinStepLine();
         break;
 
     case SESSION_CLIENT_IN_GAME:
         StatusDot(kGreen);
-        ImGui::TextColored(kGreen, "Connected to %s - in the game", peer[0] ? peer : SaveSync_GetTargetIp());
-        ChannelIndicators();
+        Wrapped(kGreen, "Connected to %s (%s) - in the game", peer[0] ? peer : SaveSync_GetTargetIp(), mode);
+        if (lockstep) LockstepPanel(false);
+        else ChannelIndicators();
         break;
     }
 }
@@ -202,6 +285,29 @@ static void SessionButtons(std::string& hostIp)
     float half = (ImGui::GetContentRegionAvail().x - spacing) * 0.5f;
 
     if (st == SESSION_IDLE) {
+        // The host picks the mode; the joining player follows it.
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Mode:");
+        ImGui::SameLine();
+        bool lockstep = SaveSync_GetLockstep();
+        if (ImGui::RadioButton("Lockstep (recommended)", lockstep)) SaveSync_SetLockstep(true);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Both games simulate the same ticks, so nothing drifts apart.\n"
+                              "Actions that are not carried yet are put away when selected.");
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Replay", !lockstep)) SaveSync_SetLockstep(false);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Each game simulates on its own and the players' actions are repeated;\n"
+                              "the games drift and are brought back by re-syncs.");
+        Wrapped(kGrey, "The host's choice - the joining player follows it.");
+        bool dlcCheck = SaveSync_GetDlcCheck();
+        if (ImGui::Checkbox("Check DLCs", &dlcCheck)) SaveSync_SetDlcCheck(dlcCheck);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Refuse a join when the two games have different DLCs installed:\n"
+                              "without a DLC its maps, buildings and vehicles are drawn wrong or not at all.\n"
+                              "Untick it on either PC to play anyway, on a map with no DLC content.");
+        ImGui::Spacing();
+
         bool world = SaveSync_IsWorldLoaded();
         ImGui::BeginDisabled(!world);
         if (ImGui::Button("Host", ImVec2(half, 0)))
@@ -220,19 +326,7 @@ static void SessionButtons(std::string& hostIp)
         ImGui::SameLine();
         ImGui::SetNextItemWidth(-1);
         ImGui::InputText("##hostIp", &hostIp);
-        bool lockstep = SaveSync_GetLockstep();
-        if (ImGui::Checkbox("Host in lockstep (experimental)", &lockstep)) SaveSync_SetLockstep(lockstep);
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("For the host: both games simulate the same ticks, so nothing drifts apart.\n"
-                              "The joining player follows the host's choice - nothing to tick there.\n"
-                              "Actions that are not carried yet are put away when selected.");
-        bool dlcCheck = SaveSync_GetDlcCheck();
-        if (ImGui::Checkbox("Check DLCs", &dlcCheck)) SaveSync_SetDlcCheck(dlcCheck);
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Refuse a join when the two games have different DLCs installed:\n"
-                              "without a DLC its maps, buildings and vehicles are drawn wrong or not at all.\n"
-                              "Untick it on either PC to play anyway, on a map with no DLC content.");
-        if (!world) ImGui::TextColored(kGrey, "Host is available once a city is loaded.");
+        if (!world) Wrapped(kGrey, "Host is available once a city is loaded.");
         return;
     }
 
@@ -244,13 +338,6 @@ static void SessionButtons(std::string& hostIp)
         SaveSync_RequestDisconnect();
     ImGui::EndDisabled();
     ImGui::PopStyleColor(2);
-    ImGui::TextColored(kGrey, host ? "Hosting - Connect is unavailable until you stop."
-                                   : "In a session - Host is unavailable until you disconnect.");
-    if (SaveSync_IsLockstepSession()) {
-        const char* desync = LockstepNet_Desync();
-        if (desync[0]) ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.3f, 1.0f), "Lockstep: %s", desync);
-        else ImGui::TextColored(kGrey, "Lockstep session");
-    }
 }
 
 void MainMenu::Draw()
@@ -298,7 +385,7 @@ void MainMenu::Draw()
         {
             std::vector<std::string> lines = UiLog_Snapshot();
             for (const std::string& line : lines)
-                ImGui::TextUnformatted(line.c_str());
+                ImGui::TextWrapped("%s", line.c_str());
 
             if (autoScrollLog && ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
                 ImGui::SetScrollHereY(1.0f);

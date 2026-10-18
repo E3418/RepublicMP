@@ -11,6 +11,7 @@
 #include "../determinism/determinism.h"
 #include "../session/settings_sync.h"
 #include "debug_log.h"
+#include "../lockstep/lockstep_net.h"
 #include <vector>
 #include <string>
 
@@ -54,6 +55,28 @@ void DebugWindow::Draw()
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
+
+        // --- Lockstep (lockstep/lockstep_net) ---
+        if (SaveSync_IsLockstepSession() && LockstepNet_IsConnected()) {
+            bool paused = true;
+            int speed = 1;
+            Determinism_SessionSpeed(&paused, &speed);
+            unsigned long long rtt = 0;
+            bool rttKnown = LockstepNet_RoundTrip(&rtt);
+            LockstepFlow f = LockstepNet_Flow();
+            ImGui::TextUnformatted("Lockstep:");
+            ImGui::TextWrapped("%s, tick %llu, %s (speed %d)", LockstepNet_IsHost() ? "host" : "player", Determinism_StepCount(),
+                               paused ? "paused" : "running", speed);
+            ImGui::TextWrapped("Ping %s ms, silent %llu ms", rttKnown ? std::to_string(rtt).c_str() : "?", LockstepNet_MsSinceReceived());
+            ImGui::TextWrapped("%s %llu tick(s); waited for the player %d s in all, last %s ago",
+                               LockstepNet_IsHost() ? "Player behind by" : "Grants waiting:", f.behind, f.stalls,
+                               f.msSinceStall == ~0ull ? "never" : (std::to_string(f.msSinceStall / 1000) + " s").c_str());
+            ImGui::TextWrapped("Last match after tick %llu; %s", LockstepNet_LastMatchedTick(),
+                               LockstepNet_Desync()[0] ? LockstepNet_Desync() : "no difference");
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+        }
 
         // --- Building sync (started automatically by the session; these
         // buttons are for manual reconnects) ---
@@ -214,7 +237,7 @@ void DebugWindow::Draw()
         {
             std::vector<std::string> lines = DebugLog_Snapshot();
             for (const std::string& line : lines)
-                ImGui::TextUnformatted(line.c_str());
+                ImGui::TextWrapped("%s", line.c_str());
 
             if (s_autoScrollDebugLog && ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
                 ImGui::SetScrollHereY(1.0f);

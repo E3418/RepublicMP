@@ -66,6 +66,11 @@ void SaveSync_RequestDisconnect();
 void SaveSync_RequestResync();
 
 // Host: re-sync automatically every `minutes` minutes of live play (0 = off).
+// Lockstep: re-sync this many seconds after the games differ (-1: never by itself).
+void SaveSync_SetDesyncResyncSeconds(int seconds);
+int SaveSync_GetDesyncResyncSeconds();
+// Host: ms until that re-sync (0: none pending).
+ULONGLONG SaveSync_GetMsUntilDesyncResync();
 void SaveSync_SetAutoResyncMinutes(int minutes);
 int SaveSync_GetAutoResyncMinutes();
 

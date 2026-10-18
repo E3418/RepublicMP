@@ -43,7 +43,7 @@ bool LockstepNet_Join(const char* hostIp, DWORD timeoutMs, volatile bool* cancel
 void LockstepNet_Close();
 bool LockstepNet_IsConnected();
 bool LockstepNet_IsHost();
-// The first state difference found (host), or "".
+// The first state difference found (host; the player gets it from the host), or "".
 const char* LockstepNet_Desync();
 // Host: the last tick whose state summaries matched (0 = none compared yet).
 unsigned long long LockstepNet_LastMatchedTick();
@@ -61,6 +61,17 @@ void LockstepNet_SendResync();
 // Any thread: a keepalive, and the time since the other game sent anything.
 void LockstepNet_Ping();
 unsigned long long LockstepNet_MsSinceReceived();
+// The round trip of the last answered ping (false until one came back).
+bool LockstepNet_RoundTrip(unsigned long long* ms);
+// How the ticks flow: host - the player's ticks behind the last grant, and the
+// seconds the host waited for the player (the window full); player - grants
+// received but not run yet. Any thread.
+struct LockstepFlow {
+    unsigned long long behind;
+    int stalls;                      // seconds with a wait since the session started
+    unsigned long long msSinceStall; // ~0 when it never waited
+};
+LockstepFlow LockstepNet_Flow();
 void LockstepNet_SendState(bool paused, int speed);
 
 // Player (game thread).
