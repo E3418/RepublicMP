@@ -75,12 +75,17 @@ static const DetPatch kPatches[] = {
     { 0x738e83, 6, { 0x0f, 0x84, 0x2b, 0x01, 0x00, 0x00 }, { 0xe9, 0x2c, 0x01, 0x00, 0x00, 0x90 }, "school window: Ctrl list cleanup" },
     { 0x14c6b5, 2, { 0x74, 0x6f }, { 0xeb, 0x6f }, "car building: Ctrl+I list cleanup" },
     { 0x1bd2ab, 2, { 0x74, 0x21 }, { 0xeb, 0x21 }, "depot: E+L+C slot word" },
-    // Early (30cc94): with K held (exe+a54bb5, the input's key byte 0x25) every agent is updated every
-    // frame with the full step; otherwise 832ae0 splits them by the camera (the near ones every frame,
-    // the rest a third a frame with three times the step). With every building off the camera the split
-    // stepped every citizen a third of the time, visibly in jumps. The K branch is camera-free too, the
-    // same on every PC whatever the keys: je -> nop, every agent every frame.
-    { 0x30cc9b, 2, { 0x74, 0x41 }, { NOP2 }, "Early: every agent every frame (the K branch)" },
+    // Early (30cc94): with K held (exe+a54bb5, the input's key byte 0x25) a debug branch updated every
+    // agent without the agents' prepare 832ae0 (which also sets world +127c8/+127cc for the agent
+    // update 83a6d0), on that PC only: je -> jmp, the prepare always runs.
+    { 0x30cc9b, 2, { 0x74, 0x41 }, { 0xeb, 0x41 }, "Early: K (the agents' debug branch)" },
+    // 832ae0 put on the every-frame list (+126c0, the full step) the agents tied to a building on the
+    // camera, the rest in three buckets (a third a frame, three times the step): with every building
+    // off the camera every citizen stepped a third of the time, visibly in jumps. After its own tests
+    // (+2c, +10) every agent now goes to the every-frame list, the same on every PC:
+    // mov rdx,[rbx+38]; test rdx,rdx -> jmp 832cba; nop2
+    { 0x832bd3, 7, { 0x48, 0x8b, 0x53, 0x38, 0x48, 0x85, 0xd2 }, { 0xe9, 0xe2, 0x00, 0x00, 0x00, NOP2 },
+      "agents: every one on the every-frame list" },
     { 0xfa41, 2, { 0x74, 0x5a }, { 0xeb, 0x5a }, "render: debug calendar keys" },
     // je (no tool) -> jmp: a selected tool otherwise forces traversal from
     // building zero in the forward direction (13cc2f..13cc32), instead of
@@ -862,6 +867,10 @@ static __int64 DetUiRoutine(void* world)
     BYTE saved[SEARCH_WORKSPACE_SIZE];
     memcpy(saved, shared, sizeof(saved));
     memcpy(shared, g_privateSearch, sizeof(saved));
+    // The interface draws and picks the buildings' connection points (4a12e0: a building with
+    // +115a set and +115c under its limit, the forklift paths' ports among them) and its windows
+    // read the visible list: it gets this PC's view, as the tools do in Prepare and Late.
+    bool view = !g_inPhase && VisibleIn();
     Determinism_PrivateScope privateRng;
     Determinism_UiSpeedBegin();
     VehicleSwitches_Before(g_inPhase);
@@ -876,6 +885,7 @@ static __int64 DetUiRoutine(void* world)
     VehicleSwitches_After(g_inPhase);
     Commands_GuardSettings();
     Determinism_UiSpeedEnd();
+    VisibleOut(view);
     memcpy(g_privateSearch, shared, sizeof(saved));
     memcpy(shared, saved, sizeof(saved));
     InterlockedIncrement(&g_uiEnclosed);
