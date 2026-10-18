@@ -75,6 +75,12 @@ static const DetPatch kPatches[] = {
     { 0x738e83, 6, { 0x0f, 0x84, 0x2b, 0x01, 0x00, 0x00 }, { 0xe9, 0x2c, 0x01, 0x00, 0x00, 0x90 }, "school window: Ctrl list cleanup" },
     { 0x14c6b5, 2, { 0x74, 0x6f }, { 0xeb, 0x6f }, "car building: Ctrl+I list cleanup" },
     { 0x1bd2ab, 2, { 0x74, 0x21 }, { 0xeb, 0x21 }, "depot: E+L+C slot word" },
+    // Early (30cc94): with K held (exe+a54bb5, the input's key byte 0x25) every agent is updated every
+    // frame with the full step; otherwise 832ae0 splits them by the camera (the near ones every frame,
+    // the rest a third a frame with three times the step). With every building off the camera the split
+    // stepped every citizen a third of the time, visibly in jumps. The K branch is camera-free too, the
+    // same on every PC whatever the keys: je -> nop, every agent every frame.
+    { 0x30cc9b, 2, { 0x74, 0x41 }, { NOP2 }, "Early: every agent every frame (the K branch)" },
     { 0xfa41, 2, { 0x74, 0x5a }, { 0xeb, 0x5a }, "render: debug calendar keys" },
     // je (no tool) -> jmp: a selected tool otherwise forces traversal from
     // building zero in the forward direction (13cc2f..13cc32), instead of
@@ -763,7 +769,7 @@ void SimPatches_BeforeEarly(__int64 world)
 void SimPatches_AfterEarly()
 {
     g_inPhase = false;
-    if (g_on) HeldFrame_Doors(); // the pass left every building off the camera
+    if (g_on) HeldFrame_AfterEarly(); // the pass left every building off the camera
     g_visibleFresh = false; // the native pass may have removed buildings
 }
 

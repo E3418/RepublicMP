@@ -4,6 +4,7 @@
 #include <vector>
 #include <new>
 #include <unordered_set>
+#include <algorithm>
 #include <string.h>
 
 void HeldFrame_Bind(const TsmHost* host) { TsmBind(host); }
@@ -222,10 +223,177 @@ static void DrawDoors()
     }
 }
 
-void HeldFrame_Doors()
+// Early submits only the citizens of its every-frame list (world +126c0,
+// 83cea0) for drawing; 832ae0 puts there the agents tied to a building on the
+// camera and nearer than [exe+90af6c] (550 m): with +38 and +40 set, either
+// one (the visibility of +38 with the distance of +40, or both of +40), else
+// +598; never one with +2c set or +10 above 0. Every other agent is updated
+// in three buckets and not drawn. The simulation now sees every building off
+// the camera, so that list stays empty: this PC builds it itself, by the same
+// rules from its own view, and submits it every frame (83cea0 culls it and
+// writes only the frame's render lists; the simulation never sees the list).
+#define AGENTS_ALL 0x126A8
+#define DRAW_AGENTS_RVA 0x83CEA0
+#define AGENT_NEAR_RVA 0x90AF6C
+#define CAMERA_RVA 0x9E9C90
+#define NODE_POSITION_IMPORT 0x86C7B8   // C3D_NODE::GetPosition
+#define CAMERA_ZDISTANCE_IMPORT 0x86D008 // C3D_CAMERA::GetZDistance
+
+struct ViewBuilding {
+    BYTE* building;
+    float distance;
+};
+static std::vector<ViewBuilding> g_viewBuildings; // sorted by address
+static std::vector<BYTE*> g_nearAgents;
+
+// The buildings this PC sees and their camera distance (as the building pass's visible branch).
+static size_t CollectView(ViewBuilding* out, size_t max)
+{
+    typedef BYTE* (*FragmentFn)(void* models, int model, int variant);
+    typedef BYTE* (*GetNodeFn)(void* tree, int index);
+    typedef void* (*PositionFn)(void* node, float* out);
+    typedef float (*ZDistanceFn)(void* camera, float* position);
+    FragmentFn fragment = *(FragmentFn*)(g_exeBase + FRAGMENT_IMPORT);
+    GetNodeFn getNode = *(GetNodeFn*)(g_exeBase + GETNODE_IMPORT);
+    PositionFn position = *(PositionFn*)(g_exeBase + NODE_POSITION_IMPORT);
+    ZDistanceFn zDistance = *(ZDistanceFn*)(g_exeBase + CAMERA_ZDISTANCE_IMPORT);
+    size_t n = 0;
+    __try {
+        BYTE* engine = *(BYTE**)(g_exeBase + ENGINE_RVA);
+        BYTE** it = *(BYTE***)(g_exeBase + BUILDINGS_BEGIN_RVA);
+        BYTE** end = *(BYTE***)(g_exeBase + BUILDINGS_END_RVA);
+        for (; engine && it && it < end && n < max; ++it) {
+            BYTE* b = *it;
+            if (!b) continue;
+            BYTE* type = *(BYTE**)(b + 0x318);
+            bool visible;
+            if (type) {
+                BYTE* f = fragment(*(void**)(engine + 0xFF8), *(int*)(type + 0x410), *(int*)(b + 0x5F4));
+                BYTE* node = f ? getNode(*(void**)(engine + 0xEE0), *(int*)(f + 0x3C)) : nullptr;
+                visible = node && node[0x25];
+            } else {
+                BYTE* render = *(BYTE**)(b + 0x5D0);
+                visible = render && render[0x178];
+            }
+            if (!visible) continue;
+            float at[4] = {};
+            position(b + 0x320, at);
+            out[n++] = { b, zDistance(g_exeBase + CAMERA_RVA, at) };
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return n;
+}
+
+// The building's camera distance on this PC, or a very large one when it is not seen.
+static float ViewDistance(const ViewBuilding* view, size_t n, BYTE* b)
+{
+    size_t lo = 0, hi = n;
+    while (lo < hi) {
+        size_t mid = (lo + hi) / 2;
+        if (view[mid].building < b) lo = mid + 1;
+        else hi = mid;
+    }
+    return lo < n && view[lo].building == b ? view[lo].distance : 1.0e30f;
+}
+
+static size_t CollectNear(const ViewBuilding* view, size_t nView, BYTE** out, size_t max)
+{
+    size_t n = 0;
+    __try {
+        float limit = *(float*)(g_exeBase + AGENT_NEAR_RVA);
+        BYTE** begin = *(BYTE***)(g_exeBase + 0x9D4F10 + AGENTS_ALL);
+        BYTE** end = *(BYTE***)(g_exeBase + 0x9D4F10 + AGENTS_ALL + 8);
+        for (BYTE** it = begin; it && it < end && n < max; ++it) {
+            BYTE* a = *it;
+            if (!a || a[0x2C] || *(float*)(a + 0x10) > 0.0f) continue;
+            BYTE* first = *(BYTE**)(a + 0x38);
+            BYTE* second = *(BYTE**)(a + 0x40);
+            bool isNear;
+            if (first && second) {
+                float d2 = ViewDistance(view, nView, second);
+                isNear = (ViewDistance(view, nView, first) < 1.0e30f && d2 < limit) || d2 < limit;
+            } else {
+                BYTE* other = *(BYTE**)(a + 0x598);
+                isNear = other && ViewDistance(view, nView, other) < limit;
+            }
+            if (isNear) out[n++] = a;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return n;
+}
+
+// 83cea0 itself skips a citizen whose buildings are not on the camera (+115a of +38 / +40,
+// 83d170; for one at a building +598, such as a stop, also its distance +115c, 83d585), which
+// the simulation keeps at 0 / 100000: for the call this PC's seen buildings get its own view,
+// and both are put back right after (the simulation does not run meanwhile).
+struct KeptView {
+    BYTE visible;
+    float distance;
+};
+static std::vector<KeptView> g_keptVisible;
+
+static void Submit(BYTE** list, size_t n, const ViewBuilding* view, size_t nView, KeptView* kept)
+{
+    BYTE** header[3] = { list, list + n, list + n };
+    size_t set = 0;
+    __try {
+        for (; set < nView; set++) {
+            BYTE* b = view[set].building;
+            kept[set] = { b[0x115A], *(float*)(b + 0x115C) };
+            b[0x115A] = 1;
+            *(float*)(b + 0x115C) = view[set].distance;
+        }
+        ((void (*)(void*, void*))(g_exeBase + DRAW_AGENTS_RVA))(nullptr, header);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    __try {
+        for (size_t i = 0; i < set; i++) {
+            view[i].building[0x115A] = kept[i].visible;
+            *(float*)(view[i].building + 0x115C) = kept[i].distance;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+static bool ListSizes(size_t* buildings, size_t* agents)
+{
+    *buildings = *agents = 0;
+    __try {
+        BYTE** b = *(BYTE***)(g_exeBase + BUILDINGS_BEGIN_RVA);
+        BYTE** e = *(BYTE***)(g_exeBase + BUILDINGS_END_RVA);
+        BYTE** ab = *(BYTE***)(g_exeBase + 0x9D4F10 + AGENTS_ALL);
+        BYTE** ae = *(BYTE***)(g_exeBase + 0x9D4F10 + AGENTS_ALL + 8);
+        if (b && e > b) *buildings = (size_t)(e - b);
+        if (ab && ae > ab) *agents = (size_t)(ae - ab);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+static void DrawCitizens()
+{
+    size_t buildings = 0, agents = 0;
+    if (!ListSizes(&buildings, &agents)) return;
+    if (!agents || buildings > 1000000 || agents > 10000000) return;
+    g_viewBuildings.resize(buildings);
+    size_t nView = buildings ? CollectView(g_viewBuildings.data(), buildings) : 0;
+    g_viewBuildings.resize(nView);
+    std::sort(g_viewBuildings.begin(), g_viewBuildings.end(),
+              [](const ViewBuilding& x, const ViewBuilding& y) { return x.building < y.building; });
+    g_nearAgents.resize(agents);
+    size_t nNear = CollectNear(g_viewBuildings.data(), nView, g_nearAgents.data(), agents);
+    g_keptVisible.resize(nView);
+    if (nNear) Submit(g_nearAgents.data(), nNear, g_viewBuildings.data(), nView, g_keptVisible.data());
+}
+
+void HeldFrame_AfterEarly()
 {
     Determinism_PrivateScope privateRng;
     DrawDoors();
+    DrawCitizens();
 }
 
 // Early (30cb74..30cf4e) normally starts and joins this worker. On a held
@@ -285,9 +453,7 @@ bool HeldFrame_Draw(bool entitiesReady)
     }
     if (entitiesReady) {
         Determinism_PrivateScope privateRng;
-        BYTE* world = g_exeBase + 0x9D4F10;
-        BYTE* list = world + (g_exeBase[0xA54BB5] ? 0x126A8 : 0x126C0);
-        ((void (*)(void*, void*))(g_exeBase + 0x83CEA0))(nullptr, list);
+        DrawCitizens();
     }
     if (started) {
         auto* lock = (CRITICAL_SECTION*)(worker + 0x70);
