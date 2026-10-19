@@ -81,6 +81,15 @@ void Determinism_AddStepObserver(StepObserverFn fn);
 void Determinism_SetMoneyTrace(bool on);
 bool Determinism_GetMoneyTrace();
 void Determinism_DumpMoneyTrace(unsigned long long tick);
+// The money trace's per-site part: what one construction site's update paid
+// in the tick being run (main thread, the tick's Late).
+void Determinism_NoteSitePayment(unsigned char* building, double rubles, double dollars);
+
+// A command's own draws from the shared random stream, keyed by a fixed exe RVA
+// instead of the caller (a call from this DLL has another address on every PC).
+// Same arithmetic as rand() and C3DRandom_Float.
+int Determinism_CommandRand(unsigned site);
+float Determinism_CommandRandFloat(unsigned site, float a, float b);
 
 // Probe control (UI). steps: complete ticks per run, interval: ticks between hashes.
 // Fuzz: run 2 inserts held frames; both runs change speed every 300 ticks.

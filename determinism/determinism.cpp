@@ -153,6 +153,16 @@ static int SiteRand(void* returnAddress)
     return value;
 }
 
+int Determinism_CommandRand(unsigned site)
+{
+    return SiteRand(g_exeBase + site);
+}
+
+float Determinism_CommandRandFloat(unsigned site, float a, float b)
+{
+    return ((float)SiteRand(g_exeBase + site) / 32767.0f) * (b - a) + a;
+}
+
 typedef int (__cdecl* RandFn)(void);
 typedef void (__cdecl* SrandFn)(unsigned);
 typedef unsigned (__cdecl* RandIntFn)(unsigned);
@@ -968,10 +978,43 @@ static MoneyTick g_moneyTicks[MONEY_TRACE_TICKS];
 static unsigned long long g_moneyTickCount = 0;
 static bool g_moneyTrace = false;
 
+// What each construction site paid, tick by tick (see Determinism_NoteSitePayment).
+struct SitePayment {
+    unsigned long long tick;
+    int index, category;
+    float x, z, progress;
+    double rub, usd;
+};
+#define SITE_PAYMENTS 4096
+#define SITE_TICKS_DUMPED 12
+static SitePayment g_sitePayments[SITE_PAYMENTS];
+static unsigned long long g_sitePaymentCount = 0;
+
 void Determinism_SetMoneyTrace(bool on)
 {
     g_moneyTrace = on;
     g_moneyTickCount = 0;
+    g_sitePaymentCount = 0;
+}
+
+void Determinism_NoteSitePayment(unsigned char* b, double rubles, double dollars)
+{
+    if (!g_moneyTrace || !g_sessionRunning || (rubles == 0 && dollars == 0)) return;
+    SitePayment p = {};
+    p.tick = g_stepCount + 1; // the tick being run (counted after its Late)
+    p.rub = rubles;
+    p.usd = dollars;
+    __try {
+        p.index = *(int*)b;
+        BYTE* type = *(BYTE**)(b + 0x318);
+        p.category = type ? *(int*)(type + 0x360) : -1;
+        p.x = *(float*)(b + 0x350);
+        p.z = *(float*)(b + 0x358);
+        p.progress = *(float*)(b + 0x604);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return;
+    }
+    g_sitePayments[g_sitePaymentCount++ % SITE_PAYMENTS] = p;
 }
 
 bool Determinism_GetMoneyTrace() { return g_moneyTrace; }
@@ -1016,6 +1059,14 @@ void Determinism_DumpMoneyTrace(unsigned long long tick)
         Logf("republicmp  MONEY_TRACE: tick %llu rubles %.6f (%+.6f) dollars %.6f (%+.6f), %d site(s) (%d paid), progress %.9g",
              t.tick, t.rub, dRub, t.usd, dUsd, t.sites, t.paid, t.progress);
         prev = &t;
+    }
+    // What each site paid in the last ticks: the two PCs' lines show which site paid differently.
+    unsigned long long firstPay = g_sitePaymentCount > SITE_PAYMENTS ? g_sitePaymentCount - SITE_PAYMENTS : 0;
+    for (unsigned long long i = firstPay; i < g_sitePaymentCount; i++) {
+        const SitePayment& p = g_sitePayments[i % SITE_PAYMENTS];
+        if (p.tick > tick || p.tick + SITE_TICKS_DUMPED <= tick) continue;
+        Logf("republicmp  MONEY_TRACE: tick %llu site #%d (category %d at %.1f,%.1f) paid %.6f rubles %.6f dollars, progress %.9g",
+             p.tick, p.index, p.category, p.x, p.z, p.rub, p.usd, p.progress);
     }
 }
 

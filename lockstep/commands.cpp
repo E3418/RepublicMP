@@ -23,6 +23,7 @@
 #include "cargo_settings.h"
 #include "source_slots.h"
 #include "rename.h"
+#include "immigrant_invite.h"
 #include <vector>
 #include <string.h>
 
@@ -42,6 +43,7 @@ void Commands_Bind(const TsmHost* host)
     CargoSettings_Bind(host);
     SourceSlots_Bind(host);
     Rename_Bind(host);
+    ImmigrantInvite_Bind(host);
 }
 
 struct Command {
@@ -128,6 +130,7 @@ static const char* KindName(int kind)
     case LS_CMD_SOURCE_SLOTS: return "source slots";
     case LS_CMD_RENAME: return "rename";
     case LS_CMD_LEDGER: return "ledger row";
+    case LS_CMD_INVITE: return "immigrant invitation";
     }
     return "?";
 }
@@ -270,6 +273,9 @@ static void Apply(const Command& c)
         break;
     case LS_CMD_LEDGER:
         ok = BrushTools_ApplyLedger(p, n);
+        break;
+    case LS_CMD_INVITE:
+        ok = ImmigrantInvite_ApplyCommand(p, n);
         break;
     }
     InputBlock_EndNeutral();

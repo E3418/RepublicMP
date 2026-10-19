@@ -9,6 +9,7 @@
 #include "../lockstep/vehicle_switches.h"
 #include "../lockstep/building_switches.h"
 #include "../lockstep/brush_tools.h"
+#include "../lockstep/immigrant_invite.h"
 #include "../lockstep/hover_tools.h"
 #include "../lockstep/cargo_settings.h"
 #include "../lockstep/source_slots.h"
@@ -1198,6 +1199,30 @@ static float* DetPickRay(float* out, const float* in)
     return (*(NormalizeFn*)(g_exeBase + NORMALIZE_IMPORT))(out, in);
 }
 
+// The money trace's per-site part: the building update's call of the
+// construction update 159070 (1389f9) goes through here; what it paid is noted.
+#define SITE_UPDATE_CALL 0x1389F9
+#define SITE_UPDATE_RVA 0x159070
+typedef U64 (*SiteUpdateFn)(U64 world, U64 building, float a3, U64 a4);
+
+static U64 DetSiteUpdate(U64 world, U64 building, float a3, U64 a4)
+{
+    SiteUpdateFn original = (SiteUpdateFn)(g_exeBase + SITE_UPDATE_RVA);
+    if (!g_on || !Determinism_GetMoneyTrace()) return original(world, building, a3, a4);
+    double rub = *(double*)(world + 0x588), usd = *(double*)(world + 0x580);
+    U64 r = original(world, building, a3, a4);
+    Determinism_NoteSitePayment((BYTE*)building, *(double*)(world + 0x588) - rub, *(double*)(world + 0x580) - usd);
+    return r;
+}
+
+static bool SiteUpdateCallIs()
+{
+    BYTE* call = g_exeBase + SITE_UPDATE_CALL;
+    int rel = 0;
+    memcpy(&rel, call + 1, 4);
+    return *call == 0xE8 && SITE_UPDATE_CALL + 5 + rel == SITE_UPDATE_RVA;
+}
+
 #define STEP_CALL_COUNT 20
 static const unsigned kStepCalls[STEP_CALL_COUNT] = { 0x30E3AC, 0x30E3B8, 0x30E3C4, 0x30D9DD, 0x30D9E7, 0x30D6BC, 0x30D6C4, 0x3155F4,
                                                       0x6F91DF, 0x6F92C8, 0x6F940E, 0x6FA603, 0x6FA657, 0x7FCAE6, 0x7FCBDC, 0x7FCD00,
@@ -1223,7 +1248,7 @@ static bool VerifyStepCalls()
 
 // A relay page near the exe: one `jmp [rip+0]` per target, 16 bytes apart.
 static BYTE* g_relay = nullptr;
-#define RELAY_SLOTS 20
+#define RELAY_SLOTS 21
 
 static bool CallTo(unsigned int site, BYTE* target, unsigned char out[5])
 {
@@ -1248,7 +1273,7 @@ bool SimPatches_Install()
                    memcmp(g_exeBase + PREPARE_CALL, kPrepareCallOriginal, 5) == 0 &&
                    memcmp(g_exeBase + PLACE_PRESS_SITE, kPlacePressOriginal, 6) == 0 &&
                    memcmp(g_exeBase + BUY_PRESS_SITE, kBuyPressOriginal, 6) == 0 &&
-                   PickRaySitesAre() && VerifyStepCalls();
+                   PickRaySitesAre() && SiteUpdateCallIs() && VerifyStepCalls();
     bool relays = false;
     if (sitesOk) g_relay = AllocNear(g_exeBase, 4096);
     if (g_relay) {
@@ -1258,7 +1283,7 @@ bool SimPatches_Install()
                               (void*)&DetUiRoutine, (void*)&DetPrepare, (void*)&DetPieceSpeed, (void*)&DetWeather, (void*)&DetRoadWeather,
                               (void*)&DetBuildingLinks, (void*)&DetConnectionChecks, (void*)&DetGroundPaint, (void*)&DetDisplayCost,
                               (void*)&DetPlacePress, (void*)&DetBuyPress, (void*)&DetStopPickVehicle, (void*)&DetStopPickLine,
-                              (void*)&DetLineMark, (void*)&DetDepotMark, (void*)&DetPickRay };
+                              (void*)&DetLineMark, (void*)&DetDepotMark, (void*)&DetPickRay, (void*)&DetSiteUpdate };
         for (int i = 0; i < RELAY_SLOTS; i++) {
             BYTE* r = g_relay + i * 16;
             r[0] = 0xff; r[1] = 0x25; r[2] = r[3] = r[4] = r[5] = 0;
@@ -1291,6 +1316,8 @@ bool SimPatches_Install()
             Write(g_exeBase + PLACE_PRESS_SITE, placePress, 6);
             Write(g_exeBase + BUY_PRESS_SITE, buyPress, 6);
             for (int i = 0; i < PICK_RAY_SITES; i++) Write(g_exeBase + kPickRaySites[i], pickRay[i], 6);
+            unsigned char siteUpdate[5];
+            if (CallTo(SITE_UPDATE_CALL, g_relay + 20 * 16, siteUpdate)) Write(g_exeBase + SITE_UPDATE_CALL, siteUpdate, 5);
             relays = true;
             for (int i = 0; i < STEP_CALL_COUNT; i++) {
                 unsigned char call[5];
@@ -1302,6 +1329,7 @@ bool SimPatches_Install()
     bool tools = relays && InstallToolStubs();
     GameCalls_Install(); // window buttons; a site that differs is only left alone
     BrushTools_Install(); // the terrain brush's press reads; without them the terrain brushes stay as before
+    ImmigrantInvite_Install(); // the residential window's invite presses; without them they act on one PC
     Logf("republicmp  SIM_PATCHES: late hook %d, relays %d (building visibility, saplings, render before Early, interface searches, Prepare at speed 0, window cost display, placing press, buy press, route tools, pick ray), tool stubs %d (%d calls)%s",
          late, relays, tools, (int)TOOL_CALL_COUNT, sitesOk ? "" : " - unexpected bytes at a relay site");
     return late && relays && tools;

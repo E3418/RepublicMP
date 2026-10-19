@@ -52,6 +52,7 @@ enum LockstepCommandKind {
     LS_CMD_SOURCE_SLOTS = 23,   // source_slots.cpp: a building's specific sources (add-source tool, windows)
     LS_CMD_RENAME = 24,         // rename.cpp: a city's or a crossroad's new name
     LS_CMD_LEDGER = 25,         // brush_tools.cpp: the construction ledger row a terrain stroke wrote
+    LS_CMD_INVITE = 26,         // immigrant_invite.cpp: a residential window's immigrant invitation
 };
 
 // Money a local action changed on this PC (an interface purchase, a terrain

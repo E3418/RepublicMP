@@ -237,6 +237,9 @@
     <ClCompile Include="lockstep\brush_tools.cpp">
       <Filter>lockstep</Filter>
     </ClCompile>
+    <ClCompile Include="lockstep\immigrant_invite.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
     <ClCompile Include="lockstep\hover_tools.cpp">
       <Filter>lockstep</Filter>
     </ClCompile>
@@ -444,6 +447,9 @@
       <Filter>lockstep</Filter>
     </ClInclude>
     <ClInclude Include="lockstep\brush_tools.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\immigrant_invite.h">
       <Filter>lockstep</Filter>
     </ClInclude>
     <ClInclude Include="lockstep\hover_tools.h">
