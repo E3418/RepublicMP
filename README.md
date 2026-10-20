@@ -7,7 +7,7 @@ from there both games run the same simulation tick by tick (**lockstep**),
 or each game simulates on its own and the players' actions are repeated on
 the other side (**replay mode**).
 
-**Status:** alpha, tested with two players. Current version: **0.5.4**
+**Status:** alpha, tested with two players. Current version: **0.5.5**
 ([changelog](CHANGELOG.md)).
 
 ## Support and community

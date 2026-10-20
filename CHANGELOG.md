@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.5
+
+More of the game shared in lockstep. Protocol 36 - both players need this
+build.
+
+- **Immigrants** - the invite buttons of a residential building's window
+  (third world, Soviet bloc, experts) bring the same citizens on both PCs;
+  before, they came on the clicking PC only and the games split (by
+  SoylentGreed).
+- **Construction funding** - the bottom menu's "build with rubles / dollars"
+  switches can be switched back from either PC; once the session had left
+  the starting value, neither player could click it back.
+- **Debug** - the money trace also logs what each construction site paid in
+  the ticks before a desync.
+
 ## 0.5.4
 
 Desync fixes for building and terraforming in lockstep. Protocol 35 - both
