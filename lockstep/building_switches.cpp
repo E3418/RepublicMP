@@ -325,14 +325,18 @@ static void Compare(const Range& r, bool click)
 // value on the player, and the host's menu rewrote it until it was taken for
 // the interface's noise). The session's value - the last one ordered - is the
 // authority: every interface frame a different value is put back, and only a
-// click that writes a new value (not the one the menu kept writing before the
-// click) becomes a command.
+// click that writes a new value (not the one the menu kept writing on the frame
+// before the click) becomes a command. The funding switches (+af8/+afc) write
+// only on a click, flipping what they read: the value a word started the
+// session with stayed "the menu's" for good, and once the session had left it
+// neither PC could click it back.
 #define WORLD_WORDS 6
 static unsigned g_worldAt[WORLD_WORDS];
 static int g_worldCount = 0;
 static unsigned g_auth[WORLD_WORDS], g_stale[WORLD_WORDS], g_sent[WORLD_WORDS];
+static unsigned long long g_staleFrame[WORLD_WORDS]; // the interface frame the menu last wrote it without a click
 static bool g_sentValid[WORLD_WORDS], g_authReady = false, g_worldFrame = false;
-static unsigned long long g_worldEpoch = 0;
+static unsigned long long g_worldEpoch = 0, g_worldFrames = 0;
 
 static void WorldWords()
 {
@@ -345,11 +349,13 @@ static void WorldFrame(bool click)
 {
     WorldWords();
     BYTE* world = World();
+    ++g_worldFrames;
     if (!g_authReady) {
         // The session's start: both PCs loaded the same save.
         for (int i = 0; i < g_worldCount; i++) {
             Copy(&g_auth[i], world + g_worldAt[i], 4);
             g_stale[i] = g_auth[i];
+            g_staleFrame[i] = 0;
             g_sentValid[i] = false;
         }
         g_authReady = true;
@@ -362,12 +368,14 @@ static void WorldFrame(bool click)
     for (int i = 0; i < g_worldCount; i++) {
         unsigned cur = 0;
         if (!Copy(&cur, world + g_worldAt[i], 4) || cur == g_auth[i]) continue;
-        if (click && cur != g_stale[i] && !(g_sentValid[i] && g_sent[i] == cur)) {
+        bool menuWrote = cur == g_stale[i] && g_staleFrame[i] + 1 >= g_worldFrames;
+        if (click && !menuWrote && !(g_sentValid[i] && g_sent[i] == cur)) {
             m.words[m.count++] = { g_worldAt[i], g_auth[i], cur };
             g_sent[i] = cur;
             g_sentValid[i] = true;
         } else if (!click) {
             g_stale[i] = cur;
+            g_staleFrame[i] = g_worldFrames;
         }
         unsigned auth = g_auth[i];
         Copy(world + g_worldAt[i], &auth, 4);
