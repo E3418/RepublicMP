@@ -50,8 +50,9 @@ Carried as commands:
 - **Building windows** - settings and storage slots (auto purchase amounts),
   the bottom menu's world settings, pay with rubles / dollars and stop on
   construction sites, factory connection directions, adding and removing
-  fields of a farm, office assignments and links, the cargo filters of links,
-  specific sources (the add-source tool and the source windows).
+  fields of a farm, office assignments and links, station and distribution
+  links added with the link tools, the cargo filters of links, specific
+  sources (the add-source tool and the source windows), research.
 - **Roads and junctions** - road signs, junction rules (right-hand, main road,
   traffic lights) from the junction window and the decoration tool, rail
   signals.
@@ -67,8 +68,11 @@ Carried as commands:
 
 Not carried yet (tools are put away when selected, or the action acts on one
 PC only): removing decoration paths, worker relocation, buoys, Christmas
-lights, merge tools, "Go there", goods purchases in shops, research. Saving
-is refused inside a lockstep session. The construction animation
+lights, merge tools, "Go there", goods purchases in shops, the building pick
+tools besides add field, add source and the link tools (copying settings,
+adding construction or demolition to an office, distribution office lists,
+the fire station's dispatch, the area office tool). Saving in a lockstep
+session saves on every PC at once. The construction animation
 (scaffolding, ground, workers on a building site) is not drawn; the building
 still finishes on time. While the game is paused, what comes into view
 appears only after the pause.

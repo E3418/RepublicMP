@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.6.0
+
+Up to four players in lockstep. Protocol 40 - every player needs this build.
+
+- **Multiplayer for 3-4 players** - the host sets the session's size and
+  everyone picks a name in the menu (both are remembered for the next
+  start, in RepublicMP.profile.ini next to the DLL). The world is sent to every player at
+  once, the game starts once all are connected, a player who joins during
+  the game brings everyone through a re-sync, and the host stops taking
+  players when the session is full.
+- **Money desync** - the small money difference that came back now and then
+  is fixed: the game's periodic update of resource prices kept a timer from
+  before the session, so the PC that had played its city before hosting
+  changed the prices at another moment and every construction site paid
+  for materials a little differently there.
+- **Lockstep by default** - Lockstep is the default session mode.
+- **Saving** - saving in a lockstep session saves on every PC at the same
+  moment (each keeps its own copy).
+- **Research** - starting or suspending research in a research building's
+  window happens on every PC (by SoylentGreed).
+- **Station and distribution links** - links added with the building
+  window's link tools are made on every PC; before, the link existed on the
+  clicking PC only, its load/unload settings were refused elsewhere and the
+  vehicles split the games (by SoylentGreed).
+- **Building pick tools** - the copy tools (weights, sources, waste,
+  transfer, distribution, construction), adding construction or demolition
+  to an office, the distribution office lists, the fire station's dispatch
+  and the area office tool acted on one PC only; they are put away in a
+  lockstep session for now.
+- **Debug** - the money trace is on by default; a desync report says which
+  players differ and which match, and the per-site part covers the same
+  ticks as the balances, with each site's materials; each tick's line has
+  a hash of the resource prices, and a desync lists the prices.
+
 ## 0.5.5
 
 More of the game shared in lockstep. Protocol 36 - both players need this
