@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// This player's session settings, set in the RepublicMP window (kept until
-// the game closes; nothing is written to disk):
+// This player's session settings, set in the RepublicMP window. They are
+// remembered by themselves in RepublicMP.profile.ini next to RepublicMP.dll
+// (written when one changes, read at start; nobody has to edit it):
 //
 //   nick         the name the other players see (empty: "Player"); a name,
 //                not an identity - two players may share one
