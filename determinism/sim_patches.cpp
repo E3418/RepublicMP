@@ -15,6 +15,7 @@
 #include "../lockstep/hover_tools.h"
 #include "../lockstep/cargo_settings.h"
 #include "../lockstep/source_slots.h"
+#include "../lockstep/link_tools.h"
 #include "determinism.h"
 #include "held_frame.h"
 #include <string.h>
@@ -809,6 +810,8 @@ static bool InstallToolStubs()
                                   : kToolCalls[i][1] == 0x418F90 ? (unsigned __int64)&HoverTools_RailRemove
                                   : kToolCalls[i][1] == 0x4182D0 ? (unsigned __int64)&HoverTools_Junction
                                   : kToolCalls[i][1] == 0x1D51A0 ? (unsigned __int64)&SourceSlots_AddSourceTool
+                                  : kToolCalls[i][1] == 0x2B6F30 ? (unsigned __int64)&LinkTools_Station
+                                  : kToolCalls[i][1] == 0x2B78B0 ? (unsigned __int64)&LinkTools_Distribution
                                                                  : (unsigned __int64)(g_exeBase + kToolCalls[i][1]);
         p = EmitImm(p, 0x49, 0xBB, target); // mov r11, target
         p = EmitImm(p, 0x49, 0xBA, (unsigned __int64)common);                        // mov r10, common
@@ -1164,6 +1167,12 @@ static U64 DetDepotMark(U64 w, U64 depot, U64 a3, U64 a4, U64 a5)
     U64* ret = (U64*)_AddressOfReturnAddress();
     return RouteTools_DepotMark(w, depot, a3, a4, a5, (U64)(ret + 1), *ret);
 }
+
+// The link tools' mark 40bd60 (2b75e9 station, 2b8480 distribution; lockstep/link_tools).
+static U64 DetLinkMark(U64 w, U64 target, U64 a3, U64 refused, U64 a5)
+{
+    return LinkTools_Mark(w, target, a3, refused, a5);
+}
 // The network picks take the node or edge nearest the line through the cursor
 // along this PC's mouse ray (world +f60 minus the camera's position, then
 // C3DVec3Normalize): 3c4850 (the hovered node or edge) and 3d4b40 (the road
@@ -1223,14 +1232,14 @@ static bool SiteUpdateCallIs()
     return *call == 0xE8 && SITE_UPDATE_CALL + 5 + rel == SITE_UPDATE_RVA;
 }
 
-#define STEP_CALL_COUNT 20
+#define STEP_CALL_COUNT 22
 static const unsigned kStepCalls[STEP_CALL_COUNT] = { 0x30E3AC, 0x30E3B8, 0x30E3C4, 0x30D9DD, 0x30D9E7, 0x30D6BC, 0x30D6C4, 0x3155F4,
                                                       0x6F91DF, 0x6F92C8, 0x6F940E, 0x6FA603, 0x6FA657, 0x7FCAE6, 0x7FCBDC, 0x7FCD00,
-                                                      0x2B2800, 0x2B4B03, 0x2B505C, 0x2B3790 };
+                                                      0x2B2800, 0x2B4B03, 0x2B505C, 0x2B3790, 0x2B75E9, 0x2B8480 };
 static const unsigned kStepTargets[STEP_CALL_COUNT] = { 0x547EF0, 0x547EF0, 0x547EF0, 0x333BD0, 0x5CFEA0, 0x12FD80, 0x12EC40, 0x40ECE0,
                                                         0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0,
-                                                        0x2B5120, 0x2B5120, 0x40CDE0, 0x40BD60 };
-static const int kStepSlots[STEP_CALL_COUNT] = { 6, 6, 6, 7, 8, 9, 10, 11, 12, 12, 12, 12, 12, 12, 12, 12, 15, 16, 17, 18 }; // relay slot of each site
+                                                        0x2B5120, 0x2B5120, 0x40CDE0, 0x40BD60, 0x40BD60, 0x40BD60 };
+static const int kStepSlots[STEP_CALL_COUNT] = { 6, 6, 6, 7, 8, 9, 10, 11, 12, 12, 12, 12, 12, 12, 12, 12, 15, 16, 17, 18, 21, 21 }; // relay slot of each site
 static bool VerifyStepCalls()
 {
     for (int i = 0; i < STEP_CALL_COUNT; i++) {
@@ -1248,7 +1257,7 @@ static bool VerifyStepCalls()
 
 // A relay page near the exe: one `jmp [rip+0]` per target, 16 bytes apart.
 static BYTE* g_relay = nullptr;
-#define RELAY_SLOTS 21
+#define RELAY_SLOTS 22
 
 static bool CallTo(unsigned int site, BYTE* target, unsigned char out[5])
 {
@@ -1283,7 +1292,8 @@ bool SimPatches_Install()
                               (void*)&DetUiRoutine, (void*)&DetPrepare, (void*)&DetPieceSpeed, (void*)&DetWeather, (void*)&DetRoadWeather,
                               (void*)&DetBuildingLinks, (void*)&DetConnectionChecks, (void*)&DetGroundPaint, (void*)&DetDisplayCost,
                               (void*)&DetPlacePress, (void*)&DetBuyPress, (void*)&DetStopPickVehicle, (void*)&DetStopPickLine,
-                              (void*)&DetLineMark, (void*)&DetDepotMark, (void*)&DetPickRay, (void*)&DetSiteUpdate };
+                              (void*)&DetLineMark, (void*)&DetDepotMark, (void*)&DetPickRay, (void*)&DetSiteUpdate,
+                              (void*)&DetLinkMark };
         for (int i = 0; i < RELAY_SLOTS; i++) {
             BYTE* r = g_relay + i * 16;
             r[0] = 0xff; r[1] = 0x25; r[2] = r[3] = r[4] = r[5] = 0;

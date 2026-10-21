@@ -261,6 +261,9 @@
     <ClCompile Include="lockstep\source_slots.cpp">
       <Filter>lockstep</Filter>
     </ClCompile>
+    <ClCompile Include="lockstep\link_tools.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
     <ClCompile Include="lockstep\rename.cpp">
       <Filter>lockstep</Filter>
     </ClCompile>
@@ -480,6 +483,9 @@
       <Filter>lockstep</Filter>
     </ClInclude>
     <ClInclude Include="lockstep\source_slots.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\link_tools.h">
       <Filter>lockstep</Filter>
     </ClInclude>
     <ClInclude Include="lockstep\rename.h">

@@ -55,6 +55,7 @@ enum LockstepCommandKind {
     LS_CMD_INVITE = 26,         // immigrant_invite.cpp: a residential window's immigrant invitation
     LS_CMD_SAVE = 27,           // shared_save.cpp: a save of the shared game, on every PC
     LS_CMD_RESEARCH = 28,       // research.cpp: research started or suspended in a research building's window
+    LS_CMD_LINK = 29,           // link_tools.cpp: a station or distribution link added with a link pick tool
 };
 
 // Money a local action changed on this PC (an interface purchase, a terrain

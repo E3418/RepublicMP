@@ -26,6 +26,7 @@
 #include "immigrant_invite.h"
 #include "shared_save.h"
 #include "research.h"
+#include "link_tools.h"
 #include <vector>
 #include <string.h>
 
@@ -48,6 +49,7 @@ void Commands_Bind(const TsmHost* host)
     ImmigrantInvite_Bind(host);
     SharedSave_Bind(host);
     Research_Bind(host);
+    LinkTools_Bind(host);
 }
 
 struct Command {
@@ -137,6 +139,7 @@ static const char* KindName(int kind)
     case LS_CMD_INVITE: return "immigrant invitation";
     case LS_CMD_SAVE: return "save";
     case LS_CMD_RESEARCH: return "research";
+    case LS_CMD_LINK: return "link";
     }
     return "?";
 }
@@ -289,6 +292,9 @@ static void Apply(const Command& c)
     case LS_CMD_RESEARCH:
         ok = Research_ApplyCommand(p, n);
         break;
+    case LS_CMD_LINK:
+        ok = LinkTools_ApplyCommand(p, n);
+        break;
     }
     InputBlock_EndNeutral();
     InterlockedDecrement(&g_applying);
@@ -401,9 +407,13 @@ static const char* const kCarriedTools[] = { "vehicle_addstop", "line_addstop", 
                                               // the second-road drags (a road sync category; their removal stays put away)
                                               "second_road_airplane", "second_road_basicroad", "second_road_l2",
                                               "second_road_l3", "second_road_l4" };
+// The building pick tools besides the add-field, add-source and link tools write
+// heap lists or other buildings' words inline (copies, office and demolition
+// assignment, distribution lists, the fire dispatch, the area office tool).
 static const char* const kUncarriedTools[] = {
     "vehicle_", "worker_relocate", "building_addsource", "line_addstop", "second_road", "water_square",
-    "bojka", "christmas_", "join_hub", "terrain_go_there",
+    "bojka", "christmas_", "join_hub", "terrain_go_there", "building_addstation", "building_copy",
+    "building_distribution", "building_addconstruction", "building_adddemolition", "firestation_addfire", "assign_co",
 };
 // The single-tree tools and the tree demolition brush (brush_tools.cpp): put away only when their routine differs.
 static const char* const kTreeTools[] = { "tree_", "palma", "jungle_", "fjord_", "afgan_", "afghan_", "tallkriak", "leafkriak" };
@@ -422,6 +432,8 @@ static void PutAwayUncarriedTool()
     for (const char* carried : kCarriedTools)
         if (strcmp(name, carried) == 0 && (RouteTools_Ready() || strncmp(name, "second_road", 11) == 0)) return;
     if (strcmp(name, "building_addsource") == 0 && SourceSlots_Ready()) return; // source_slots.cpp
+    if ((strcmp(name, "building_addstation") == 0 || strcmp(name, "building_addstation_dist") == 0) && LinkTools_Ready())
+        return; // link_tools.cpp
     bool trees = false;
     for (const char* prefix : kTreeTools) trees |= strncmp(name, prefix, strlen(prefix)) == 0;
     if ((trees && !BrushTools_Ready(3)) || (strcmp(name, "terrain_demolish_trees") == 0 && !BrushTools_Ready(1))) {
