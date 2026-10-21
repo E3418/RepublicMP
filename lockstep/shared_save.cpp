@@ -25,6 +25,28 @@ struct SaveMsg {
 
 typedef void (*SaveFn)(unsigned char* world);
 
+// The save window makes the save's folder before it asks for the save; the
+// routine only writes files into it, so a PC that did not click wrote none.
+static bool MakeSaveFolder(const char* name)
+{
+    char path[MAX_PATH];
+    DWORD n = GetModuleFileNameA(nullptr, path, MAX_PATH);
+    char* slash = n ? strrchr(path, '\\') : nullptr;
+    if (!slash) return false;
+    *slash = 0;
+    if (strcat_s(path, "\\media_soviet\\") || strcat_s(path, name)) return false;
+    for (char* c = path; *c; ++c)
+        if (*c == '/') *c = '\\';
+    // Each level: "save" and the save's own folder.
+    for (char* c = path + 3; *c; ++c) {
+        if (*c != '\\') continue;
+        *c = 0;
+        CreateDirectoryA(path, nullptr);
+        *c = '\\';
+    }
+    return CreateDirectoryA(path, nullptr) || GetLastError() == ERROR_ALREADY_EXISTS;
+}
+
 void SharedSave_Bind(const TsmHost* host)
 {
     TsmBind(host);
@@ -59,6 +81,7 @@ bool SharedSave_ApplyCommand(const void* data, size_t size)
     m.name[NAME_BYTES - 1] = 0;
     if (!m.name[0]) return false;
     unsigned char* world = g_exeBase + WORLD_RVA;
+    if (!MakeSaveFolder(m.name)) Logf("republicmp  SAVE: [%s] - its folder could not be made", m.name);
     ULONGLONG started = GetTickCount64();
     __try {
         memset(world + NAME_OFFSET, 0, NAME_BYTES);
