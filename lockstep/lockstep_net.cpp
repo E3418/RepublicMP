@@ -86,6 +86,7 @@ static bool g_stateSent = false;
 struct OwnHash { unsigned long long tick; StateSummary s; bool valid; };
 static OwnHash g_ownHashes[LS_HASH_KEEP];
 static char g_desync[256] = "";
+static unsigned long long g_desyncTick = 0; // the tick of g_desync
 
 // Player side.
 static std::deque<LsGrant> g_grants;
@@ -224,6 +225,7 @@ static void ResetState()
     g_stateSent = false;
     memset(g_ownHashes, 0, sizeof(g_ownHashes));
     g_desync[0] = 0;
+    g_desyncTick = 0;
     g_grants.clear();
     g_hostStateKnown = false;
     g_hostState.paused = 1;
@@ -380,10 +382,12 @@ unsigned long long LockstepNet_LastMatchedTick()
 // State comparison (host)
 // ---------------------------------------------------------------------------
 
+// After the first difference only that tick is still compared: the log tells
+// which players differ and which match (one PC alone or everyone).
 static void Compare(int index, const LsHash& theirs)
 {
     Peer& peer = g_peers[index];
-    if (g_desync[0]) return;
+    if (g_desync[0] && theirs.tick != g_desyncTick) return;
     const OwnHash* mine = nullptr;
     for (const OwnHash& h : g_ownHashes)
         if (h.valid && h.tick == theirs.tick) mine = &h;
@@ -398,10 +402,20 @@ static void Compare(int index, const LsHash& theirs)
     if (a.hashBuildings != b.hashBuildings) strcat_s(what, "buildings ");
     if (a.hashVehicles != b.hashVehicles) strcat_s(what, "vehicles ");
     if (a.hashCitizens != b.hashCitizens) strcat_s(what, "citizens ");
+    if (g_desync[0]) {
+        if (what[0]) Logf("republicmp  LOCKSTEP:   %s differs too after tick %llu: %s(rubles %.4f dollars %.4f)", peer.nick,
+                          theirs.tick, what, b.rub, b.usd);
+        else Logf("republicmp  LOCKSTEP:   %s matches the host after tick %llu", peer.nick, theirs.tick);
+        return;
+    }
     if (!what[0]) {
         peer.lastMatched = theirs.tick;
         return;
     }
+    g_desyncTick = theirs.tick;
+    for (int i = 0; i < g_peerSlots; i++)
+        if (i != index && g_peers[i].connected && g_peers[i].lastMatched >= theirs.tick)
+            Logf("republicmp  LOCKSTEP:   %s matches the host after tick %llu", g_peers[i].nick, theirs.tick);
     _snprintf_s(g_desync, sizeof(g_desync), _TRUNCATE, "the games differ after tick %llu: %s(%s)", theirs.tick, what, peer.nick);
     Logf("republicmp  LOCKSTEP: DESYNC - %s (host: buildings %d vehicles %d citizens %d, %s: %d %d %d)", g_desync,
          a.buildings, a.vehicles, a.citizens, peer.nick, b.buildings, b.vehicles, b.citizens);

@@ -637,6 +637,15 @@ static void SetProbeStatus(const char* fmt, ...)
 // agents from the first frame. A probe run starts both at 0.
 static const unsigned int kFrameCounters[] = { 0x9962A8, 0x9963F0 };
 
+// Time the periodic economy update 334780 (resource prices 2fb1d0 and the
+// rest, from the step 30d9d3) has gathered since it last ran: a float at
+// exe+0x996810 fed by PowerTime, run and zeroed past 2.0 (3347a6..3347ee).
+// It is neither saved nor reset by a load either, so the PC that had played
+// its city before hosting updated the prices at another tick than the PCs that
+// had just loaded it: every paid construction site paid a little differently
+// there (the money desync that came back now and then). Zero on every PC.
+static const unsigned int kTimeAccumulators[] = { 0x996810 };
+
 // The exe's writable section (.data), compared between the two runs right
 // after the load: whatever differs there is state the save does not restore.
 #define DATA_RVA 0x992000
@@ -756,11 +765,16 @@ static void HookedLoadWorld(void)
             Logf("republicmp  PROBE: frame counter exe+0x%X was %d - set to 0", rva, *(int*)(g_exeBase + rva));
             *(int*)(g_exeBase + rva) = 0;
         }
+        for (unsigned int rva : kTimeAccumulators) {
+            Logf("republicmp  PROBE: time accumulator exe+0x%X was %.6f - set to 0", rva, *(float*)(g_exeBase + rva));
+            *(float*)(g_exeBase + rva) = 0.0f;
+        }
     }
     o_loadWorld();
     if (session) {
         // The same start on both PCs as a probe run gets: the shared
         // simulation begins at this load, paused until a player resumes.
+        for (unsigned int rva : kTimeAccumulators) *(float*)(g_exeBase + rva) = 0.0f; // whatever the load's frames added
         EmptySearchPool();
         SimPatches_ResetSearches();
         ResetFrames();
@@ -971,6 +985,7 @@ struct MoneyTick {
     double rub, usd;
     double progress; // construction progress (+0x604) of the sites, summed
     int sites, paid;
+    unsigned prices; // PriceHash
 };
 #define MONEY_TRACE_TICKS 256
 #define MONEY_TRACE_DUMPED 70
@@ -981,12 +996,19 @@ static bool g_moneyTrace = true;
 // What each construction site paid, tick by tick (see Determinism_NoteSitePayment).
 struct SitePayment {
     unsigned long long tick;
-    int index, category;
+    int index, category, stage, entries;
     float x, z, progress;
     double rub, usd;
+    double have, need; // the stage's materials: sums of entry +8 and +c
 };
-#define SITE_PAYMENTS 4096
-#define SITE_TICKS_DUMPED 12
+#define SITE_PAYMENTS 8192
+#define SITE_TICKS_DUMPED MONEY_TRACE_DUMPED
+// A site's construction stages: [+610] + stage * 0x21b8, the current one +634;
+// a stage's materials +8..+10, 16 bytes each (definition, then two floats).
+#define SITE_STAGES 0x610
+#define SITE_STAGE 0x634
+#define STAGE_BYTES 0x21B8
+#define STAGE_ENTRY_BYTES 16
 static SitePayment g_sitePayments[SITE_PAYMENTS];
 static unsigned long long g_sitePaymentCount = 0;
 
@@ -1006,11 +1028,23 @@ void Determinism_NoteSitePayment(unsigned char* b, double rubles, double dollars
     p.usd = dollars;
     __try {
         p.index = *(int*)b;
+        // A network's site keeps other words there (a float seen as the pointer).
         BYTE* type = *(BYTE**)(b + 0x318);
-        p.category = type ? *(int*)(type + 0x360) : -1;
+        p.category = type && ((unsigned long long)type >> 32) ? *(int*)(type + 0x360) : -1;
         p.x = *(float*)(b + 0x350);
         p.z = *(float*)(b + 0x358);
         p.progress = *(float*)(b + 0x604);
+        p.stage = *(int*)(b + SITE_STAGE);
+        BYTE* stages = *(BYTE**)(b + SITE_STAGES);
+        if (stages && ((unsigned long long)stages >> 32) && p.stage >= 0 && p.stage < 64) {
+            BYTE* stage = stages + (size_t)p.stage * STAGE_BYTES;
+            BYTE* it = *(BYTE**)(stage + 8);
+            BYTE* end = *(BYTE**)(stage + 0x10);
+            for (; it && ((unsigned long long)it >> 32) && it < end && p.entries < 256; it += STAGE_ENTRY_BYTES, p.entries++) {
+                p.have += *(float*)(it + 8);
+                p.need += *(float*)(it + 0xc);
+            }
+        }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return;
     }
@@ -1018,6 +1052,47 @@ void Determinism_NoteSitePayment(unsigned char* b, double rubles, double dollars
 }
 
 bool Determinism_GetMoneyTrace() { return g_moneyTrace; }
+
+// What a paid construction site pays per material: the resource definitions
+// (world +c2b0, 0x340 bytes each, the name first) with their dollar and ruble
+// prices +58/+5c, and the delivery factors world +e88 and +13684.
+#define RESOURCES_OFFSET 0xC2B0
+#define RESOURCE_BYTES 0x340
+#define MAX_RESOURCES 512
+static const unsigned kPriceWords[2] = { 0xE88, 0x13684 };
+
+static unsigned PriceHash(BYTE* world)
+{
+    unsigned h = 2166136261u;
+    auto mix = [&h](const BYTE* p) {
+        for (int k = 0; k < 4; k++) h = (h ^ p[k]) * 16777619u;
+    };
+    for (unsigned w : kPriceWords) mix(world + w);
+    BYTE* it = *(BYTE**)(world + RESOURCES_OFFSET);
+    BYTE* end = *(BYTE**)(world + RESOURCES_OFFSET + 8);
+    for (int n = 0; it && it < end && n < MAX_RESOURCES; it += RESOURCE_BYTES, n++) {
+        mix(it + 0x58);
+        mix(it + 0x5c);
+    }
+    return h;
+}
+
+static void LogPrices()
+{
+    __try {
+        BYTE* world = g_exeBase + 0x9D4F10;
+        Logf("republicmp  MONEY_TRACE: prices now: delivery +e88 %.9g +13684 %.9g", *(float*)(world + 0xE88),
+             *(float*)(world + 0x13684));
+        BYTE* it = *(BYTE**)(world + RESOURCES_OFFSET);
+        BYTE* end = *(BYTE**)(world + RESOURCES_OFFSET + 8);
+        for (int n = 0; it && it < end && n < MAX_RESOURCES; it += RESOURCE_BYTES, n++) {
+            char name[33] = {};
+            memcpy(name, it, 32);
+            Logf("republicmp  MONEY_TRACE:   %s: %.9g dollars %.9g rubles", name, *(float*)(it + 0x58), *(float*)(it + 0x5c));
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
 
 static void RecordMoneyTick()
 {
@@ -1037,6 +1112,7 @@ static void RecordMoneyTick()
             t.sites++;
             if (*(*it + 0x608) || *(*it + 0x609)) t.paid++;
         }
+        t.prices = PriceHash(world);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return;
     }
@@ -1056,8 +1132,8 @@ void Determinism_DumpMoneyTrace(unsigned long long tick)
             continue;
         }
         double dRub = prev ? t.rub - prev->rub : 0, dUsd = prev ? t.usd - prev->usd : 0;
-        Logf("republicmp  MONEY_TRACE: tick %llu rubles %.6f (%+.6f) dollars %.6f (%+.6f), %d site(s) (%d paid), progress %.9g",
-             t.tick, t.rub, dRub, t.usd, dUsd, t.sites, t.paid, t.progress);
+        Logf("republicmp  MONEY_TRACE: tick %llu rubles %.6f (%+.6f) dollars %.6f (%+.6f), %d site(s) (%d paid), progress %.9g, prices %08X",
+             t.tick, t.rub, dRub, t.usd, dUsd, t.sites, t.paid, t.progress, t.prices);
         prev = &t;
     }
     // What each site paid in the last ticks: the two PCs' lines show which site paid differently.
@@ -1065,9 +1141,11 @@ void Determinism_DumpMoneyTrace(unsigned long long tick)
     for (unsigned long long i = firstPay; i < g_sitePaymentCount; i++) {
         const SitePayment& p = g_sitePayments[i % SITE_PAYMENTS];
         if (p.tick > tick || p.tick + SITE_TICKS_DUMPED <= tick) continue;
-        Logf("republicmp  MONEY_TRACE: tick %llu site #%d (category %d at %.1f,%.1f) paid %.6f rubles %.6f dollars, progress %.9g",
-             p.tick, p.index, p.category, p.x, p.z, p.rub, p.usd, p.progress);
+        Logf("republicmp  MONEY_TRACE: tick %llu site #%d (category %d at %.1f,%.1f) paid %.6f rubles %.6f dollars, progress %.9g,"
+             " stage %d: %d material(s) %.9g of %.9g",
+             p.tick, p.index, p.category, p.x, p.z, p.rub, p.usd, p.progress, p.stage, p.entries, p.have, p.need);
     }
+    LogPrices();
 }
 
 // Session log every 300 ticks: whether time, money and construction move -
