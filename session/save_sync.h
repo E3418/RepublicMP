@@ -27,6 +27,14 @@
 // on the build_sync channel, closes the live channels and listens again; the
 // player, seeing the announcement instead of a drop, connects straight back
 // and the normal join runs (both games pause, save, send, load).
+//
+// Lockstep takes up to core/profile's max players (the host included): the
+// host saves and packs once and sends the world to every player of a join.
+// The join port stays open while there is room (a full session stops
+// listening). A player who connects during the game joins through a re-sync
+// of everyone - all reconnect and load the same save again; a player who
+// leaves is dropped and the others go on. After the versions and DLCs both
+// sides exchange the names their players chose.
 #pragma once
 
 #include "tesmio_plugin.h"
@@ -111,7 +119,8 @@ bool SaveSync_IsHostRole(); // role of the current/last session
 ULONGLONG SaveSync_GetSessionAgeMs();
 #define SAVE_SYNC_STOP_BUTTON_DELAY_MS 2000
 
-// The other player's IP (host: the connected player, client: the host), or "".
+// Who the session is with, for the status lines: host - the players' names (an
+// address before a name is known); client - "<host's name> (<address>)"; or "".
 const char* SaveSync_GetPeerIp();
 
 // Why the last session ended or failed ("" if it ended normally).

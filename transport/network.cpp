@@ -148,6 +148,67 @@ SOCKET NetworkHostAcceptOne(unsigned short port, DWORD acceptTimeoutMs, DWORD io
     return clientSock;
 }
 
+SOCKET NetworkListen(unsigned short port, int backlog)
+{
+    SOCKET listenSock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (listenSock == INVALID_SOCKET) {
+        Logf("republicmp  NETWORK: socket() failed, WSAGetLastError=%d", WSAGetLastError());
+        return INVALID_SOCKET;
+    }
+    BOOL reuse = TRUE;
+    setsockopt(listenSock, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof(reuse));
+    sockaddr_in addr = {};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = INADDR_ANY;
+    if (bind(listenSock, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR || listen(listenSock, backlog) == SOCKET_ERROR) {
+        Logf("republicmp  NETWORK: listening on :%u failed, WSAGetLastError=%d", port, WSAGetLastError());
+        closesocket(listenSock);
+        return INVALID_SOCKET;
+    }
+    Logf("republicmp  NETWORK: listening on :%u", port);
+    return listenSock;
+}
+
+SOCKET NetworkAcceptReady(SOCKET listenSock, DWORD waitMs, DWORD ioTimeoutMs)
+{
+    if (listenSock == INVALID_SOCKET) return INVALID_SOCKET;
+    fd_set readSet;
+    FD_ZERO(&readSet);
+    FD_SET(listenSock, &readSet);
+    timeval wait;
+    wait.tv_sec = waitMs / 1000;
+    wait.tv_usec = (waitMs % 1000) * 1000;
+    if (select(0, &readSet, nullptr, nullptr, &wait) <= 0) return INVALID_SOCKET;
+    sockaddr_in clientAddr = {};
+    int clientAddrLen = sizeof(clientAddr);
+    SOCKET clientSock = accept(listenSock, (sockaddr*)&clientAddr, &clientAddrLen);
+    if (clientSock == INVALID_SOCKET) {
+        Logf("republicmp  NETWORK: accept() failed, WSAGetLastError=%d", WSAGetLastError());
+        return INVALID_SOCKET;
+    }
+    char clientIp[INET_ADDRSTRLEN] = {};
+    inet_ntop(AF_INET, &clientAddr.sin_addr, clientIp, sizeof(clientIp));
+    Logf("republicmp  NETWORK: client connected, %s:%u", clientIp, ntohs(clientAddr.sin_port));
+    NetworkSetSocketTimeouts(clientSock, ioTimeoutMs);
+    NetworkEnableKeepalive(clientSock);
+    return clientSock;
+}
+
+void NetworkSetTimeouts(SOCKET sock, DWORD timeoutMs)
+{
+    NetworkSetSocketTimeouts(sock, timeoutMs);
+}
+
+void NetworkPeerAddress(SOCKET sock, char* out, size_t outSize)
+{
+    sockaddr_in addr = {};
+    int len = sizeof(addr);
+    out[0] = 0;
+    if (sock != INVALID_SOCKET && getpeername(sock, (sockaddr*)&addr, &len) == 0)
+        inet_ntop(AF_INET, &addr.sin_addr, out, outSize);
+}
+
 SOCKET NetworkConnect(const char* hostIp, unsigned short port, DWORD connectTimeoutMs, DWORD ioTimeoutMs, volatile bool* cancelFlag)
 {
     SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -396,6 +457,23 @@ bool NetworkPeerGone(SOCKET sock)
     if (n == 0) Logf("republicmp  NETWORK: the peer closed the connection");
     else Logf("republicmp  NETWORK: connection lost, WSAGetLastError=%d", WSAGetLastError());
     return true;
+}
+
+bool NetworkWaitReadable(SOCKET sock, DWORD waitMs, volatile bool* cancelFlag)
+{
+    if (sock == INVALID_SOCKET) return false;
+    const DWORD pollStepMs = 200;
+    for (DWORD waited = 0; waited < waitMs; waited += pollStepMs) {
+        if (cancelFlag && *cancelFlag) return false;
+        fd_set readSet;
+        FD_ZERO(&readSet);
+        FD_SET(sock, &readSet);
+        timeval step = { 0, (long)pollStepMs * 1000 };
+        int r = select(0, &readSet, nullptr, nullptr, &step);
+        if (r == SOCKET_ERROR) return false;
+        if (r > 0) return true;
+    }
+    return false;
 }
 
 void NetworkCloseSocket(SOCKET sock)

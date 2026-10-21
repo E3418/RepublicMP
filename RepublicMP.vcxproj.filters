@@ -78,6 +78,9 @@
     <ClCompile Include="core\main.cpp">
       <Filter>core</Filter>
     </ClCompile>
+    <ClCompile Include="core\profile.cpp">
+      <Filter>core</Filter>
+    </ClCompile>
     <ClCompile Include="world_sync\local_builds.cpp">
       <Filter>world_sync</Filter>
     </ClCompile>
@@ -294,6 +297,9 @@
       <Filter>game</Filter>
     </ClInclude>
     <ClInclude Include="core\version.h">
+      <Filter>core</Filter>
+    </ClInclude>
+    <ClInclude Include="core\profile.h">
       <Filter>core</Filter>
     </ClInclude>
     <ClInclude Include="game\present_hook.h">

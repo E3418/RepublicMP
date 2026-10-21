@@ -15,6 +15,7 @@
 #include "../world_sync/terrain/terrain_sync.h"
 #include "../determinism/determinism.h"
 #include "../lockstep/lockstep_net.h"
+#include "../core/profile.h"
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -83,7 +84,8 @@ static volatile ULONGLONG g_lastWorldSentTick = 0; // host: when the player last
 static volatile bool g_lockstepChosen = true;
 static volatile bool g_dlcCheck = true; // refuse a join when the DLCs differ (both players' choice)
 static volatile bool g_lockstep = false; // the current session's mode
-#define LOCKSTEP_CONNECT_TIMEOUT_MS 180000 // the host loads the world again before it listens
+#define LOCKSTEP_CONNECT_TIMEOUT_MS 180000 // host: how long the loaded players get to connect
+#define HELLO_ANSWER_TIMEOUT_MS 60000      // client: the host is taking other players in
 #define LOCKSTEP_SILENCE_MS 20000          // a game that sent nothing (not even a keepalive) is gone
 static const char* const kResyncReason = "re-sync";
 
@@ -444,10 +446,21 @@ static const char* MonitorLiveSession(bool client)
 // Progress
 // ---------------------------------------------------------------------------
 
+// A player in a host's join (several come together: a re-sync brings
+// everyone back at once).
+struct Joiner {
+    SOCKET sock;
+    char ip[64];
+    char nick[PROFILE_NICK_BYTES];
+    bool alive;
+};
+
 // Shared by the progress callbacks: the step's bar, plus (optionally) a
-// relay of the percentage to the other side every 10%.
+// relay of the percentage to the other side every 10% (the client to the
+// host, or the host to every player of a join).
 struct ProgressCtx {
-    SOCKET relaySock; // INVALID_SOCKET = do not relay
+    SOCKET relaySock;              // INVALID_SOCKET = do not relay
+    std::vector<Joiner>* relayTo;  // nullptr = none
     int step;
     const char* text;
     int lastRelayed;
@@ -458,10 +471,12 @@ static void OnProgress(ProgressCtx* ctx, unsigned long long done, unsigned long 
     if (total == 0) return;
     int percent = (int)((done * 100) / total);
     SyncBlock_SetPercent(percent);
-    if (ctx && ctx->relaySock != INVALID_SOCKET && percent / 10 != ctx->lastRelayed / 10) {
-        ctx->lastRelayed = percent;
-        SendMsg(ctx->relaySock, MSG_STEP, ctx->step, percent, ctx->text);
-    }
+    if (!ctx || percent / 10 == ctx->lastRelayed / 10) return;
+    ctx->lastRelayed = percent;
+    if (ctx->relaySock != INVALID_SOCKET) SendMsg(ctx->relaySock, MSG_STEP, ctx->step, percent, ctx->text);
+    if (ctx->relayTo)
+        for (Joiner& j : *ctx->relayTo)
+            if (j.alive) SendMsg(j.sock, MSG_STEP, ctx->step, percent, ctx->text);
 }
 
 static void NetworkProgressCb(unsigned long long done, unsigned long long total, void* userData)
@@ -561,6 +576,32 @@ static bool DlcsMatch(const SessionDlcs& mine, const SessionDlcs& theirs, bool h
     return !refuse;
 }
 
+// ---------------------------------------------------------------------------
+// Names
+// ---------------------------------------------------------------------------
+//
+// After the DLC check both sides send the name their player chose (core/
+// profile; "Player" when none): only for showing who is who.
+
+struct SessionNick {
+    char magic[8]; // "RPMPNIK"
+    char nick[PROFILE_NICK_BYTES];
+};
+
+// Sends this player's name and takes the other side's; false: the connection is gone.
+static bool ExchangeNicks(SOCKET sock, char* theirs, size_t theirsSize)
+{
+    SessionNick mine = {}, other = {};
+    memcpy(mine.magic, "RPMPNIK", 8);
+    strncpy_s(mine.nick, Profile_GetNick(), _TRUNCATE);
+    if (!NetworkSendExact(sock, &mine, sizeof(mine)) || !NetworkRecvExact(sock, &other, sizeof(other)) ||
+        memcmp(other.magic, "RPMPNIK", 8) != 0)
+        return false;
+    other.nick[PROFILE_NICK_BYTES - 1] = 0;
+    strncpy_s(theirs, theirsSize, other.nick[0] ? other.nick : "Player", _TRUNCATE);
+    return true;
+}
+
 // A save name that will not collide with the player's own saves.
 static void GenerateRandomSaveName(char* out, size_t outSize)
 {
@@ -603,67 +644,219 @@ static void KeepOnlyNewestHostSave(const char* newSaveDir)
     if (deleted) Logf("republicmp  SESSION: deleted %d old join save(s)", deleted);
 }
 
-static void PeerIpOf(SOCKET sock, char* out, size_t outSize)
-{
-    sockaddr_in addr = {};
-    int len = sizeof(addr);
-    out[0] = 0;
-    if (getpeername(sock, (sockaddr*)&addr, &len) == 0)
-        inet_ntop(AF_INET, &addr.sin_addr, out, outSize);
-}
-
 // ---------------------------------------------------------------------------
 // Host
 // ---------------------------------------------------------------------------
 
-static void HostStep(SOCKET sock, int step, const char* text, int percent = -1)
+#define GATHER_MORE_MS 3000 // after the first player, others who connect this soon join with it
+
+static void HostStep(int step, const char* text, int percent = -1)
 {
     SyncBlock_SetStep(step, JOIN_STEPS, text, percent);
     SaveStatus("[HOST] step %d/%d: %s", step, JOIN_STEPS, text);
-    (void)sock;
 }
 
-// One join, from the accepted connection to the lifted sync screen. The
-// caller's session loop decides what happens next. Returns true when the
-// player is in the game with all channels up.
-static bool RunHostJoin(SOCKET sock)
+static int AliveCount(const std::vector<Joiner>& js)
 {
-    g_activeSock = sock;
-    SyncBlock_SetActive(true, g_resyncing ? "Re-syncing the world" : "A player is connecting");
+    int n = 0;
+    for (const Joiner& j : js)
+        if (j.alive) n++;
+    return n;
+}
+
+static const char* NameOf(const Joiner& j)
+{
+    return j.nick[0] ? j.nick : j.ip;
+}
+
+static void DropJoiner(Joiner& j)
+{
+    if (j.sock != INVALID_SOCKET) NetworkCloseSocket(j.sock);
+    j.sock = INVALID_SOCKET;
+    j.alive = false;
+}
+
+// The join connections in use, so Disconnect can break their blocking recvs.
+static SOCKET g_joinSocks[PROFILE_MAX_PLAYERS];
+static int g_joinSockCount = 0;
+
+static void SetJoinSockets(const std::vector<Joiner>* js)
+{
+    EnterCriticalSection(&g_lock);
+    g_joinSockCount = 0;
+    if (js)
+        for (const Joiner& j : *js)
+            if (j.alive && g_joinSockCount < PROFILE_MAX_PLAYERS) g_joinSocks[g_joinSockCount++] = j.sock;
+    LeaveCriticalSection(&g_lock);
+}
+
+// The players' names for the status lines, e.g. "Bob, Alice".
+static void SetPeerNames(const std::vector<Joiner>& js)
+{
+    char names[64] = "";
+    for (const Joiner& j : js) {
+        if (!j.alive) continue;
+        if (names[0]) strncat_s(names, ", ", _TRUNCATE);
+        strncat_s(names, NameOf(j), _TRUNCATE);
+    }
+    SetPeerIp(names);
+}
+
+static void SetPeerNamesFromLockstep()
+{
+    LockstepPlayer players[PROFILE_MAX_PLAYERS];
+    int n = LockstepNet_Players(players, PROFILE_MAX_PLAYERS);
+    char names[64] = "";
+    for (int i = 0; i < n; i++) {
+        if (players[i].self) continue;
+        if (names[0]) strncat_s(names, ", ", _TRUNCATE);
+        strncat_s(names, players[i].nick, _TRUNCATE);
+    }
+    SetPeerIp(names);
+}
+
+static void SendAll(std::vector<Joiner>& js, int code, int step, int percent, const char* text)
+{
+    for (Joiner& j : js)
+        if (j.alive && !SendMsg(j.sock, code, step, percent, text)) {
+            SaveStatus("[HOST] %s dropped", NameOf(j));
+            DropJoiner(j);
+        }
+}
+
+// Versions, DLCs and names with one player; false: refused or gone (said why).
+static bool CheckJoiner(Joiner& j)
+{
+    SessionHello mine, theirs;
+    MakeHello(&mine);
+    if (!NetworkRecvExact(j.sock, &theirs, sizeof(theirs))) {
+        SetSessionError("%s dropped during the version check", j.ip);
+        SaveStatus("[HOST] %s dropped during the version check", j.ip);
+        return false;
+    }
+    NetworkSendExact(j.sock, &mine, sizeof(mine)); // always, so the client can show what differs
+    char why[256];
+    if (!HelloMatches(theirs, why, sizeof(why))) {
+        SetSessionError("join refused: %s", why);
+        SaveStatus("[HOST] %s: join refused: %s", j.ip, why);
+        return false;
+    }
+    SessionDlcs myDlcs, theirDlcs;
+    MakeDlcs(&myDlcs);
+    if (!NetworkSendExact(j.sock, &myDlcs, sizeof(myDlcs)) || !NetworkRecvExact(j.sock, &theirDlcs, sizeof(theirDlcs)) ||
+        memcmp(theirDlcs.magic, "RPMPDLC", 8) != 0) {
+        SetSessionError("%s dropped during the DLC check", j.ip);
+        return false;
+    }
+    char dlcWhy[512];
+    if (!DlcsMatch(myDlcs, theirDlcs, true, dlcWhy, sizeof(dlcWhy))) {
+        SetSessionError("join refused: %s", dlcWhy);
+        SaveStatus("[HOST] %s: join refused: %s", j.ip, dlcWhy);
+        return false;
+    }
+    if (!ExchangeNicks(j.sock, j.nick, sizeof(j.nick))) {
+        SetSessionError("%s dropped during the name exchange", j.ip);
+        return false;
+    }
+    return true;
+}
+
+// One player's copy of the world, sent on its own thread.
+struct WorldSend {
+    Joiner* j;
+    const char* zipPath;
+    volatile LONG percent;
+    bool ok;
+    HANDLE thread;
+};
+
+static void WorldSendProgress(unsigned long long done, unsigned long long total, void* userData)
+{
+    if (total) ((WorldSend*)userData)->percent = (LONG)((done * 100) / total);
+}
+
+static DWORD WINAPI WorldSendThread(LPVOID param)
+{
+    WorldSend* w = (WorldSend*)param;
+    w->ok = SendMsg(w->j->sock, MSG_FILE_FOLLOWS, 4, -1, "") &&
+            NetworkSendFile(w->j->sock, w->zipPath, WorldSendProgress, w);
+    return 0;
+}
+
+// Sends the packed world to every player of the join at the same time (one
+// after another, the last one would wait for all the others' downloads); the
+// bar shows the slowest. Those it could not reach are dropped.
+static void SendWorldToAll(std::vector<Joiner>& js, const char* zipPath)
+{
+    std::vector<WorldSend> sends;
+    for (Joiner& j : js)
+        if (j.alive) sends.push_back({ &j, zipPath, 0, false, nullptr });
+    char names[96] = "";
+    for (WorldSend& w : sends) {
+        if (names[0]) strncat_s(names, ", ", _TRUNCATE);
+        strncat_s(names, NameOf(*w.j), _TRUNCATE);
+        w.thread = CreateThread(nullptr, 0, WorldSendThread, &w, 0, nullptr);
+        if (!w.thread) WorldSendThread(&w);
+    }
+    char text[128];
+    _snprintf_s(text, sizeof(text), _TRUNCATE, "Sending the world to %s", names);
+    HostStep(4, text, 0);
+    for (;;) {
+        bool running = false;
+        int slowest = 100;
+        for (WorldSend& w : sends) {
+            if (w.thread && WaitForSingleObject(w.thread, 0) == WAIT_TIMEOUT) running = true;
+            if (w.percent < slowest) slowest = (int)w.percent;
+        }
+        SyncBlock_SetPercent(slowest);
+        if (!running) break;
+        Sleep(200);
+    }
+    for (WorldSend& w : sends) {
+        if (w.thread) CloseHandle(w.thread);
+        if (w.ok) continue;
+        SaveStatus("[HOST] sending the world to %s failed - connection lost", NameOf(*w.j));
+        DropJoiner(*w.j);
+    }
+}
+
+// The players of a join still waiting for the lockstep connection: one whose
+// join connection closed has given up.
+static int JoinersStillThere(void* ctx)
+{
+    int n = 0;
+    for (Joiner& j : *(std::vector<Joiner>*)ctx) {
+        if (j.alive && NetworkPeerGone(j.sock)) {
+            SaveStatus("[HOST] %s gave up waiting", NameOf(j));
+            j.alive = false; // closed with the others when the join ends
+        }
+        if (j.alive) n++;
+    }
+    return n;
+}
+
+// One join of one or more players (a re-sync brings everyone back at once,
+// and a new player comes with them), from their connections to the lifted
+// sync screen: one save, packed once, sent to each. Returns how many are in
+// the game (lockstep: connected to the lockstep channel; replay: the one
+// player, with all channels up). The connections are closed.
+static int RunHostJoin(std::vector<Joiner>& js)
+{
+    SetJoinSockets(&js);
+    bool several = js.size() > 1;
+    SyncBlock_SetActive(true, g_resyncing ? "Re-syncing the world" : several ? "Players are connecting" : "A player is connecting");
     EnsureGamePaused();
-    bool joined = false;
+    int joined = 0;
     char madeSaveDir[MAX_PATH] = {}; // cleaned up below
     char madeZip[MAX_PATH] = {};
 
     do {
-        // 1. Versions.
-        HostStep(sock, 1, "A player is connecting - checking versions");
-        SessionHello mine, theirs;
-        MakeHello(&mine);
-        if (!NetworkRecvExact(sock, &theirs, sizeof(theirs))) {
-            SetSessionError("the player dropped during the version check");
-            break;
-        }
-        NetworkSendExact(sock, &mine, sizeof(mine)); // always, so the client can show what differs
-        char why[256];
-        if (!HelloMatches(theirs, why, sizeof(why))) {
-            SetSessionError("join refused: %s", why);
-            SaveStatus("[HOST] join refused: %s", why);
-            break;
-        }
-        SessionDlcs myDlcs, theirDlcs;
-        MakeDlcs(&myDlcs);
-        if (!NetworkSendExact(sock, &myDlcs, sizeof(myDlcs)) || !NetworkRecvExact(sock, &theirDlcs, sizeof(theirDlcs)) ||
-            memcmp(theirDlcs.magic, "RPMPDLC", 8) != 0) {
-            SetSessionError("the player dropped during the DLC check");
-            break;
-        }
-        char dlcWhy[512];
-        if (!DlcsMatch(myDlcs, theirDlcs, true, dlcWhy, sizeof(dlcWhy))) {
-            SetSessionError("join refused: %s", dlcWhy);
-            SaveStatus("[HOST] join refused: %s", dlcWhy);
-            break;
-        }
+        // 1. Versions, DLCs and names, one player after another.
+        HostStep(1, several ? "Players are connecting - checking versions" : "A player is connecting - checking versions");
+        for (Joiner& j : js)
+            if (j.alive && !CheckJoiner(j)) DropJoiner(j);
+        if (!AliveCount(js)) break;
+        SetPeerNames(js);
 
         // 2. Save.
         char liveSaveName[64];
@@ -671,54 +864,52 @@ static bool RunHostJoin(SOCKET sock)
         char saveDir[MAX_PATH] = {};
         if (!GetGameSaveDir(saveDir, sizeof(saveDir), liveSaveName)) {
             SetSessionError("couldn't build the save path");
-            SendMsg(sock, MSG_ABORT, 0, -1, "host couldn't save the world");
+            SendAll(js, MSG_ABORT, 0, -1, "host couldn't save the world");
             break;
         }
-        HostStep(sock, 2, "Saving the world");
-        SendMsg(sock, MSG_STEP, 2, -1, "saving the world");
+        HostStep(2, "Saving the world");
+        SendAll(js, MSG_STEP, 2, -1, "saving the world");
         // The engine's save writer does not create the destination folder.
         if (!CreateDirectoryA(saveDir, nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) {
             SetSessionError("couldn't create the save folder (error %lu)", GetLastError());
-            SendMsg(sock, MSG_ABORT, 0, -1, "host couldn't save the world");
+            SendAll(js, MSG_ABORT, 0, -1, "host couldn't save the world");
             break;
         }
         strncpy_s(madeSaveDir, saveDir, _TRUNCATE);
         TriggerSaveGame(liveSaveName);
         if (!WaitForSaveToFinish(0, &g_disconnectRequested)) {
-            SendMsg(sock, MSG_ABORT, 0, -1, "host stopped hosting");
+            SendAll(js, MSG_ABORT, 0, -1, "host stopped hosting");
             break;
         }
 
         // 3. Pack.
         char zipPath[MAX_PATH] = {};
         _snprintf_s(zipPath, sizeof(zipPath), _TRUNCATE, "%s.republicmp.zip", saveDir);
-        HostStep(sock, 3, "Packing the save", 0);
-        SendMsg(sock, MSG_STEP, 3, 0, "packing the save");
-        ProgressCtx packCtx = { sock, 3, "packing the save", -100 };
+        HostStep(3, "Packing the save", 0);
+        SendAll(js, MSG_STEP, 3, 0, "packing the save");
+        ProgressCtx packCtx = { INVALID_SOCKET, &js, 3, "packing the save", -100 };
         strncpy_s(madeZip, zipPath, _TRUNCATE);
         if (!ZipSaveDirectory(saveDir, zipPath, ZipProgressCb, &packCtx)) {
             SetSessionError("packing the save failed");
-            SendMsg(sock, MSG_ABORT, 0, -1, "host couldn't pack the save");
+            SendAll(js, MSG_ABORT, 0, -1, "host couldn't pack the save");
             break;
         }
         if (g_disconnectRequested) {
-            SendMsg(sock, MSG_ABORT, 0, -1, "host stopped hosting");
+            SendAll(js, MSG_ABORT, 0, -1, "host stopped hosting");
             break;
         }
 
-        // 4. Send.
-        HostStep(sock, 4, "Sending the world to the player", 0);
-        SendMsg(sock, MSG_FILE_FOLLOWS, 4, -1, "");
-        ProgressCtx sendCtx = { INVALID_SOCKET, 4, nullptr, 0 };
-        if (!NetworkSendFile(sock, zipPath, NetworkProgressCb, &sendCtx)) {
+        // 4. Send, to every player at once.
+        SendWorldToAll(js, zipPath);
+        if (!AliveCount(js)) {
             SetSessionError("sending the save failed - connection lost");
             break;
         }
 
-        // Lockstep: this PC loads the same save while the player unpacks and
-        // loads its copy; the player's step messages wait in the socket.
+        // Lockstep: this PC loads the same save while the players unpack and
+        // load their copies; their step messages wait in the sockets.
         if (g_lockstep) {
-            HostStep(sock, 5, "Loading the shared world while the player loads it");
+            HostStep(5, several ? "Loading the shared world while the players load it" : "Loading the shared world while the player loads it");
             if (!Determinism_BeginSession(true)) {
                 SetSessionError("lockstep is not available - see the log (determinism layer)");
                 break;
@@ -731,76 +922,77 @@ static bool RunHostJoin(SOCKET sock)
             }
         }
 
-        // 5-6. The player unpacks and loads; its steps arrive as messages.
-        HostStep(sock, 5, "Waiting for the player - unpacking", 0);
-        bool ready = false;
-        for (;;) {
-            SessionMsg m;
-            if (!RecvMsg(sock, &m)) {
-                SetSessionError("the player dropped while loading");
-                break;
+        // 5-6. Each player unpacks and loads; its steps arrive as messages.
+        for (Joiner& j : js) {
+            if (!j.alive) continue;
+            bool ready = false;
+            for (;;) {
+                SessionMsg m;
+                if (!RecvMsg(j.sock, &m)) {
+                    SaveStatus("[HOST] %s dropped while loading", NameOf(j));
+                    break;
+                }
+                if (m.code == MSG_READY) { ready = true; break; }
+                if (m.code == MSG_ABORT) {
+                    SaveStatus("[HOST] %s gave up: %s", NameOf(j), m.text);
+                    break;
+                }
+                if (m.code == MSG_STEP) {
+                    char text[128];
+                    _snprintf_s(text, sizeof(text), _TRUNCATE, "Waiting for %s - %s", NameOf(j), m.text);
+                    if (m.step == 5) SyncBlock_SetStep(5, JOIN_STEPS, text, m.percent);
+                    else HostStep(m.step, text, m.percent);
+                }
             }
-            if (m.code == MSG_READY) { ready = true; break; }
-            if (m.code == MSG_ABORT) {
-                SetSessionError("the player gave up: %s", m.text);
-                SaveStatus("[HOST] the player gave up: %s", m.text);
-                break;
-            }
-            if (m.code == MSG_STEP) {
-                char text[96];
-                _snprintf_s(text, sizeof(text), _TRUNCATE, "Waiting for the player - %s", m.text);
-                if (m.step == 5) SyncBlock_SetStep(5, JOIN_STEPS, text, m.percent);
-                else HostStep(sock, m.step, text, m.percent);
-            }
+            if (!ready) DropJoiner(j);
         }
+        int ready = AliveCount(js);
         if (!ready) {
+            SetSessionError(several ? "no player finished loading" : "the player dropped while loading");
             if (g_lockstep) ResetChannels();
             break;
         }
 
-        // 7. Lockstep: both loaded the same save; the channel connects.
+        // 7. Lockstep: all loaded the same save; the players' channels connect.
         if (g_lockstep) {
-            HostStep(sock, 7, "Waiting for the player's lockstep connection");
-            if (!LockstepNet_Host(LOCKSTEP_CONNECT_TIMEOUT_MS, &g_disconnectRequested)) {
-                if (!g_disconnectRequested) SetSessionError("the player's lockstep connection didn't arrive - TCP port %d must reach the host", LOCKSTEP_PORT);
+            HostStep(7, ready > 1 ? "Waiting for the players' lockstep connections" : "Waiting for the player's lockstep connection");
+            joined = LockstepNet_HostAccept(ready, LOCKSTEP_CONNECT_TIMEOUT_MS, &g_disconnectRequested, JoinersStillThere, &js);
+            if (!joined) {
+                if (!g_disconnectRequested) SetSessionError("the lockstep connection didn't arrive - TCP port %d must reach the host", LOCKSTEP_PORT);
                 ResetChannels();
-                break;
+            } else if (joined < ready) {
+                SaveStatus("[HOST] %d of %d player(s) opened the lockstep connection - going on without the rest", joined, ready);
             }
-            joined = true;
             break;
         }
 
-        // 7. Live sync channels.
-        HostStep(sock, 7, "Starting live sync");
+        // 7. Replay: the live sync channels (one player).
+        HostStep(7, "Starting live sync");
         StartChannelsHost();
         if (!WaitForChannels(false)) {
             if (!g_disconnectRequested) SetSessionError("the live sync channels didn't connect - TCP ports %d-%d must reach the host too (forward them like port %d)", BUILD_SYNC_PORT, TERRAIN_SYNC_PORT, SAVE_SYNC_PORT);
             ResetChannels();
             break;
         }
-        joined = true;
+        joined = 1;
     } while (false);
 
     // The zip only existed to be sent.
     if (madeZip[0]) DeleteFileA(madeZip);
     if (madeSaveDir[0]) KeepOnlyNewestHostSave(madeSaveDir);
 
-    g_activeSock = INVALID_SOCKET;
-    NetworkCloseSocket(sock);
+    SetJoinSockets(nullptr);
+    for (Joiner& j : js) DropJoiner(j);
     SyncBlock_SetActive(false, nullptr);
-    // A joined player starts paused on both sides - either player resumes
-    // when both are ready (issue #18); the speed sync carries it over.
+    // Joined players start paused on every PC - any player resumes when all
+    // are ready (issue #18); the speed sync carries it over.
     if (!joined) EnsureGameUnpaused();
     return joined;
 }
 
-static void RunHostSession()
+// Replay mode: one player at a time.
+static void RunHostSessionReplay()
 {
-    if (!NetworkInit()) {
-        SetSessionError("network init failed");
-        return;
-    }
-
     bool rejoin = false; // a re-sync: the player is expected back right away
     while (!g_disconnectRequested) {
         SetState(SESSION_HOST_LISTENING);
@@ -827,16 +1019,18 @@ static void RunHostSession()
             break;
         }
 
-        char peer[64];
-        PeerIpOf(sock, peer, sizeof(peer));
-        SetPeerIp(peer);
+        std::vector<Joiner> js(1);
+        js[0].sock = sock;
+        NetworkPeerAddress(sock, js[0].ip, sizeof(js[0].ip));
+        js[0].nick[0] = 0;
+        js[0].alive = true;
+        SetPeerIp(js[0].ip);
         SetState(SESSION_HOST_JOINING);
         SetSessionError("");
         SaveStatus(rejoin ? "[HOST] %s is back - re-syncing, both games are paused until it is loaded"
-                          : "[HOST] %s is joining - both games are paused until it is loaded", peer);
+                          : "[HOST] %s is joining - both games are paused until it is loaded", js[0].ip);
 
-        g_lockstep = g_lockstepChosen;
-        bool joined = RunHostJoin(sock);
+        bool joined = RunHostJoin(js) > 0;
         rejoin = false;
         g_resyncing = false;
         if (!joined) {
@@ -847,6 +1041,8 @@ static void RunHostSession()
         g_lastWorldSentTick = GetTickCount64();
         g_resyncRequested = false; // one asked for during the join is already done
 
+        char peer[64];
+        strncpy_s(peer, g_peerIp, _TRUNCATE);
         SetState(SESSION_HOST_IN_GAME);
         SaveStatus("[HOST] %s is in the game - live sync running, paused until either player resumes", peer);
         const char* why = MonitorLiveSession(false);
@@ -860,7 +1056,230 @@ static void RunHostSession()
         SetSessionError("%s left: %s", peer, why);
         SaveStatus("[HOST] %s left (%s) - waiting for a player again", peer, why);
     }
+}
 
+// Lockstep: up to Profile_GetMaxPlayers() - 1 players. The join port stays
+// open while there is room (a full session stops listening); a player who
+// connects during the game joins through a re-sync of everyone, so all load
+// the same save again.
+static SOCKET g_listener = INVALID_SOCKET;
+static const char* const kJoinReason = "a player joins";
+
+static bool OpenListener()
+{
+    if (g_listener == INVALID_SOCKET) g_listener = NetworkListen(SAVE_SYNC_PORT, PROFILE_MAX_PLAYERS);
+    return g_listener != INVALID_SOCKET;
+}
+
+static void CloseListener(const char* why)
+{
+    if (g_listener == INVALID_SOCKET) return;
+    NetworkCloseSocket(g_listener);
+    g_listener = INVALID_SOCKET;
+    Logf("republicmp  SESSION: %s - not listening on port %d", why, SAVE_SYNC_PORT);
+}
+
+static void TakeJoiner(SOCKET s, std::vector<Joiner>& batch)
+{
+    Joiner j = {};
+    j.sock = s;
+    NetworkPeerAddress(s, j.ip, sizeof(j.ip));
+    j.alive = true;
+    batch.push_back(j);
+}
+
+// The addresses of the players in the game (host side).
+static std::vector<std::string> PlayerIps()
+{
+    std::vector<std::string> ips;
+    LockstepPlayer players[PROFILE_MAX_PLAYERS];
+    int n = LockstepNet_Players(players, PROFILE_MAX_PLAYERS);
+    for (int i = 0; i < n; i++)
+        if (!players[i].self) ips.push_back(players[i].ip);
+    return ips;
+}
+
+// How many of the expected addresses have no connection in the batch yet
+// (two players behind one address count twice).
+static int MissingOf(const std::vector<Joiner>& batch, const std::vector<std::string>& expect)
+{
+    std::vector<bool> used(batch.size(), false);
+    int missing = 0;
+    for (const std::string& ip : expect) {
+        bool found = false;
+        for (size_t i = 0; i < batch.size() && !found; i++)
+            if (!used[i] && ip == batch[i].ip) used[i] = found = true;
+        if (!found) missing++;
+    }
+    return missing;
+}
+
+// Takes players into the batch, at most `room`. expect: the players coming
+// back for a re-sync, waited for by address for timeoutMs, with their places
+// kept (a newcomer is let in only while there is room besides them); none: a
+// first player without a time limit, then GATHER_MORE_MS for others who
+// connect with it.
+static void Gather(std::vector<Joiner>& batch, int room, const std::vector<std::string>* expect, DWORD timeoutMs)
+{
+    ULONGLONG start = GetTickCount64(), firstAt = batch.empty() ? 0 : start;
+    while (!g_disconnectRequested && (int)batch.size() < room) {
+        ULONGLONG now = GetTickCount64();
+        if (expect && (!MissingOf(batch, *expect) || now - start >= timeoutMs)) break;
+        if (!expect && firstAt && now - firstAt >= GATHER_MORE_MS) break;
+        SOCKET s = NetworkAcceptReady(g_listener, 200, 0);
+        if (s == INVALID_SOCKET) continue;
+        int missingBefore = expect ? MissingOf(batch, *expect) : 0;
+        TakeJoiner(s, batch);
+        if (expect && MissingOf(batch, *expect) == missingBefore && (int)batch.size() + missingBefore > room) {
+            SaveStatus("[HOST] %s connects - no room left besides the players coming back", batch.back().ip);
+            DropJoiner(batch.back());
+            batch.pop_back();
+            continue;
+        }
+        if (!firstAt) firstAt = GetTickCount64();
+        SaveStatus("[HOST] %s connects", batch.back().ip);
+    }
+}
+
+// Host, players in the game: returns why the game ended here (nullptr: Stop
+// hosting), kResyncReason / kJoinReason (a newcomer is in `batch`).
+static const char* MonitorLockstepHost(std::vector<Joiner>& batch)
+{
+    static char s_why[96];
+    bool reported = false;
+    ULONGLONG lastPing = 0;
+    int players = LockstepNet_PeerCount();
+    g_desyncSince = 0;
+    while (!g_disconnectRequested) {
+        ULONGLONG now = GetTickCount64();
+        if (now - lastPing >= 1000) {
+            LockstepNet_Ping();
+            lastPing = now;
+        }
+        // A game that froze or crashed keeps its socket open while Windows
+        // reports it: it is gone once it stays silent.
+        LockstepNet_DropSilent(LOCKSTEP_SILENCE_MS);
+        int count = LockstepNet_PeerCount();
+        if (count != players) {
+            if (count < players) SaveStatus("[HOST] a player left - %d player(s) in the game", count);
+            players = count;
+            SetPeerNamesFromLockstep();
+        }
+        if (!count) {
+            _snprintf_s(s_why, sizeof(s_why), _TRUNCATE, "every player left");
+            return s_why;
+        }
+        const char* desync = LockstepNet_Desync();
+        if (desync[0] && !reported) {
+            reported = true;
+            g_desyncSince = now;
+            SaveStatus("[LOCKSTEP] %s", desync);
+        }
+        // In lockstep the games match or not: a re-sync comes on request, or a set time after a desync.
+        int delay = g_desyncResyncSeconds;
+        bool onDesync = desync[0] && delay >= 0 && now - g_desyncSince >= (ULONGLONG)delay * 1000;
+        if (g_resyncRequested || onDesync) {
+            g_resyncRequested = false;
+            SaveStatus(onDesync ? "[HOST] the games differ - re-syncing" : "[HOST] re-syncing");
+            return kResyncReason;
+        }
+        // Room for more: a new player joins through a re-sync of everyone.
+        if (count < Profile_GetMaxPlayers() - 1) {
+            if (OpenListener()) {
+                SOCKET s = NetworkAcceptReady(g_listener, 0, 0);
+                if (s != INVALID_SOCKET) {
+                    TakeJoiner(s, batch);
+                    SaveStatus("[HOST] %s connects - re-syncing everyone so all load the same world", batch.back().ip);
+                    return kJoinReason;
+                }
+            }
+        } else {
+            CloseListener("no room for more players");
+        }
+        Sleep(200);
+    }
+    return nullptr;
+}
+
+static void RunHostSessionLockstep()
+{
+    std::vector<Joiner> batch;
+    std::vector<std::string> comingBack; // the players expected back for a re-sync (addresses)
+    while (!g_disconnectRequested) {
+        int room = Profile_GetMaxPlayers() - 1;
+        if (!OpenListener()) {
+            SetSessionError("couldn't listen on port %d (already in use?)", SAVE_SYNC_PORT);
+            break;
+        }
+        SetState(SESSION_HOST_LISTENING);
+        if (!comingBack.empty()) {
+            Gather(batch, room, &comingBack, RESYNC_REJOIN_TIMEOUT_MS);
+            int missing = MissingOf(batch, comingBack);
+            if (missing) SaveStatus("[HOST] %d of %d player(s) came back for the re-sync", (int)comingBack.size() - missing, (int)comingBack.size());
+        } else {
+            SetPeerIp("");
+            SaveStatus("[HOST] hosting on port %d - waiting for players (up to %d, the game keeps running)", SAVE_SYNC_PORT, room);
+            Gather(batch, room, nullptr, 0);
+        }
+        comingBack.clear();
+        if (g_disconnectRequested) break;
+        if (batch.empty()) {
+            g_resyncing = false;
+            SetSessionError("nobody came back for the re-sync");
+            SaveStatus("[HOST] nobody came back for the re-sync - waiting for players again");
+            continue;
+        }
+
+        SetState(SESSION_HOST_JOINING);
+        SetSessionError("");
+        SetPeerNames(batch);
+        SaveStatus(g_resyncing ? "[HOST] re-syncing %d player(s) - every game is paused until all are loaded"
+                               : "[HOST] %d player(s) joining - every game is paused until all are loaded", (int)batch.size());
+        // A player who connected now would wait unanswered until this join
+        // is done: the port opens again once the game runs.
+        CloseListener("taking players in");
+        int joined = RunHostJoin(batch);
+        batch.clear();
+        g_resyncing = false;
+        if (!joined) {
+            if (g_disconnectRequested) break;
+            SaveStatus("[HOST] the join failed (%s) - waiting for players again", SaveSync_GetLastError());
+            continue;
+        }
+        g_lastWorldSentTick = GetTickCount64();
+        g_resyncRequested = false; // one asked for during the join is already done
+
+        SetState(SESSION_HOST_IN_GAME);
+        SetPeerNamesFromLockstep();
+        SaveStatus("[HOST] in the game with %s - lockstep running, paused until a player resumes", g_peerIp);
+        const char* why = MonitorLockstepHost(batch);
+        if (!why) break; // Stop hosting
+        if (why == kResyncReason || why == kJoinReason) {
+            comingBack = PlayerIps();
+            LockstepNet_SendResync();
+            Sleep(RESYNC_ANNOUNCE_FLUSH_MS);
+            ResetChannels();
+            g_resyncing = true;
+            SaveStatus("[HOST] re-syncing - waiting for %d player(s) to reconnect", (int)comingBack.size());
+            continue;
+        }
+        ResetChannels();
+        SetSessionError("%s", why);
+        SaveStatus("[HOST] %s - waiting for players again", why);
+    }
+    for (Joiner& j : batch) DropJoiner(j);
+    CloseListener("stopped hosting");
+}
+
+static void RunHostSession()
+{
+    if (!NetworkInit()) {
+        SetSessionError("network init failed");
+        return;
+    }
+    g_lockstep = g_lockstepChosen;
+    if (g_lockstep) RunHostSessionLockstep();
+    else RunHostSessionReplay();
     ResetChannels();
     SetPeerIp("");
     SaveStatus("[HOST] stopped hosting");
@@ -917,11 +1336,12 @@ static bool RunClientJoin(bool rejoin)
             sock = NetworkConnect(g_targetIp, SAVE_SYNC_PORT, 15000, 0, &g_disconnectRequested);
             if (sock != INVALID_SOCKET || !rejoin || g_disconnectRequested) break;
             if (GetTickCount64() - connectStart > RESYNC_REJOIN_TIMEOUT_MS) break;
+            SyncBlock_SetStep(1, JOIN_STEPS, "Re-sync: waiting for the host to open for the players again", -1);
             Sleep(RESYNC_RETRY_MS);
         }
         if (sock == INVALID_SOCKET) {
             if (!g_disconnectRequested)
-                SetSessionError("couldn't reach %s:%d - is the host hosting (and not already playing with someone)? is the IP right?", g_targetIp, SAVE_SYNC_PORT);
+                SetSessionError("couldn't reach %s:%d - is the host hosting, with room for you? is the IP right? (while players are loading in, the host takes no one else - try again in a minute)", g_targetIp, SAVE_SYNC_PORT);
             break;
         }
         g_activeSock = sock;
@@ -930,8 +1350,23 @@ static bool RunClientJoin(bool rejoin)
         if (g_disconnectRequested) break;
         SessionHello mine, theirs;
         MakeHello(&mine);
-        if (!NetworkSendExact(sock, &mine, sizeof(mine)) || !NetworkRecvExact(sock, &theirs, sizeof(theirs))) {
-            SetSessionError("the host dropped during the version check (old build, or already has a player?)");
+        if (!NetworkSendExact(sock, &mine, sizeof(mine))) {
+            SetSessionError("the host dropped during the version check (old build?)");
+            break;
+        }
+        // The host answers once it takes this player in: right away, or after
+        // the players of a re-sync are back. A longer wait says why.
+        if (!NetworkWaitReadable(sock, 1500, &g_disconnectRequested) && !g_disconnectRequested) {
+            ClientStep(1, rejoin ? "Re-sync: connected, waiting for the other players to come back"
+                                 : "Connected, waiting for the host to take you in (other players are connecting)");
+        }
+        if (!NetworkWaitReadable(sock, HELLO_ANSWER_TIMEOUT_MS, &g_disconnectRequested)) {
+            if (!g_disconnectRequested)
+                SetSessionError("the host didn't answer - it may be busy with other players joining; try again in a minute");
+            break;
+        }
+        if (!NetworkRecvExact(sock, &theirs, sizeof(theirs))) {
+            SetSessionError("the host dropped during the version check (old build, or the session is full?)");
             break;
         }
         char why[256];
@@ -953,8 +1388,16 @@ static bool RunClientJoin(bool rejoin)
             SaveStatus("[CLIENT] join refused: %s", dlcWhy);
             break;
         }
+        char hostNick[PROFILE_NICK_BYTES];
+        if (!ExchangeNicks(sock, hostNick, sizeof(hostNick))) {
+            SetSessionError("the host dropped during the name exchange");
+            break;
+        }
+        char peer[64];
+        _snprintf_s(peer, sizeof(peer), _TRUNCATE, "%s (%s)", hostNick, g_targetIp);
+        SetPeerIp(peer);
         g_lockstep = theirs.lockstep != 0;
-        if (g_lockstep) SaveStatus("[CLIENT] the host runs this session in lockstep");
+        if (g_lockstep) SaveStatus("[CLIENT] %s runs this session in lockstep", hostNick);
 
         // 2-3. The host saves and packs; its steps arrive as messages.
         ClientStep(2, "Waiting for the host - saving the world");
@@ -980,7 +1423,7 @@ static bool RunClientJoin(bool rejoin)
 
         // 4. Receive.
         ClientStep(4, "Receiving the world", 0);
-        ProgressCtx recvCtx = { INVALID_SOCKET, 4, nullptr, 0 };
+        ProgressCtx recvCtx = { INVALID_SOCKET, nullptr, 4, nullptr, 0 };
         if (!NetworkReceiveFile(sock, zipPath, NetworkProgressCb, &recvCtx)) {
             SetSessionError("receiving the world failed - connection lost");
             break;
@@ -989,7 +1432,7 @@ static bool RunClientJoin(bool rejoin)
         // 5. Unpack (relayed to the host).
         ClientStep(5, "Unpacking", 0);
         SendMsg(sock, MSG_STEP, 5, 0, "unpacking");
-        ProgressCtx unpackCtx = { sock, 5, "unpacking", -100 };
+        ProgressCtx unpackCtx = { sock, nullptr, 5, "unpacking", -100 };
         if (!UnzipToDirectory(zipPath, destDir, ZipProgressCb, &unpackCtx)) {
             SetSessionError("unpacking the world failed");
             SendMsg(sock, MSG_ABORT, 0, -1, "unpacking failed");
@@ -1026,11 +1469,11 @@ static bool RunClientJoin(bool rejoin)
                 SetSessionError("loading the shared world failed");
                 break;
             }
-            // In short tries, watching the join connection: a host that
-            // crashed while loading closes it.
-            ULONGLONG joinStart = GetTickCount64();
+            // In short tries, watching the join connection: the host listens
+            // once every player has loaded (a slow download keeps the others
+            // waiting), and closes it when it crashed or gave up on this one.
             bool lockstepUp = false, hostGone = false;
-            while (!g_disconnectRequested && GetTickCount64() - joinStart < LOCKSTEP_CONNECT_TIMEOUT_MS) {
+            while (!g_disconnectRequested) {
                 if (LockstepNet_Join(g_targetIp, 6000, &g_disconnectRequested)) {
                     lockstepUp = true;
                     break;
@@ -1041,8 +1484,25 @@ static bool RunClientJoin(bool rejoin)
                 }
             }
             if (!lockstepUp) {
-                if (hostGone) SetSessionError("the host dropped while loading the shared world");
+                if (hostGone) SetSessionError("the host dropped while the players were loading the shared world");
                 else if (!g_disconnectRequested) SetSessionError("couldn't open the lockstep connection to %s:%d", g_targetIp, LOCKSTEP_PORT);
+                break;
+            }
+            // The game starts once every player is connected (the host's
+            // player list says so); until then nothing is done here that a
+            // player still connecting would miss.
+            SyncBlock_SetStep(7, JOIN_STEPS, "Waiting for the other players to connect", -1);
+            ULONGLONG lastPing = 0;
+            while (!g_disconnectRequested && LockstepNet_IsConnected() && !LockstepNet_SessionStarted()) {
+                ULONGLONG now = GetTickCount64();
+                if (now - lastPing >= 1000) {
+                    LockstepNet_Ping();
+                    lastPing = now;
+                }
+                Sleep(100);
+            }
+            if (!LockstepNet_SessionStarted()) {
+                if (!g_disconnectRequested) SetSessionError("the host dropped while waiting for the other players");
                 break;
             }
             joined = true;
@@ -1082,7 +1542,7 @@ static void RunClientSession()
         }
 
         SetState(SESSION_CLIENT_IN_GAME);
-        SaveStatus("[CLIENT] in the game at %s - live sync running, paused until either player resumes", g_targetIp);
+        SaveStatus("[CLIENT] in the game of %s - live sync running, paused until a player resumes", g_peerIp);
         const char* why = MonitorLiveSession(true);
         ResetChannels();
         if (why == kResyncReason) {
@@ -1179,9 +1639,12 @@ void SaveSync_RequestDisconnect()
     }
     SaveStatus(g_isHost ? "[HOST] stopping..." : "[CLIENT] disconnecting...");
     g_disconnectRequested = true;
-    // Wakes a blocking recv on the join connection (closed by its owner).
+    // Wakes a blocking recv on the join connections (closed by their owner).
     SOCKET s = g_activeSock;
     if (s != INVALID_SOCKET) shutdown(s, SD_BOTH);
+    EnterCriticalSection(&g_lock);
+    for (int i = 0; i < g_joinSockCount; i++) shutdown(g_joinSocks[i], SD_BOTH);
+    LeaveCriticalSection(&g_lock);
     ResetChannels();
 }
 

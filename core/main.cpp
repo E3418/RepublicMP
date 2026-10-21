@@ -30,6 +30,7 @@
 
 
 #include "version.h"
+#include "profile.h"
 
 extern "C" __declspec(dllexport) unsigned TsmPluginApiVersion(void)
 {
@@ -40,6 +41,7 @@ extern "C" __declspec(dllexport) unsigned TsmPluginApiVersion(void)
 extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPluginInfo* info)
 {
     TsmBind(host);
+    Profile_Bind(host);
     LocalBuilds_Bind(host);
     PresentHook_Bind(host);
     GameSpeed_Bind(host);

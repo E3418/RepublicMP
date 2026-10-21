@@ -9,5 +9,5 @@
 // refuses the join, so two different builds never exchange messages.
 #pragma once
 
-#define REPUBLICMP_VERSION "0.5.5"
-#define REPUBLICMP_PROTOCOL 38
+#define REPUBLICMP_VERSION "0.6.0"
+#define REPUBLICMP_PROTOCOL 39

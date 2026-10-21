@@ -21,12 +21,14 @@ enum LockstepMsgType {
     LS_ACK = 4,   // player -> host: unsigned long long completed
     LS_HASH = 5,  // player -> host: LsHash
     LS_RESYNC = 6, // host -> player: the world is sent again (no payload)
-    LS_PING = 11,  // either way: still here (LsPing; a request is answered with the same time)
-    LS_DESYNC = 12, // host -> player: the first state difference (text)
     LS_PAUSE = 7, // player -> host: a pause toggle
     LS_SPEED = 8, // player -> host: int speed
     LS_STATE = 9, // host -> player: LsState
     LS_BYE = 10,  // either way: leaving
+    LS_PING = 11,  // either way: still here (LsPing; a request is answered with the same time)
+    LS_DESYNC = 12, // host -> player: the first state difference (text)
+    LS_HELLO = 13,  // player -> host, first: LsHello
+    LS_PLAYERS = 14, // host -> player: LsPlayers (once a second)
 };
 
 #pragma pack(push, 1)
@@ -36,94 +38,127 @@ struct LsCommandHead { unsigned long long afterTick; int kind; };
 struct LsHash { unsigned long long tick; StateSummary s; };
 struct LsState { int paused; int speed; };
 struct LsPing { unsigned long long sentMs; int reply; };
+struct LsHello { char magic[8]; char nick[PROFILE_NICK_BYTES]; };
+struct LsPlayerEntry { char nick[PROFILE_NICK_BYTES]; int rttMs; unsigned behind; unsigned char host, self, pad[2]; };
+struct LsPlayers { unsigned count; LsPlayerEntry e[PROFILE_MAX_PLAYERS]; };
 #pragma pack(pop)
 
 #define LS_MAX_PAYLOAD (1u << 20)
 #define LS_HASH_KEEP 32
+#define LS_HELLO_TIMEOUT_MS 5000
+static const char kHelloMagic[8] = "RPMPLSH";
 
 struct LsMessage {
+    int peer;
     unsigned type;
     std::vector<BYTE> data;
 };
 
-static SOCKET g_sock = INVALID_SOCKET;
-static volatile bool g_connected = false;
+// One connection: on the host a player, on a player the host (slot 0).
+struct Peer {
+    SOCKET sock;
+    HANDLE thread;
+    volatile bool connected;
+    char nick[PROFILE_NICK_BYTES];
+    char ip[48];
+    unsigned long long completed; // host: the player's ticks run (ACK)
+    volatile ULONGLONG lastReceived;
+    volatile ULONGLONG rttMs;
+    volatile bool rttKnown;
+    LsHash early[LS_HASH_KEEP];   // host: summaries that came before the host's own
+    int earlyCount;
+    unsigned long long lastMatched;
+    CRITICAL_SECTION sendLock;
+};
+
+static Peer g_peers[LOCKSTEP_MAX_PEERS];
+static int g_peerSlots = 0; // slots used this session
 static bool g_isHost = false;
-static HANDLE g_recvThread = nullptr;
-static CRITICAL_SECTION g_inLock, g_sendLock;
+static CRITICAL_SECTION g_inLock, g_listLock;
 static bool g_locksReady = false;
 static std::deque<LsMessage> g_inbox;
 
 // Host side.
-static unsigned long long g_playerCompleted = 0;
 static int g_pauseToggles = 0;
 static int g_speedRequest = 0;
+static LsState g_sentState = { 1, 1 }; // repeated with every ping: a player that joined later gets it too
+static bool g_stateSent = false;
 struct OwnHash { unsigned long long tick; StateSummary s; bool valid; };
 static OwnHash g_ownHashes[LS_HASH_KEEP];
-static LsHash g_playerHashes[LS_HASH_KEEP];
-static int g_playerHashCount = 0;
 static char g_desync[256] = "";
-static volatile unsigned long long g_lastMatched = 0; // the last tick both summaries matched
 
 // Player side.
 static std::deque<LsGrant> g_grants;
 static volatile bool g_resyncReceived = false; // set by the receive thread
-static volatile ULONGLONG g_lastReceived = 0;    // GetTickCount64 of the last message
 static bool g_hostStateKnown = false;
 static LsState g_hostState = { 1, 1 };
+static LsPlayers g_list = {};                  // the host's last player list (g_listLock)
 
-// Both sides: the round trip of the last answered ping, the host's waits for the
-// player (the admission window full) and the ticks granted so far.
-static volatile ULONGLONG g_rttMs = 0;
-static volatile bool g_rttKnown = false;
+// Both sides: the host's waits for a player (the admission window full), the
+// ticks granted so far and the player's grants not run yet (for the interface).
 static volatile ULONGLONG g_lastStallMs = 0;
 static volatile LONG g_stalls = 0;
 static unsigned long long g_lastGranted = 0;
-static volatile LONG g_grantBacklog = 0; // the player's grants not run yet (for the interface)
+static volatile LONG g_grantBacklog = 0;
 
 static void Locks()
 {
     if (g_locksReady) return;
     InitializeCriticalSection(&g_inLock);
-    InitializeCriticalSection(&g_sendLock);
+    InitializeCriticalSection(&g_listLock);
+    for (Peer& p : g_peers) {
+        InitializeCriticalSection(&p.sendLock);
+        p.sock = INVALID_SOCKET;
+        p.thread = nullptr;
+        p.connected = false;
+    }
     g_locksReady = true;
 }
 
-static bool Send(unsigned type, const void* a, size_t na, const void* b = nullptr, size_t nb = 0)
+static bool Send(Peer& p, unsigned type, const void* a, size_t na, const void* b = nullptr, size_t nb = 0)
 {
-    if (!g_connected) return false;
+    if (!p.connected) return false;
     LsHeader h = { type, (unsigned)(na + nb) };
-    EnterCriticalSection(&g_sendLock);
-    bool ok = NetworkSendExact(g_sock, &h, sizeof(h)) && (!na || NetworkSendExact(g_sock, a, na)) &&
-              (!nb || NetworkSendExact(g_sock, b, nb));
-    LeaveCriticalSection(&g_sendLock);
-    if (!ok && g_connected) {
-        g_connected = false;
-        Logf("republicmp  LOCKSTEP: send failed - the connection is lost");
+    EnterCriticalSection(&p.sendLock);
+    bool ok = NetworkSendExact(p.sock, &h, sizeof(h)) && (!na || NetworkSendExact(p.sock, a, na)) &&
+              (!nb || NetworkSendExact(p.sock, b, nb));
+    LeaveCriticalSection(&p.sendLock);
+    if (!ok && p.connected) {
+        p.connected = false;
+        Logf("republicmp  LOCKSTEP: send to %s failed - the connection is lost", p.nick);
     }
     return ok;
 }
 
-static DWORD WINAPI RecvThread(LPVOID)
+// Host: to every connected player.
+static void Broadcast(unsigned type, const void* a, size_t na, const void* b = nullptr, size_t nb = 0)
 {
-    while (g_connected) {
+    for (int i = 0; i < g_peerSlots; i++) Send(g_peers[i], type, a, na, b, nb);
+}
+
+static DWORD WINAPI RecvThread(LPVOID param)
+{
+    int index = (int)(intptr_t)param;
+    Peer& peer = g_peers[index];
+    while (peer.connected) {
         LsHeader h;
-        if (!NetworkRecvExact(g_sock, &h, sizeof(h)) || h.size > LS_MAX_PAYLOAD) break;
+        if (!NetworkRecvExact(peer.sock, &h, sizeof(h)) || h.size > LS_MAX_PAYLOAD) break;
         LsMessage m;
+        m.peer = index;
         m.type = h.type;
         m.data.resize(h.size);
-        if (h.size && !NetworkRecvExact(g_sock, m.data.data(), h.size)) break;
-        g_lastReceived = GetTickCount64();
+        if (h.size && !NetworkRecvExact(peer.sock, m.data.data(), h.size)) break;
+        peer.lastReceived = GetTickCount64();
         if (h.type == LS_PING) {
             if (m.data.size() == sizeof(LsPing)) {
                 LsPing p = *(const LsPing*)m.data.data();
                 if (p.reply) {
                     ULONGLONG now = GetTickCount64();
-                    g_rttMs = now >= p.sentMs ? now - p.sentMs : 0;
-                    g_rttKnown = true;
+                    peer.rttMs = now >= p.sentMs ? now - p.sentMs : 0;
+                    peer.rttKnown = true;
                 } else {
                     p.reply = 1;
-                    Send(LS_PING, &p, sizeof(p));
+                    Send(peer, LS_PING, &p, sizeof(p));
                 }
             }
             continue;
@@ -137,8 +172,16 @@ static DWORD WINAPI RecvThread(LPVOID)
             if (sscanf_s(g_desync, "the games differ after tick %llu", &tick) == 1) Determinism_DumpMoneyTrace(tick);
             continue;
         }
+        if (h.type == LS_PLAYERS) {
+            if (m.data.size() == sizeof(LsPlayers)) {
+                EnterCriticalSection(&g_listLock);
+                memcpy(&g_list, m.data.data(), sizeof(g_list));
+                LeaveCriticalSection(&g_listLock);
+            }
+            continue;
+        }
         if (h.type == LS_BYE) {
-            Logf("republicmp  LOCKSTEP: the other player left");
+            Logf(g_isHost ? "republicmp  LOCKSTEP: %s left" : "republicmp  LOCKSTEP: the host left", peer.nick);
             break;
         }
         // Noted here, not in the game thread's poll: the host closes the
@@ -151,8 +194,9 @@ static DWORD WINAPI RecvThread(LPVOID)
         g_inbox.push_back(std::move(m));
         LeaveCriticalSection(&g_inLock);
     }
-    if (g_connected) Logf("republicmp  LOCKSTEP: the connection is closed");
-    g_connected = false;
+    if (peer.connected)
+        Logf(g_isHost ? "republicmp  LOCKSTEP: the connection to %s is closed" : "republicmp  LOCKSTEP: the connection is closed", peer.nick);
+    peer.connected = false;
     return 0;
 }
 
@@ -161,45 +205,102 @@ static void ResetState()
     EnterCriticalSection(&g_inLock);
     g_inbox.clear();
     LeaveCriticalSection(&g_inLock);
-    g_playerCompleted = 0;
+    for (Peer& p : g_peers) {
+        p.connected = false;
+        p.sock = INVALID_SOCKET;
+        p.thread = nullptr;
+        p.nick[0] = 0;
+        p.ip[0] = 0;
+        p.completed = 0;
+        p.lastReceived = GetTickCount64();
+        p.rttMs = 0;
+        p.rttKnown = false;
+        p.earlyCount = 0;
+        p.lastMatched = 0;
+    }
+    g_peerSlots = 0;
     g_pauseToggles = 0;
     g_speedRequest = 0;
+    g_stateSent = false;
     memset(g_ownHashes, 0, sizeof(g_ownHashes));
-    g_playerHashCount = 0;
     g_desync[0] = 0;
-    g_lastMatched = 0;
     g_grants.clear();
     g_hostStateKnown = false;
     g_hostState.paused = 1;
     g_hostState.speed = 1;
     g_resyncReceived = false;
-    g_lastReceived = GetTickCount64();
-    g_rttMs = 0;
-    g_rttKnown = false;
+    EnterCriticalSection(&g_listLock);
+    memset(&g_list, 0, sizeof(g_list));
+    LeaveCriticalSection(&g_listLock);
     g_lastStallMs = 0;
     g_stalls = 0;
     g_lastGranted = 0;
     g_grantBacklog = 0;
 }
 
-static bool Started(SOCKET s, bool host)
+static void StartPeer(SOCKET s, const char* nick, const char* ip)
 {
-    if (s == INVALID_SOCKET) return false;
-    ResetState();
-    g_sock = s;
-    g_isHost = host;
-    g_connected = true;
-    g_recvThread = CreateThread(nullptr, 0, RecvThread, nullptr, 0, nullptr);
-    Logf("republicmp  LOCKSTEP: connected as %s", host ? "host" : "player");
-    return true;
+    Peer& p = g_peers[g_peerSlots];
+    p.sock = s;
+    strncpy_s(p.nick, nick && nick[0] ? nick : "Player", _TRUNCATE);
+    strncpy_s(p.ip, ip ? ip : "", _TRUNCATE);
+    p.lastReceived = GetTickCount64();
+    p.connected = true;
+    p.thread = CreateThread(nullptr, 0, RecvThread, (LPVOID)(intptr_t)g_peerSlots, 0, nullptr);
+    g_peerSlots++;
 }
 
-bool LockstepNet_Host(DWORD timeoutMs, volatile bool* cancel)
+int LockstepNet_HostAccept(int expected, DWORD timeoutMs, volatile bool* cancel, int (*stillExpected)(void* ctx), void* ctx)
 {
     Locks();
     LockstepNet_Close();
-    if (!NetworkInit()) return false;
-    return Started(NetworkHostAcceptOne(LOCKSTEP_PORT, timeoutMs, 0, cancel), true);
+    if (!NetworkInit()) return 0;
+    ResetState();
+    g_isHost = true;
+    if (expected > LOCKSTEP_MAX_PEERS) expected = LOCKSTEP_MAX_PEERS;
+    SOCKET listener = NetworkListen(LOCKSTEP_PORT, LOCKSTEP_MAX_PEERS);
+    if (listener == INVALID_SOCKET) return 0;
+    ULONGLONG start = GetTickCount64();
+    while (g_peerSlots < expected && !(cancel && *cancel) && GetTickCount64() - start < timeoutMs) {
+        if (stillExpected) {
+            int now = stillExpected(ctx);
+            if (now < expected) {
+                Logf("republicmp  LOCKSTEP: %d player(s) gave up before connecting - waiting for %d", expected - now, now);
+                expected = now;
+                continue;
+            }
+        }
+        SOCKET s = NetworkAcceptReady(listener, 200, LS_HELLO_TIMEOUT_MS);
+        if (s == INVALID_SOCKET) continue;
+        // A player opens with its name; anything else is not one of ours.
+        LsHeader h = {};
+        LsHello hello = {};
+        if (!NetworkRecvExact(s, &h, sizeof(h)) || h.type != LS_HELLO || h.size != sizeof(hello) ||
+            !NetworkRecvExact(s, &hello, sizeof(hello)) || memcmp(hello.magic, kHelloMagic, sizeof(kHelloMagic)) != 0) {
+            Logf("republicmp  LOCKSTEP: a connection without a player's hello - closed");
+            NetworkCloseSocket(s);
+            continue;
+        }
+        hello.nick[PROFILE_NICK_BYTES - 1] = 0;
+        NetworkSetTimeouts(s, 0);
+        char ip[48];
+        NetworkPeerAddress(s, ip, sizeof(ip));
+        StartPeer(s, hello.nick, ip);
+        Logf("republicmp  LOCKSTEP: %s (%s) connected - %d of %d", hello.nick, ip, g_peerSlots, expected);
+    }
+    NetworkCloseSocket(listener);
+    // The first ones waited for the others: their silence so far is not a drop.
+    for (int i = 0; i < g_peerSlots; i++) g_peers[i].lastReceived = GetTickCount64();
+    if (g_peerSlots) Logf("republicmp  LOCKSTEP: connected as host with %d player(s)", g_peerSlots);
+    return g_peerSlots;
+}
+
+bool LockstepNet_SessionStarted()
+{
+    EnterCriticalSection(&g_listLock);
+    bool started = g_list.count > 0;
+    LeaveCriticalSection(&g_listLock);
+    return started;
 }
 
 bool LockstepNet_Join(const char* hostIp, DWORD timeoutMs, volatile bool* cancel)
@@ -210,7 +311,21 @@ bool LockstepNet_Join(const char* hostIp, DWORD timeoutMs, volatile bool* cancel
     ULONGLONG start = GetTickCount64();
     for (;;) {
         SOCKET s = NetworkConnect(hostIp, LOCKSTEP_PORT, 5000, 0, cancel);
-        if (s != INVALID_SOCKET) return Started(s, false);
+        if (s != INVALID_SOCKET) {
+            ResetState();
+            g_isHost = false;
+            LsHeader h = { LS_HELLO, sizeof(LsHello) };
+            LsHello hello = {};
+            memcpy(hello.magic, kHelloMagic, sizeof(kHelloMagic));
+            strncpy_s(hello.nick, Profile_GetNick(), _TRUNCATE);
+            if (!NetworkSendExact(s, &h, sizeof(h)) || !NetworkSendExact(s, &hello, sizeof(hello))) {
+                NetworkCloseSocket(s);
+                return false;
+            }
+            StartPeer(s, "host", hostIp);
+            Logf("republicmp  LOCKSTEP: connected as player");
+            return true;
+        }
         if ((cancel && *cancel) || GetTickCount64() - start > timeoutMs) return false;
         Sleep(500); // the host listens once its own load is done
     }
@@ -219,36 +334,61 @@ bool LockstepNet_Join(const char* hostIp, DWORD timeoutMs, volatile bool* cancel
 void LockstepNet_Close()
 {
     Locks();
-    if (g_sock != INVALID_SOCKET) {
-        if (g_connected) Send(LS_BYE, nullptr, 0);
-        g_connected = false;
-        NetworkCloseSocket(g_sock);
-        g_sock = INVALID_SOCKET;
+    for (int i = 0; i < g_peerSlots; i++) {
+        Peer& p = g_peers[i];
+        if (p.sock != INVALID_SOCKET) {
+            if (p.connected) Send(p, LS_BYE, nullptr, 0);
+            p.connected = false;
+            NetworkCloseSocket(p.sock);
+            p.sock = INVALID_SOCKET;
+        }
+        if (p.thread) {
+            WaitForSingleObject(p.thread, 5000);
+            CloseHandle(p.thread);
+            p.thread = nullptr;
+        }
     }
-    if (g_recvThread) {
-        WaitForSingleObject(g_recvThread, 5000);
-        CloseHandle(g_recvThread);
-        g_recvThread = nullptr;
-    }
+    g_peerSlots = 0;
 }
 
-bool LockstepNet_IsConnected() { return g_connected; }
+int LockstepNet_PeerCount()
+{
+    int n = 0;
+    for (int i = 0; i < g_peerSlots; i++)
+        if (g_peers[i].connected) n++;
+    return n;
+}
+
+bool LockstepNet_IsConnected() { return LockstepNet_PeerCount() > 0; }
 bool LockstepNet_IsHost() { return g_isHost; }
 const char* LockstepNet_Desync() { return g_desync; }
-unsigned long long LockstepNet_LastMatchedTick() { return g_lastMatched; }
+
+unsigned long long LockstepNet_LastMatchedTick()
+{
+    unsigned long long matched = 0;
+    bool any = false;
+    for (int i = 0; i < g_peerSlots; i++) {
+        const Peer& p = g_peers[i];
+        if (!p.connected) continue;
+        if (!any || p.lastMatched < matched) matched = p.lastMatched;
+        any = true;
+    }
+    return any ? matched : 0;
+}
 
 // ---------------------------------------------------------------------------
 // State comparison (host)
 // ---------------------------------------------------------------------------
 
-static void Compare(const LsHash& theirs)
+static void Compare(int index, const LsHash& theirs)
 {
+    Peer& peer = g_peers[index];
     if (g_desync[0]) return;
     const OwnHash* mine = nullptr;
     for (const OwnHash& h : g_ownHashes)
         if (h.valid && h.tick == theirs.tick) mine = &h;
     if (!mine) {
-        if (g_playerHashCount < LS_HASH_KEEP) g_playerHashes[g_playerHashCount++] = theirs;
+        if (peer.earlyCount < LS_HASH_KEEP) peer.early[peer.earlyCount++] = theirs;
         return;
     }
     const StateSummary& a = mine->s;
@@ -259,37 +399,40 @@ static void Compare(const LsHash& theirs)
     if (a.hashVehicles != b.hashVehicles) strcat_s(what, "vehicles ");
     if (a.hashCitizens != b.hashCitizens) strcat_s(what, "citizens ");
     if (!what[0]) {
-        g_lastMatched = theirs.tick;
+        peer.lastMatched = theirs.tick;
         return;
     }
-    _snprintf_s(g_desync, sizeof(g_desync), _TRUNCATE, "the games differ after tick %llu: %s", theirs.tick, what);
-    Logf("republicmp  LOCKSTEP: DESYNC - %s (host: buildings %d vehicles %d citizens %d, player: %d %d %d)", g_desync,
-         a.buildings, a.vehicles, a.citizens, b.buildings, b.vehicles, b.citizens);
-    Logf("republicmp  LOCKSTEP:   host day %d %.4f rubles %.4f dollars %.4f, player day %d %.4f rubles %.4f dollars %.4f", a.day,
-         a.dayProgress, a.rub, a.usd, b.day, b.dayProgress, b.rub, b.usd);
-    Send(LS_DESYNC, g_desync, strlen(g_desync)); // the player shows it too
+    _snprintf_s(g_desync, sizeof(g_desync), _TRUNCATE, "the games differ after tick %llu: %s(%s)", theirs.tick, what, peer.nick);
+    Logf("republicmp  LOCKSTEP: DESYNC - %s (host: buildings %d vehicles %d citizens %d, %s: %d %d %d)", g_desync,
+         a.buildings, a.vehicles, a.citizens, peer.nick, b.buildings, b.vehicles, b.citizens);
+    Logf("republicmp  LOCKSTEP:   host day %d %.4f rubles %.4f dollars %.4f, %s day %d %.4f rubles %.4f dollars %.4f", a.day,
+         a.dayProgress, a.rub, a.usd, peer.nick, b.day, b.dayProgress, b.rub, b.usd);
+    Broadcast(LS_DESYNC, g_desync, strlen(g_desync)); // every player shows it too
     Determinism_DumpMoneyTrace(theirs.tick);
 }
 
 void LockstepNet_StateAfter(unsigned long long tick, const StateSummary& s)
 {
-    if (!g_connected) return;
+    if (!LockstepNet_IsConnected()) return;
     if (!g_isHost) {
         LsHash h = { tick, s };
-        Send(LS_HASH, &h, sizeof(h));
+        Send(g_peers[0], LS_HASH, &h, sizeof(h));
         return;
     }
     OwnHash& slot = g_ownHashes[(tick / LOCKSTEP_HASH_TICKS) % LS_HASH_KEEP];
     slot.tick = tick;
     slot.s = s;
     slot.valid = true;
-    // A player summary that came first (it should not, the player is behind).
-    for (int i = 0; i < g_playerHashCount; i++) {
-        if (g_playerHashes[i].tick != tick) continue;
-        LsHash h = g_playerHashes[i];
-        g_playerHashes[i] = g_playerHashes[--g_playerHashCount];
-        Compare(h);
-        break;
+    // A player summary that came first (it should not, the players are behind).
+    for (int p = 0; p < g_peerSlots; p++) {
+        Peer& peer = g_peers[p];
+        for (int i = 0; i < peer.earlyCount; i++) {
+            if (peer.early[i].tick != tick) continue;
+            LsHash h = peer.early[i];
+            peer.early[i] = peer.early[--peer.earlyCount];
+            Compare(p, h);
+            break;
+        }
     }
 }
 
@@ -307,6 +450,7 @@ void LockstepNet_Poll()
     for (LsMessage& m : in) {
         const BYTE* p = m.data.data();
         size_t n = m.data.size();
+        Peer& peer = g_peers[m.peer];
         switch (m.type) {
         case LS_GRANT:
             if (n == sizeof(LsGrant)) g_grants.push_back(*(const LsGrant*)p);
@@ -322,11 +466,11 @@ void LockstepNet_Poll()
                                  p + sizeof(LsCommandHead), n - sizeof(LsCommandHead));
             break;
         case LS_ACK:
-            if (n == sizeof(unsigned long long) && *(const unsigned long long*)p > g_playerCompleted)
-                g_playerCompleted = *(const unsigned long long*)p;
+            if (n == sizeof(unsigned long long) && *(const unsigned long long*)p > peer.completed)
+                peer.completed = *(const unsigned long long*)p;
             break;
         case LS_HASH:
-            if (n == sizeof(LsHash)) Compare(*(const LsHash*)p);
+            if (n == sizeof(LsHash)) Compare(m.peer, *(const LsHash*)p);
             break;
         case LS_PAUSE:
             g_pauseToggles++;
@@ -346,20 +490,26 @@ void LockstepNet_Poll()
 
 bool LockstepNet_MayRun(unsigned long long tick)
 {
-    bool may = g_connected && g_playerCompleted + LOCKSTEP_WINDOW >= tick;
-    if (!may && g_connected) {
+    bool any = false, may = true;
+    for (int i = 0; i < g_peerSlots; i++) {
+        const Peer& p = g_peers[i];
+        if (!p.connected) continue;
+        any = true;
+        if (p.completed + LOCKSTEP_WINDOW < tick) may = false;
+    }
+    if (any && !may) {
         ULONGLONG now = GetTickCount64();
         if (now - g_lastStallMs > 1000) InterlockedIncrement(&g_stalls); // one per second of waiting
         g_lastStallMs = now;
     }
-    return may;
+    return any && may;
 }
 
 void LockstepNet_Grant(unsigned long long tick, int speed)
 {
     g_lastGranted = tick;
     LsGrant g = { tick, speed };
-    Send(LS_GRANT, &g, sizeof(g));
+    Broadcast(LS_GRANT, &g, sizeof(g));
 }
 
 int LockstepNet_TakePauseToggles()
@@ -379,7 +529,9 @@ int LockstepNet_TakeSpeedRequest()
 void LockstepNet_SendState(bool paused, int speed)
 {
     LsState s = { paused ? 1 : 0, speed };
-    Send(LS_STATE, &s, sizeof(s));
+    g_sentState = s;
+    g_stateSent = true;
+    Broadcast(LS_STATE, &s, sizeof(s));
 }
 
 bool LockstepNet_TakeGrant(unsigned long long tick, int* speed)
@@ -392,16 +544,116 @@ bool LockstepNet_TakeGrant(unsigned long long tick, int* speed)
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// The players and the connection's health
+// ---------------------------------------------------------------------------
+
+static unsigned long long Behind(const Peer& p)
+{
+    return g_lastGranted > p.completed ? g_lastGranted - p.completed : 0;
+}
+
+// Host: the list as one player sees it (its own entry marked).
+static void FillList(LsPlayers& l, int forPeer)
+{
+    memset(&l, 0, sizeof(l));
+    LsPlayerEntry& host = l.e[l.count++];
+    strncpy_s(host.nick, Profile_GetNick(), _TRUNCATE);
+    host.host = 1;
+    for (int i = 0; i < g_peerSlots && l.count < PROFILE_MAX_PLAYERS; i++) {
+        const Peer& p = g_peers[i];
+        if (!p.connected) continue;
+        LsPlayerEntry& e = l.e[l.count++];
+        strncpy_s(e.nick, p.nick, _TRUNCATE);
+        e.rttMs = p.rttKnown ? (int)p.rttMs : -1;
+        e.behind = (unsigned)Behind(p);
+        e.self = i == forPeer ? 1 : 0;
+    }
+}
+
 void LockstepNet_Ping()
 {
-    LsPing p = { GetTickCount64(), 0 };
-    Send(LS_PING, &p, sizeof(p));
+    LsPing ping = { GetTickCount64(), 0 };
+    if (!g_isHost) {
+        Send(g_peers[0], LS_PING, &ping, sizeof(ping));
+        return;
+    }
+    for (int i = 0; i < g_peerSlots; i++) {
+        Peer& p = g_peers[i];
+        if (!p.connected) continue;
+        Send(p, LS_PING, &ping, sizeof(ping));
+        if (g_stateSent) Send(p, LS_STATE, &g_sentState, sizeof(g_sentState));
+        LsPlayers l;
+        FillList(l, i);
+        Send(p, LS_PLAYERS, &l, sizeof(l));
+    }
+}
+
+int LockstepNet_DropSilent(unsigned long long ms)
+{
+    int dropped = 0;
+    ULONGLONG now = GetTickCount64();
+    for (int i = 0; i < g_peerSlots; i++) {
+        Peer& p = g_peers[i];
+        if (!p.connected || now - p.lastReceived <= ms) continue;
+        Logf("republicmp  LOCKSTEP: %s stopped answering - dropped", p.nick);
+        p.connected = false;
+        shutdown(p.sock, SD_BOTH); // its receive thread ends
+        dropped++;
+    }
+    return dropped;
+}
+
+int LockstepNet_Players(LockstepPlayer* out, int max)
+{
+    int n = 0;
+    if (g_isHost) {
+        if (n < max) {
+            LockstepPlayer& me = out[n++];
+            memset(&me, 0, sizeof(me));
+            strncpy_s(me.nick, Profile_GetNick(), _TRUNCATE);
+            me.host = me.self = true;
+        }
+        for (int i = 0; i < g_peerSlots && n < max; i++) {
+            const Peer& p = g_peers[i];
+            if (!p.connected) continue;
+            LockstepPlayer& e = out[n++];
+            memset(&e, 0, sizeof(e));
+            strncpy_s(e.nick, p.nick, _TRUNCATE);
+            strncpy_s(e.ip, p.ip, _TRUNCATE);
+            e.rttMs = p.rttKnown ? (int)p.rttMs : -1;
+            e.behind = Behind(p);
+        }
+        return n;
+    }
+    LsPlayers l;
+    EnterCriticalSection(&g_listLock);
+    l = g_list;
+    LeaveCriticalSection(&g_listLock);
+    for (unsigned i = 0; i < l.count && i < PROFILE_MAX_PLAYERS && n < max; i++) {
+        LockstepPlayer& e = out[n++];
+        memset(&e, 0, sizeof(e));
+        l.e[i].nick[PROFILE_NICK_BYTES - 1] = 0;
+        strncpy_s(e.nick, l.e[i].nick, _TRUNCATE);
+        e.rttMs = l.e[i].host ? 0 : l.e[i].rttMs;
+        e.behind = l.e[i].behind;
+        e.host = l.e[i].host != 0;
+        e.self = l.e[i].self != 0;
+    }
+    return n;
 }
 
 bool LockstepNet_RoundTrip(unsigned long long* ms)
 {
-    *ms = g_rttMs;
-    return g_rttKnown;
+    bool known = false;
+    *ms = 0;
+    for (int i = 0; i < g_peerSlots; i++) {
+        const Peer& p = g_peers[i];
+        if (!p.connected || !p.rttKnown) continue;
+        if (!known || p.rttMs > *ms) *ms = p.rttMs;
+        known = true;
+    }
+    return known;
 }
 
 LockstepFlow LockstepNet_Flow()
@@ -409,19 +661,26 @@ LockstepFlow LockstepNet_Flow()
     LockstepFlow f = {};
     f.stalls = (int)g_stalls;
     f.msSinceStall = g_lastStallMs ? GetTickCount64() - g_lastStallMs : ~0ull;
-    if (g_isHost) f.behind = g_lastGranted > g_playerCompleted ? g_lastGranted - g_playerCompleted : 0;
-    else f.behind = (unsigned long long)g_grantBacklog;
+    if (g_isHost) {
+        for (int i = 0; i < g_peerSlots; i++)
+            if (g_peers[i].connected && Behind(g_peers[i]) > f.behind) f.behind = Behind(g_peers[i]);
+    } else {
+        f.behind = (unsigned long long)g_grantBacklog;
+    }
     return f;
 }
 
 ULONGLONG LockstepNet_MsSinceReceived()
 {
-    return GetTickCount64() - g_lastReceived;
+    ULONGLONG now = GetTickCount64(), quiet = 0;
+    for (int i = 0; i < g_peerSlots; i++)
+        if (g_peers[i].connected && now - g_peers[i].lastReceived > quiet) quiet = now - g_peers[i].lastReceived;
+    return quiet;
 }
 
 void LockstepNet_SendResync()
 {
-    Send(LS_RESYNC, nullptr, 0);
+    Broadcast(LS_RESYNC, nullptr, 0);
 }
 
 bool LockstepNet_TakeResync()
@@ -433,17 +692,17 @@ bool LockstepNet_TakeResync()
 
 void LockstepNet_Ack(unsigned long long completed)
 {
-    Send(LS_ACK, &completed, sizeof(completed));
+    Send(g_peers[0], LS_ACK, &completed, sizeof(completed));
 }
 
 void LockstepNet_SendPauseToggle()
 {
-    Send(LS_PAUSE, nullptr, 0);
+    Send(g_peers[0], LS_PAUSE, nullptr, 0);
 }
 
 void LockstepNet_SendSpeed(int speed)
 {
-    Send(LS_SPEED, &speed, sizeof(speed));
+    Send(g_peers[0], LS_SPEED, &speed, sizeof(speed));
 }
 
 bool LockstepNet_HostState(bool* paused, int* speed)
@@ -457,5 +716,6 @@ bool LockstepNet_HostState(bool* paused, int* speed)
 void LockstepNet_SendCommand(int kind, unsigned long long afterTick, const void* data, size_t size)
 {
     LsCommandHead h = { afterTick, kind };
-    Send(g_isHost ? LS_CMDS : LS_CMD, &h, sizeof(h), data, size);
+    if (g_isHost) Broadcast(LS_CMDS, &h, sizeof(h), data, size);
+    else Send(g_peers[0], LS_CMD, &h, sizeof(h), data, size);
 }

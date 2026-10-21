@@ -12,6 +12,7 @@
 #include "../world_sync/terrain/terrain_sync.h"
 #include "../session/sync_check.h"
 #include "../determinism/determinism.h"
+#include "../core/profile.h"
 
 #include "imgui.h"
 #include <misc/cpp/imgui_stdlib.h> // ImGui::InputText(const char*, std::string*)
@@ -92,7 +93,37 @@ static void MinutesSeconds(char* out, size_t n, unsigned long long ms)
     _snprintf_s(out, n, _TRUNCATE, "%llu:%02llu", ms / 60000, (ms / 1000) % 60);
 }
 
-// Lockstep in the game: the simulation, the connection, how the ticks flow and the comparison.
+// The session's players, the host first: ping and how far behind (the host also sees addresses).
+static void PlayersList(bool host)
+{
+    LockstepPlayer players[PROFILE_MAX_PLAYERS];
+    int n = LockstepNet_Players(players, PROFILE_MAX_PLAYERS);
+    if (!n) {
+        Wrapped(kGrey, "Players: waiting for the list...");
+        return;
+    }
+    ImGui::TextColored(kGrey, "Players:");
+    for (int i = 0; i < n; i++) {
+        const LockstepPlayer& pl = players[i];
+        const char* you = pl.self ? " - you" : "";
+        if (pl.host) {
+            StatusDot(kBlue);
+            Wrapped(ImGui::GetStyleColorVec4(ImGuiCol_Text), "%s (host)%s", pl.nick, you);
+            continue;
+        }
+        ImVec4 col = pl.rttMs < 0 ? kGrey : pl.rttMs < 80 ? kGreen : pl.rttMs < 250 ? kYellow : kRed;
+        StatusDot(col);
+        char ping[24];
+        if (pl.rttMs < 0) strcpy_s(ping, "?");
+        else _snprintf_s(ping, sizeof(ping), _TRUNCATE, "%d ms", pl.rttMs);
+        if (host && pl.ip[0])
+            Wrapped(ImGui::GetStyleColorVec4(ImGuiCol_Text), "%s%s - ping %s, %llu tick(s) behind  (%s)", pl.nick, you, ping, pl.behind, pl.ip);
+        else
+            Wrapped(ImGui::GetStyleColorVec4(ImGuiCol_Text), "%s%s - ping %s, %llu tick(s) behind", pl.nick, you, ping, pl.behind);
+    }
+}
+
+// Lockstep in the game: the simulation, the players, how the ticks flow and the comparison.
 static void LockstepPanel(bool host)
 {
     bool paused = true;
@@ -105,20 +136,14 @@ static void LockstepPanel(bool host)
         Wrapped(kGreen, "Simulation: running, tick %llu (%s)", tick, kSpeeds[speed < 1 ? 1 : speed > 4 ? 4 : speed]);
     }
 
-    unsigned long long rtt = 0;
-    if (LockstepNet_RoundTrip(&rtt)) {
-        ImVec4 col = rtt < 80 ? kGreen : rtt < 250 ? kYellow : kRed;
-        Wrapped(col, "Ping: %llu ms", rtt);
-    } else {
-        Wrapped(kGrey, "Ping: measuring...");
-    }
+    PlayersList(host);
 
     LockstepFlow f = LockstepNet_Flow();
     if (host) {
         if (f.msSinceStall < 5000)
-            Wrapped(kYellow, "Flow: waiting for the player (%llu ticks behind) - the slower PC sets the pace", f.behind);
+            Wrapped(kYellow, "Flow: waiting for a player (%llu ticks behind) - the slowest PC sets the pace", f.behind);
         else
-            Wrapped(kGreen, "Flow: steady (player %llu tick(s) behind)", f.behind);
+            Wrapped(kGreen, "Flow: steady (at most %llu tick(s) behind)", f.behind);
     } else {
         if (f.behind > LOCKSTEP_WINDOW / 2)
             Wrapped(kYellow, "Flow: catching up, %llu tick(s) waiting", f.behind);
@@ -158,7 +183,7 @@ static void LockstepPanel(bool host)
     ImGui::SameLine();
     ImGui::SetNextItemWidth(130);
     if (ImGui::Combo("##desyncResync", &current, kLabels, IM_ARRAYSIZE(kLabels))) SaveSync_SetDesyncResyncSeconds(kSeconds[current]);
-    Wrapped(kGrey, "Re-sync sends your world to the player again; both games then go on from it.");
+    Wrapped(kGrey, "Re-sync sends your world to every player again; all games then go on from it.");
 }
 
 // Replay mode, host with a player in the game: re-sync now, the interval and the drift.
@@ -243,21 +268,24 @@ static void StatusPanel()
             break;
         }
         StatusDot(kBlue);
-        Wrapped(kBlue, "Hosting (%s) - waiting for a player", SaveSync_GetLockstep() ? "lockstep" : "replay mode");
+        if (SaveSync_GetLockstep())
+            Wrapped(kBlue, "Hosting (lockstep) - waiting for players (up to %d)", Profile_GetMaxPlayers() - 1);
+        else
+            Wrapped(kBlue, "Hosting (replay mode) - waiting for a player");
         Wrapped(kGrey, "Your game keeps running. Players connect to your IP (port %d).", SAVE_SYNC_PORT);
         if (lastError[0]) Wrapped(kYellow, "%s", lastError);
         break;
 
     case SESSION_HOST_JOINING:
         StatusDot(kYellow);
-        Wrapped(kYellow, SaveSync_IsResyncing() ? "Re-syncing - sending the world to %s" : "Hosting - %s is joining",
+        Wrapped(kYellow, SaveSync_IsResyncing() ? "Re-syncing - sending the world to %s" : "Hosting - joining: %s",
                 peer[0] ? peer : "a player");
         JoinStepLine();
         break;
 
     case SESSION_HOST_IN_GAME:
         StatusDot(kGreen);
-        Wrapped(kGreen, "Hosting (%s) - %s is in the game", mode, peer[0] ? peer : "a player");
+        Wrapped(kGreen, "Hosting (%s) - in the game with %s", mode, peer[0] ? peer : "a player");
         if (lockstep) LockstepPanel(true);
         else {
             ChannelIndicators();
@@ -273,7 +301,7 @@ static void StatusPanel()
 
     case SESSION_CLIENT_IN_GAME:
         StatusDot(kGreen);
-        Wrapped(kGreen, "Connected to %s (%s) - in the game", peer[0] ? peer : SaveSync_GetTargetIp(), mode);
+        Wrapped(kGreen, "In the game of %s (%s)", peer[0] ? peer : SaveSync_GetTargetIp(), mode);
         if (lockstep) LockstepPanel(false);
         else ChannelIndicators();
         break;
@@ -303,6 +331,20 @@ static void SessionButtons(std::string& hostIp)
             ImGui::SetTooltip("Each game simulates on its own and the players' actions are repeated;\n"
                               "the games drift and are brought back by re-syncs.");
         Wrapped(kGrey, "The host's choice - the joining player follows it.");
+        if (lockstep) {
+            static const char* const kPlayers[] = { "2 players", "3 players", "4 players" };
+            int players = Profile_GetMaxPlayers() - PROFILE_MIN_PLAYERS;
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted("Session:");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(110);
+            if (ImGui::Combo("##maxPlayers", &players, kPlayers, IM_ARRAYSIZE(kPlayers)))
+                Profile_SetMaxPlayers(players + PROFILE_MIN_PLAYERS);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("The most players in your session, you included.\n"
+                                  "A full session stops listening for more.\n"
+                                  "A player who joins during the game brings a re-sync for everyone.");
+        }
         bool dlcCheck = SaveSync_GetDlcCheck();
         if (ImGui::Checkbox("Check DLCs", &dlcCheck)) SaveSync_SetDlcCheck(dlcCheck);
         if (ImGui::IsItemHovered())
@@ -323,6 +365,21 @@ static void SessionButtons(std::string& hostIp)
         if (ImGui::Button("Connect", ImVec2(half, 0)))
             SaveSync_StartClient(hostIp.c_str());
         ImGui::EndDisabled();
+
+        static char s_nick[PROFILE_NICK_BYTES];
+        static bool s_nickRead = false;
+        if (!s_nickRead) {
+            strncpy_s(s_nick, Profile_GetNick(), _TRUNCATE);
+            if (!strcmp(s_nick, "Player")) s_nick[0] = 0;
+            s_nickRead = true;
+        }
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Your name:");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-1);
+        ImGui::InputTextWithHint("##nick", "Player", s_nick, sizeof(s_nick));
+        if (ImGui::IsItemDeactivatedAfterEdit()) Profile_SetNick(s_nick);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("What the other players see. Two players may use the same name.");
 
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted("Host IP:");

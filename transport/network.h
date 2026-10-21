@@ -21,6 +21,18 @@ SOCKET NetworkHostAcceptOne(unsigned short port,
                             DWORD ioTimeoutMs = 30000,
                             volatile bool* cancelFlag = nullptr);
 
+// A listening socket kept open across accepts (the lockstep host takes
+// several players, and new ones while a session runs): INVALID_SOCKET when the
+// port could not be bound.
+SOCKET NetworkListen(unsigned short port, int backlog);
+// The next waiting client within waitMs (0 = only one already waiting), or
+// INVALID_SOCKET. The connection gets ioTimeoutMs and TCP keepalive.
+SOCKET NetworkAcceptReady(SOCKET listenSock, DWORD waitMs, DWORD ioTimeoutMs);
+// The send/recv timeout of a connection (0 = none).
+void NetworkSetTimeouts(SOCKET sock, DWORD timeoutMs);
+// The remote address of a connection, "" when unknown.
+void NetworkPeerAddress(SOCKET sock, char* out, size_t outSize);
+
 // Connects to hostIp:port, same timeout and cancel semantics.
 SOCKET NetworkConnect(const char* hostIp, unsigned short port,
                       DWORD connectTimeoutMs = 15000,
@@ -42,5 +54,8 @@ bool NetworkRecvExact(SOCKET sock, void* data, size_t size);
 // (including a keepalive timeout). Pending data counts as alive and is left
 // unread.
 bool NetworkPeerGone(SOCKET sock);
+// Waits up to waitMs for something to read (data, or the connection closing),
+// checking the cancel flag in short steps; false: nothing came, or cancelled.
+bool NetworkWaitReadable(SOCKET sock, DWORD waitMs, volatile bool* cancelFlag);
 
 void NetworkCloseSocket(SOCKET sock);
