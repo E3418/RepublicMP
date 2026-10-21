@@ -10,6 +10,7 @@
 #include "../lockstep/building_switches.h"
 #include "../lockstep/brush_tools.h"
 #include "../lockstep/immigrant_invite.h"
+#include "../lockstep/shared_save.h"
 #include "../lockstep/hover_tools.h"
 #include "../lockstep/cargo_settings.h"
 #include "../lockstep/source_slots.h"
@@ -592,16 +593,12 @@ static void HookedLate(__int64 world)
     if (!active) { o_late(world); return; }
     Determinism_BeforeLate();
     g_simThread = GetCurrentThreadId();
-    // No save on one PC alone in a lockstep session (DET-20): a save writes
-    // every vehicle and ages it (42cc70 -> 6c6770 -> 6c1bd0). The save window
-    // sets the word +14d35 and the body counts +14d38 down and saves; one that
-    // stays in the game is refused here, one that leaves it (+5030) is left
-    // alone, as that PC leaves the session. (by SoylentGreed)
-    if (Determinism_SessionRunning() && *(unsigned short*)(world + 0x14D35) && !*(int*)(world + 0x5030)) {
-        *(unsigned short*)(world + 0x14D35) = 0;
-        *(int*)(world + 0x14D38) = 0;
-        Logf("republicmp  LOCKSTEP: a save was refused - saving is not shared in a lockstep session yet");
-    }
+    // No save on one PC alone in a lockstep session: a save writes every
+    // vehicle and ages it (42cc70 -> 6c6770 -> 6c1bd0, by SoylentGreed). The
+    // save window's request becomes a command, made on every PC at the same
+    // boundary (lockstep/shared_save); one that leaves the game (+5030) is
+    // left alone, as that PC leaves the session.
+    SharedSave_BeforeLate((unsigned char*)world);
     bool step = Determinism_IsStepFrame();
     *(float*)(world + AUTOSAVE_TIMER_OFFSET) = 0.0f;
     if (step) RecountPopulation(world);

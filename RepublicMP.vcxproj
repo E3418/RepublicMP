@@ -191,6 +191,7 @@
     <ClCompile Include="lockstep\building_switches.cpp" />
     <ClCompile Include="lockstep\brush_tools.cpp" />
     <ClCompile Include="lockstep\immigrant_invite.cpp" />
+    <ClCompile Include="lockstep\shared_save.cpp" />
     <ClCompile Include="lockstep\hover_tools.cpp" />
     <ClCompile Include="lockstep\junction_accept.cpp" />
     <ClCompile Include="lockstep\cargo_settings.cpp" />
@@ -256,6 +257,7 @@
     <ClInclude Include="lockstep\building_switches.h" />
     <ClInclude Include="lockstep\brush_tools.h" />
     <ClInclude Include="lockstep\immigrant_invite.h" />
+    <ClInclude Include="lockstep\shared_save.h" />
     <ClInclude Include="lockstep\hover_tools.h" />
     <ClInclude Include="lockstep\junction_accept.h" />
     <ClInclude Include="lockstep\cargo_settings.h" />

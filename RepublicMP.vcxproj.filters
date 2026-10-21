@@ -240,6 +240,9 @@
     <ClCompile Include="lockstep\immigrant_invite.cpp">
       <Filter>lockstep</Filter>
     </ClCompile>
+    <ClCompile Include="lockstep\shared_save.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
     <ClCompile Include="lockstep\hover_tools.cpp">
       <Filter>lockstep</Filter>
     </ClCompile>
@@ -450,6 +453,9 @@
       <Filter>lockstep</Filter>
     </ClInclude>
     <ClInclude Include="lockstep\immigrant_invite.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\shared_save.h">
       <Filter>lockstep</Filter>
     </ClInclude>
     <ClInclude Include="lockstep\hover_tools.h">

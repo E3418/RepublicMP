@@ -53,6 +53,7 @@ enum LockstepCommandKind {
     LS_CMD_RENAME = 24,         // rename.cpp: a city's or a crossroad's new name
     LS_CMD_LEDGER = 25,         // brush_tools.cpp: the construction ledger row a terrain stroke wrote
     LS_CMD_INVITE = 26,         // immigrant_invite.cpp: a residential window's immigrant invitation
+    LS_CMD_SAVE = 27,           // shared_save.cpp: a save of the shared game, on every PC
 };
 
 // Money a local action changed on this PC (an interface purchase, a terrain
