@@ -976,7 +976,7 @@ struct MoneyTick {
 #define MONEY_TRACE_DUMPED 70
 static MoneyTick g_moneyTicks[MONEY_TRACE_TICKS];
 static unsigned long long g_moneyTickCount = 0;
-static bool g_moneyTrace = false;
+static bool g_moneyTrace = true;
 
 // What each construction site paid, tick by tick (see Determinism_NoteSitePayment).
 struct SitePayment {

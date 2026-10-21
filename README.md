@@ -25,8 +25,8 @@ you can do it on [Buy Me a Coffee](https://buymeacoffee.com/3418).
 | Speed and pause | The host's (Hyper and Plaid included); the player's keys are requests | The host's; the player's keys are requests |
 | Checks | Both games compare a state hash every 60 ticks; a difference is shown on both PCs and can re-sync after a set time | A drift check every game hour |
 
-The host picks **Lockstep** or **Replay** in the RepublicMP window before
-pressing **Host**; the joining player follows the host's choice.
+The host picks **Lockstep** (the default) or **Replay** in the RepublicMP window
+before pressing **Host**; the joining player follows the host's choice.
 
 ## Lockstep
 
@@ -139,9 +139,9 @@ Firewalls must allow TCP ports 5556-5559 on the host, and 5560 for lockstep.
 | **Insert** | Show / hide the RepublicMP overlay |
 
 The **Debug** button in the main window opens manual reconnect controls, the
-determinism probe, the money trace (both players tick it; on a desync each log
-gets the balances and construction sites of the ticks before it) and the
-detailed log. A full log is written to
+determinism probe, the money trace (on by default: on a desync each log gets
+the balances and construction sites of the ticks before it) and the detailed
+log. A full log is written to
 `tesmioloader.log`; when reporting a problem, attach the logs of both
 players and say which mode you were in.
 

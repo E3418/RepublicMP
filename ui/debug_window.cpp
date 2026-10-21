@@ -228,7 +228,7 @@ void DebugWindow::Draw()
         // --- Money trace (determinism) ---
         bool moneyTrace = Determinism_GetMoneyTrace();
         if (ImGui::Checkbox("Money trace (lockstep desyncs)", &moneyTrace)) Determinism_SetMoneyTrace(moneyTrace);
-        ImGui::TextWrapped("Both players turn it on: on a desync each log gets the balances and construction sites "
+        ImGui::TextWrapped("On by default: on a desync each log gets the balances and construction sites "
                            "of the ticks before it, and every command that changed the money.");
         ImGui::Spacing();
 

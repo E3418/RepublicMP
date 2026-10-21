@@ -79,8 +79,8 @@ static volatile ULONGLONG g_desyncSince = 0;       // GetTickCount64 of the desy
 static volatile ULONGLONG g_lastWorldSentTick = 0; // host: when the player last got the world
 // Lockstep: both PCs load the sent save with the determinism layer on and run
 // the same ticks (lockstep/lockstep_net) instead of the live sync channels.
-// The host chooses; the player follows the host's hello.
-static volatile bool g_lockstepChosen = false;
+// The host chooses (lockstep by default); the player follows the host's hello.
+static volatile bool g_lockstepChosen = true;
 static volatile bool g_dlcCheck = true; // refuse a join when the DLCs differ (both players' choice)
 static volatile bool g_lockstep = false; // the current session's mode
 #define LOCKSTEP_CONNECT_TIMEOUT_MS 180000 // the host loads the world again before it listens

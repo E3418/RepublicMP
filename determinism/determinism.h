@@ -74,7 +74,7 @@ void Determinism_SessionSpeed(bool* paused, int* speed);
 typedef void (*StepObserverFn)(void);
 void Determinism_AddStepObserver(StepObserverFn fn);
 
-// Money trace (Debug window, off by default): every PC keeps its balances and
+// Money trace (Debug window, on by default): every PC keeps its balances and
 // its construction sites after each tick of a lockstep session, and on a
 // desync logs the ticks up to the one that differed - the two PCs' logs then
 // show the tick and the amount where the money split.
