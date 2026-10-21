@@ -243,6 +243,9 @@
     <ClCompile Include="lockstep\shared_save.cpp">
       <Filter>lockstep</Filter>
     </ClCompile>
+    <ClCompile Include="lockstep\research.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
     <ClCompile Include="lockstep\hover_tools.cpp">
       <Filter>lockstep</Filter>
     </ClCompile>
@@ -456,6 +459,9 @@
       <Filter>lockstep</Filter>
     </ClInclude>
     <ClInclude Include="lockstep\shared_save.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\research.h">
       <Filter>lockstep</Filter>
     </ClInclude>
     <ClInclude Include="lockstep\hover_tools.h">

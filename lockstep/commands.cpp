@@ -25,6 +25,7 @@
 #include "rename.h"
 #include "immigrant_invite.h"
 #include "shared_save.h"
+#include "research.h"
 #include <vector>
 #include <string.h>
 
@@ -46,6 +47,7 @@ void Commands_Bind(const TsmHost* host)
     Rename_Bind(host);
     ImmigrantInvite_Bind(host);
     SharedSave_Bind(host);
+    Research_Bind(host);
 }
 
 struct Command {
@@ -134,6 +136,7 @@ static const char* KindName(int kind)
     case LS_CMD_LEDGER: return "ledger row";
     case LS_CMD_INVITE: return "immigrant invitation";
     case LS_CMD_SAVE: return "save";
+    case LS_CMD_RESEARCH: return "research";
     }
     return "?";
 }
@@ -282,6 +285,9 @@ static void Apply(const Command& c)
         break;
     case LS_CMD_SAVE:
         ok = SharedSave_ApplyCommand(p, n);
+        break;
+    case LS_CMD_RESEARCH:
+        ok = Research_ApplyCommand(p, n);
         break;
     }
     InputBlock_EndNeutral();

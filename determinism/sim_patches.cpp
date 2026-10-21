@@ -11,6 +11,7 @@
 #include "../lockstep/brush_tools.h"
 #include "../lockstep/immigrant_invite.h"
 #include "../lockstep/shared_save.h"
+#include "../lockstep/research.h"
 #include "../lockstep/hover_tools.h"
 #include "../lockstep/cargo_settings.h"
 #include "../lockstep/source_slots.h"
@@ -936,9 +937,11 @@ static __int64 DetUiRoutine(void* world)
     BuildingSwitches_Before(g_inPhase);
     CargoSettings_Before(g_inPhase);
     SourceSlots_Before(g_inPhase);
+    Research_Before(g_inPhase);
     __int64 r = original(world);
     // The cargo settings first: a half they put back is the same again for the switches.
     CargoSettings_After(g_inPhase);
+    Research_After(g_inPhase);
     SourceSlots_After(g_inPhase);
     BuildingSwitches_After(g_inPhase);
     VehicleSwitches_After(g_inPhase);

@@ -54,6 +54,7 @@ enum LockstepCommandKind {
     LS_CMD_LEDGER = 25,         // brush_tools.cpp: the construction ledger row a terrain stroke wrote
     LS_CMD_INVITE = 26,         // immigrant_invite.cpp: a residential window's immigrant invitation
     LS_CMD_SAVE = 27,           // shared_save.cpp: a save of the shared game, on every PC
+    LS_CMD_RESEARCH = 28,       // research.cpp: research started or suspended in a research building's window
 };
 
 // Money a local action changed on this PC (an interface purchase, a terrain
