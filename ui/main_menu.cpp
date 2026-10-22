@@ -343,6 +343,25 @@ static void StatusPanel()
     }
 }
 
+// The player's name (remembered in the profile).
+static void NameInput()
+{
+    static char s_nick[PROFILE_NICK_BYTES];
+    static bool s_nickRead = false;
+    if (!s_nickRead) {
+        strncpy_s(s_nick, Profile_GetNick(), _TRUNCATE);
+        if (!strcmp(s_nick, "Player")) s_nick[0] = 0;
+        s_nickRead = true;
+    }
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Your name:");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputTextWithHint("##nick", "Player", s_nick, sizeof(s_nick));
+    if (ImGui::IsItemDeactivatedAfterEdit()) Profile_SetNick(s_nick);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("What the other players see. Two players may use the same name.");
+}
+
 // Host/Connect while idle; Stop hosting / Disconnect during a session.
 static void SessionButtons(std::string& hostIp)
 {
@@ -401,20 +420,7 @@ static void SessionButtons(std::string& hostIp)
             SaveSync_StartClient(hostIp.c_str());
         ImGui::EndDisabled();
 
-        static char s_nick[PROFILE_NICK_BYTES];
-        static bool s_nickRead = false;
-        if (!s_nickRead) {
-            strncpy_s(s_nick, Profile_GetNick(), _TRUNCATE);
-            if (!strcmp(s_nick, "Player")) s_nick[0] = 0;
-            s_nickRead = true;
-        }
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Your name:");
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(-1);
-        ImGui::InputTextWithHint("##nick", "Player", s_nick, sizeof(s_nick));
-        if (ImGui::IsItemDeactivatedAfterEdit()) Profile_SetNick(s_nick);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("What the other players see. Two players may use the same name.");
+        NameInput();
         PingKey();
 
         ImGui::AlignTextToFramePadding();
@@ -436,6 +442,80 @@ static void SessionButtons(std::string& hostIp)
     ImGui::PopStyleColor(2);
 }
 
+// ---------------------------------------------------------------------------
+// Pages: the start page picks the kind of game; a session always shows co-op.
+// ---------------------------------------------------------------------------
+
+enum MenuPage { PAGE_START, PAGE_COOP, PAGE_REPUBLICS };
+static MenuPage s_page = PAGE_START;
+
+static ImU32 Col(const ImVec4& c) { return ImGui::GetColorU32(c); }
+
+// A wide button with a coloured edge, a title and two lines under it.
+static bool ModeCard(const char* id, const char* title, const char* line1, const char* line2, const ImVec4& accent)
+{
+    float lh = ImGui::GetTextLineHeightWithSpacing();
+    ImVec2 size(ImGui::GetContentRegionAvail().x, lh * 3 + 14);
+    bool clicked = ImGui::Button(id, size);
+    ImVec2 min = ImGui::GetItemRectMin();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(min, ImVec2(min.x + 4, min.y + size.y), Col(accent));
+    ImVec2 at(min.x + 14, min.y + 7);
+    dl->AddText(at, Col(accent), title);
+    dl->AddText(ImVec2(at.x, at.y + lh), Col(ImGui::GetStyleColorVec4(ImGuiCol_Text)), line1);
+    dl->AddText(ImVec2(at.x, at.y + lh * 2), Col(kGrey), line2);
+    return clicked;
+}
+
+static void StartPage()
+{
+    ImGui::TextUnformatted("Choose a game");
+    ImGui::Spacing();
+    if (ModeCard("##coop", "Co-op", "One republic, 2-4 players", "Every PC runs the same city in lockstep", kGreen))
+        s_page = PAGE_COOP;
+    ImGui::Spacing();
+    if (ModeCard("##republics", "Republics", "Each player their own republic, 2 players", "One map split in two - in development", kBlue))
+        s_page = PAGE_REPUBLICS;
+    ImGui::Spacing();
+    NameInput();
+}
+
+static bool BackButton()
+{
+    bool back = ImGui::SmallButton("< Back");
+    ImGui::SameLine();
+    return back;
+}
+
+static void RepublicsPage()
+{
+    if (BackButton()) s_page = PAGE_START;
+    ImGui::TextColored(kBlue, "Republics");
+    ImGui::Spacing();
+    Wrapped(ImGui::GetStyleColorVec4(ImGuiCol_Text),
+            "Each player builds their own republic on one map, split in two. "
+            "You see the neighbour's buildings, vehicles and citizens live, and trade with them at the border.");
+    ImGui::Spacing();
+    Wrapped(kYellow, "In development - not playable yet.");
+}
+
+static void CoopPage(std::string& hostIp)
+{
+    // A session stays on this page; back only while idle.
+    if (SaveSync_GetState() == SESSION_IDLE) {
+        if (BackButton()) s_page = PAGE_START;
+        ImGui::TextColored(kGreen, "Co-op");
+        ImGui::Spacing();
+    }
+    StatusPanel();
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    SessionButtons(hostIp);
+}
+
 void MainMenu::Draw()
 {
     if (!hostIpInitialized) {
@@ -446,14 +526,15 @@ void MainMenu::Draw()
     ImGui::SetNextWindowSize(ImVec2(440, 480), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("RepublicMP"))
     {
-        StatusPanel();
+        if (SaveSync_GetState() != SESSION_IDLE) s_page = PAGE_COOP;
+        switch (s_page) {
+        case PAGE_START: StartPage(); break;
+        case PAGE_COOP: CoopPage(hostIp); break;
+        case PAGE_REPUBLICS: RepublicsPage(); break;
+        }
 
         ImGui::Spacing();
         ImGui::Separator();
-        ImGui::Spacing();
-
-        SessionButtons(hostIp);
-
         ImGui::Spacing();
         float spacing = ImGui::GetStyle().ItemSpacing.x;
         float half = (ImGui::GetContentRegionAvail().x - spacing) * 0.5f;
