@@ -130,6 +130,8 @@ different build.
   within the game's own call: no allocation, logging or I/O.
 - Offsets and RVAs are named `#define`s with what they are and where they
   were found. No numbers of one's own city (coordinates, object indices).
+  What is known about the game beyond the code, with its evidence, is in
+  `docs/findings.md`.
 - Diagnostics are off by default (the Debug window turns them on; the money
   trace is the exception).
 - Files are CRLF. Code, comments and the changelog are in English; no
