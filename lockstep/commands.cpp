@@ -28,6 +28,7 @@
 #include "research.h"
 #include "link_tools.h"
 #include "office_selection.h"
+#include "presence.h"
 #include <vector>
 #include <string.h>
 
@@ -52,6 +53,7 @@ void Commands_Bind(const TsmHost* host)
     Research_Bind(host);
     LinkTools_Bind(host);
     OfficeSelection_Bind(host);
+    Presence_Bind(host);
 }
 
 struct Command {
@@ -418,8 +420,8 @@ static const char* const kCarriedTools[] = { "vehicle_addstop", "line_addstop", 
                                               // the second-road drags (a road sync category; their removal stays put away)
                                               "second_road_airplane", "second_road_basicroad", "second_road_l2",
                                               "second_road_l3", "second_road_l4" };
-// Two building pick tools write other buildings' words inline: copying the
-// weights and the fire station's dispatch (the others are game calls).
+// Copying the weights and the fire station's dispatch are carried by
+// link_tools.cpp; put away only when their routines differ.
 static const char* const kUncarriedTools[] = {
     "vehicle_", "worker_relocate", "building_addsource", "line_addstop", "second_road", "water_square",
     "bojka", "christmas_", "join_hub", "terrain_go_there", "building_addstation", "building_copyweights",
@@ -443,6 +445,8 @@ static void PutAwayUncarriedTool()
         if (strcmp(name, carried) == 0 && (RouteTools_Ready() || strncmp(name, "second_road", 11) == 0)) return;
     if (strcmp(name, "building_addsource") == 0 && SourceSlots_Ready()) return; // source_slots.cpp
     if ((strcmp(name, "building_addstation") == 0 || strcmp(name, "building_addstation_dist") == 0) && LinkTools_Ready())
+        return; // link_tools.cpp
+    if ((strcmp(name, "building_copyweights") == 0 || strcmp(name, "firestation_addfire") == 0) && LinkTools_PickReady())
         return; // link_tools.cpp
     bool trees = false;
     for (const char* prefix : kTreeTools) trees |= strncmp(name, prefix, strlen(prefix)) == 0;
