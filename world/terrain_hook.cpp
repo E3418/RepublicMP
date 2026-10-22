@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // See terrain_hook.h. Every hook records the call, then calls the original
 // engine function (the IAT value from before the patch) with the arguments
-// unchanged - except a synced edit that terrain_sync asks to swallow (a
-// remote road/building replay's own terrain work, see terrain_sync.h).
+// unchanged - except a tool's edit that became a lockstep command.
 // Recording never calls a hooked function and never lets an exception
 // escape into the game.
 #include "terrain_hook.h"
-#include "../../lockstep/commands.h"
-#include "../../core/profile.h"
+#include "../lockstep/commands.h"
+#include "../core/profile.h"
 #include <vector>
-#include "terrain_sync.h"
 #include <intrin.h>
 #pragma intrinsic(_ReturnAddress)
 
@@ -18,7 +16,7 @@
 #define TERRAIN_HOLDER_OFFSET 0xED8
 #define ACTIVE_TOOL_OFFSET 0xD428 // *(char**)(thisPtr+0xD428) = active tool name (FUN_14030d1a0 strcmp's it)
 
-volatile long g_terrainApplyingRemote = 0;
+volatile long g_terrainApplyingCommand = 0;
 
 static void LoadSettings();
 
@@ -157,7 +155,7 @@ struct AggSlot {
     unsigned long tid;
     long depthHeight; // Heightmap Open/Close nesting at the first call
     long depthMask;
-    long remote;      // g_terrainApplyingRemote at the first call
+    long remote;      // g_terrainApplyingCommand at the first call
     TerrainArgs first;
     TerrainArgs last;
 };
@@ -268,7 +266,7 @@ static void Record(int method, void* returnAddress, const TerrainArgs& args)
             FormatArgs(buf, sizeof(buf), args);
             Logf("republicmp  TERRAIN #%lld frame=%llu t=%.2fms %s caller=0x%llX %s tid=%lu depth(h=%ld m=%ld) remote=%ld %s",
                  seq, frame, NowMs(), kMethodNames[method], caller, CallerLabel(caller),
-                 GetCurrentThreadId(), g_depthHeight, g_depthMask, g_terrainApplyingRemote, buf);
+                 GetCurrentThreadId(), g_depthHeight, g_depthMask, g_terrainApplyingCommand, buf);
             return;
         }
 
@@ -289,7 +287,7 @@ static void Record(int method, void* returnAddress, const TerrainArgs& args)
             slot->tid = GetCurrentThreadId();
             slot->depthHeight = g_depthHeight;
             slot->depthMask = g_depthMask;
-            slot->remote = g_terrainApplyingRemote;
+            slot->remote = g_terrainApplyingCommand;
             slot->first = args;
         }
         slot->count++;
@@ -344,10 +342,9 @@ static VoidFn                o_RegenCollision;
 static VoidFn                o_RegenCollisionNormal;
 static SetHeightFn           o_SetTerrainHeight;
 
-// Synced edits go through BeginEdit/EndEdit. BeginEdit logs the call and
-// returns false when terrain_sync wants it swallowed; EndEdit hands an edit
-// that really ran locally to terrain_sync. Remote replays (g_terrainApplyingRemote)
-// always run and are never captured.
+// Synced edits go through BeginEdit. It logs the call and returns false when
+// the edit became a command (made at the next tick boundary instead). Edits a
+// command makes (g_terrainApplyingCommand) always run and are never taken.
 struct LsTerrainEdit {
     int method;
     TerrainArgs args;
@@ -356,21 +353,15 @@ static std::vector<LsTerrainEdit> g_lsTerrain; // main thread (the tools run in 
 
 static bool BeginEdit(int method, void* returnAddress, TerrainArgs& x)
 {
-    bool remote = g_terrainApplyingRemote != 0;
+    bool remote = g_terrainApplyingCommand != 0;
     if (!remote && Commands_TakeLocal()) {
         g_lsTerrain.push_back({ method, x });
         x.suppressed = 1;
         Record(method, returnAddress, x);
         return false;
     }
-    x.suppressed = (!remote && TerrainSync_SuppressLocalEdits()) ? 1 : 0;
     Record(method, returnAddress, x);
-    return !x.suppressed;
-}
-
-static void EndEdit(int method, const TerrainArgs& x)
-{
-    if (g_terrainApplyingRemote == 0) TerrainSync_CaptureEdit(method, x);
+    return true;
 }
 
 static void H_RaiseLower(void* t, const float* pos, float a, float b, float c, float d, bool e)
@@ -381,7 +372,6 @@ static void H_RaiseLower(void* t, const float* pos, float a, float b, float c, f
     x.b = e; x.hasB = 1;
     if (!BeginEdit(TM_RAISE_LOWER, _ReturnAddress(), x)) return;
     o_RaiseLower(t, pos, a, b, c, d, e);
-    EndEdit(TM_RAISE_LOWER, x);
 }
 
 static void H_RaiseLowerAngle(void* t, const float* pos, float a, float b, float c, float d, bool e, float g)
@@ -392,7 +382,6 @@ static void H_RaiseLowerAngle(void* t, const float* pos, float a, float b, float
     x.b = e; x.hasB = 1;
     if (!BeginEdit(TM_RAISE_LOWER_ANGLE, _ReturnAddress(), x)) return;
     o_RaiseLowerAngle(t, pos, a, b, c, d, e, g);
-    EndEdit(TM_RAISE_LOWER_ANGLE, x);
 }
 
 static float H_RaiseLowerAngleCost(void* t, const float* pos, float a, float b, float c, float d, bool e)
@@ -416,7 +405,6 @@ static void H_Smooth(void* t, const float* pos, float a, float b, float c, bool 
     x.b = e; x.hasB = 1;
     if (!BeginEdit(TM_SMOOTH, _ReturnAddress(), x)) return;
     o_Smooth(t, pos, a, b, c, e);
-    EndEdit(TM_SMOOTH, x);
 }
 
 static void H_Level(void* t, const float* pos, float a, float b, float c, bool e)
@@ -427,7 +415,6 @@ static void H_Level(void* t, const float* pos, float a, float b, float c, bool e
     x.b = e; x.hasB = 1;
     if (!BeginEdit(TM_LEVEL, _ReturnAddress(), x)) return;
     o_Level(t, pos, a, b, c, e);
-    EndEdit(TM_LEVEL, x);
 }
 
 static void H_ToHeight(void* t, const float* pos, const float* pos2, float a, float b, float c, bool e)
@@ -439,7 +426,6 @@ static void H_ToHeight(void* t, const float* pos, const float* pos2, float a, fl
     x.b = e; x.hasB = 1;
     if (!BeginEdit(TM_TO_HEIGHT, _ReturnAddress(), x)) return;
     o_ToHeight(t, pos, pos2, a, b, c, e);
-    EndEdit(TM_TO_HEIGHT, x);
 }
 
 static void H_SmoothLimits(void* t, const float* pos, float a, float b, float c, float d, float e,
@@ -463,7 +449,6 @@ static void H_Mask(void* t, const float* pos, int channel, float a, float b, int
     x.b = e; x.hasB = 1;
     if (!BeginEdit(TM_MASK, _ReturnAddress(), x)) return;
     o_Mask(t, pos, channel, a, b, i1, i2, e);
-    EndEdit(TM_MASK, x);
 }
 
 static void H_MaskGen(void* t, int ch, float a, float b, float c, float d, float e, float f)
@@ -597,13 +582,13 @@ bool TerrainHook_ApplyCommand(const void* data, size_t size)
     for (size_t i = 0; i < n; i++) needMask |= e[i].method == TM_MASK;
     bool needHeight = false;
     for (size_t i = 0; i < n; i++) needHeight |= e[i].method != TM_MASK;
-    InterlockedIncrement(&g_terrainApplyingRemote);
+    InterlockedIncrement(&g_terrainApplyingCommand);
     if (needHeight) TerrainHook_HeightmapOpen(terrain);
     if (needMask) TerrainHook_MaskOpen(terrain);
     for (size_t i = 0; i < n; i++) TerrainHook_ApplyEdit(terrain, e[i].method, e[i].args);
     if (needMask) TerrainHook_MaskClose(terrain);
     if (needHeight) TerrainHook_HeightmapClose(terrain);
-    InterlockedDecrement(&g_terrainApplyingRemote);
+    InterlockedDecrement(&g_terrainApplyingCommand);
     return true;
 }
 

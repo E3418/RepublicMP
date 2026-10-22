@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.7.0
+
+Co-op only, and the code reorganised for a second game mode. Protocol 44 -
+every player needs this build.
+
+- **Replay mode removed** - the old mode where each game simulated on its own
+  and actions were repeated on the other side (with ports 5557-5559, the
+  drift check and the timed re-sync) is gone; co-op runs in lockstep only.
+  Only TCP ports 5556 and 5560 are used.
+- **Start page** - the RepublicMP window opens on a choice of game: Co-op,
+  or Republics (each player their own republic on one map - in development).
+- **Code layout** - `world/` holds the actions made from data (buildings,
+  networks, terrain) and the hooks that capture the player's actions;
+  `modes/` is where a game mode plugs in its page, frame and overlay;
+  `api/republicmp_api.h` lists what a mode may use; ARCHITECTURE.md
+  describes the layers, how a command travels and the owner of every hook.
+
 ## 0.6.2
 
 Construction offices, copy tools, cursors and pings. Protocol 43 - every

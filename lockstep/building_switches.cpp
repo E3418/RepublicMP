@@ -4,7 +4,7 @@
 #include "building_switches.h"
 #include "commands.h"
 #include "world_refs.h"
-#include "../session/settings_sync.h"
+#include "building_settings.h"
 #include <string.h>
 #include <vector>
 
@@ -193,10 +193,10 @@ static bool InRanges(const WorldRange* list, size_t n, unsigned offset)
 static bool LeftOut(const Range& r, unsigned offset)
 {
     if (r.kind == KIND_BUILDING)
-        return SettingsSync_OwnsBuildingWord((const BYTE*)r.building, offset) ||
+        return BuildingSettings_OwnsBuildingWord((const BYTE*)r.building, offset) ||
                InRanges(kViewWords, sizeof(kViewWords) / sizeof(kViewWords[0]), offset);
     if (r.kind == KIND_SLOT)
-        return SettingsSync_OwnsSlotWord((const BYTE*)r.building, offset / SLOT_STRIDE, (offset % SLOT_STRIDE) / REGION_STRIDE,
+        return BuildingSettings_OwnsSlotWord((const BYTE*)r.building, offset / SLOT_STRIDE, (offset % SLOT_STRIDE) / REGION_STRIDE,
                                          offset % REGION_STRIDE);
     return false;
 }

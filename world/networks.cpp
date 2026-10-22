@@ -1,14 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// See road_sync.h for the overall design.
-#include "road_sync.h"
-#include "../../lockstep/commands.h"
-#include "../../transport/network.h"
-#include "../../ui/debug_log.h"
-#include "../local_builds.h" // LocalBuilds_IsToolDragActive, g_origRoadCommit
-#include "../terrain/terrain_sync.h"            // TerrainSync_Begin/EndForeignReplay
-#include "../../ui/sync_block.h"
-#include "../view_list_scope.h"
-#include "../replay_menus.h"
+// See networks.h for the overall design.
+#include "networks.h"
+#include "../lockstep/commands.h"
+#include "local_builds.h" // g_origRoadCommit
+#include "view_list_scope.h"
+#include "menus_closed.h"
 #include <intrin.h>
 #pragma intrinsic(_ReturnAddress)
 #include <vector>
@@ -17,11 +13,6 @@
 #include <stdarg.h>
 #include <string.h>
 #include <math.h>
-
-#pragma comment(lib, "User32.lib")
-
-// Set to 1 to log every transmitted/received point at full precision.
-#define ROAD_SYNC_VERBOSE_LOG 0
 
 // ---------------------------------------------------------------------------
 // Engine addresses (RVAs into SOVIET64.exe) and object offsets
@@ -57,7 +48,7 @@
 static const unsigned int kHoverPtrRvas[] = { 0x9E45E8, 0x9E4560, 0x9E4558, 0x9E45E0, 0x9E45D8,
                                               0x9E4590, 0x9E45A0 };
 #define HOVER_FLAG_RVA 0x9E45F8
-// The footpath tool's road link (see RoadSync_ReadFootpathLinks).
+// The footpath tool's road link (see Networks_ReadFootpathLinks).
 #define HOVER_ROAD_EDGE_RVA 0x9E4590   // road edge under the cursor
 #define HOVER_ROAD_POINT_RVA 0x9E4598  // int: its point the path would split it at
 #define HOVER_ROAD_NODE_RVA 0x9E45A0   // road node under the cursor
@@ -144,8 +135,8 @@ typedef void (*ManagerResetFn)(__int64 manager, __int64 state);
 // drive the primitives exactly like the footpath wrapper. Only the
 // factoryconnection_oneway mode (0x32) differs - it hit-tests existing
 // connections (FUN_140546db0) and changes their direction without a commit;
-// that travels as RoadSyncDirectionMsg.
-static RoadSyncCategoryInfo g_categories[ROAD_SYNC_CATEGORY_COUNT] = {
+// that travels as NetDirectionMsg.
+static NetCategoryInfo g_categories[NET_CATEGORY_COUNT] = {
     { "ROAD",        0xf7a0, true  },
     { "PIPE",        0xf858, true  },
     { "WATERPIPE",   0xfaf0, true  },
@@ -167,22 +158,22 @@ static RoadSyncCategoryInfo g_categories[ROAD_SYNC_CATEGORY_COUNT] = {
     { "SECOND_ROAD", 0xf7a8, true  },
 };
 
-static const unsigned int g_categoryWrapperRva[ROAD_SYNC_CATEGORY_COUNT] = {
+static const unsigned int g_categoryWrapperRva[NET_CATEGORY_COUNT] = {
     0x3D00F0, 0x3B0E60, 0x3B12B0, 0x3B4230, 0x3D4730, 0x3D68B0, 0x3B3820,
     0x3B8780, 0x3BAED0, 0x3AEC30, 0x3CBFA0, 0x3C9130, 0x3D6E70, 0x3CF6F0,
 };
 
-const RoadSyncCategoryInfo* RoadSync_GetCategoryInfo(int category)
+const NetCategoryInfo* Networks_GetCategoryInfo(int category)
 {
-    if (category < 0 || category >= ROAD_SYNC_CATEGORY_COUNT) return nullptr;
+    if (category < 0 || category >= NET_CATEGORY_COUNT) return nullptr;
     return &g_categories[category];
 }
 
-int RoadSync_CategoryForManager(__int64 thisPtr, __int64 manager)
+int Networks_CategoryForManager(__int64 thisPtr, __int64 manager)
 {
     if (!thisPtr || !manager) return -1;
     __try {
-        for (int c = 0; c < ROAD_SYNC_CATEGORY_COUNT; c++) {
+        for (int c = 0; c < NET_CATEGORY_COUNT; c++) {
             if (g_categories[c].enabled && *(__int64*)(thisPtr + g_categories[c].managerOffset) == manager)
                 return c;
         }
@@ -191,9 +182,9 @@ int RoadSync_CategoryForManager(__int64 thisPtr, __int64 manager)
     return -1;
 }
 
-int RoadSync_SegmentCount(__int64 thisPtr, int category)
+int Networks_SegmentCount(__int64 thisPtr, int category)
 {
-    if (category < 0 || category >= ROAD_SYNC_CATEGORY_COUNT || !thisPtr) return -1;
+    if (category < 0 || category >= NET_CATEGORY_COUNT || !thisPtr) return -1;
     __try {
         __int64 manager = *(__int64*)(thisPtr + g_categories[category].managerOffset);
         if (!manager) return -1;
@@ -207,8 +198,8 @@ int RoadSync_SegmentCount(__int64 thisPtr, int category)
 
 static const char* CategoryName(int category)
 {
-    if (category == ROAD_SYNC_GROUP_TOOL_CATEGORY) return "GROUP TOOL";
-    const RoadSyncCategoryInfo* info = RoadSync_GetCategoryInfo(category);
+    if (category == NET_GROUP_TOOL_CATEGORY) return "GROUP TOOL";
+    const NetCategoryInfo* info = Networks_GetCategoryInfo(category);
     return info ? info->name : "?";
 }
 
@@ -216,7 +207,7 @@ static const char* CategoryName(int category)
 // power-line wrappers, which pass the type id (fc040 compares it with 0x14).
 static int Fc040Param5ForCategory(int category, int typeId)
 {
-    if (category == ROAD_SYNC_CATEGORY_POWER_HIGH || category == ROAD_SYNC_CATEGORY_POWER_LOW)
+    if (category == NET_CATEGORY_POWER_HIGH || category == NET_CATEGORY_POWER_LOW)
         return typeId;
     return (int)0xffffffec;
 }
@@ -225,26 +216,11 @@ static int Fc040Param5ForCategory(int category, int typeId)
 // Module state and small helpers
 // ---------------------------------------------------------------------------
 
-static CRITICAL_SECTION g_queueLock;
 static volatile LONG g_applyingSegment = 0;
 
-void RoadSync_Bind(const TsmHost* host)
+void Networks_Bind(const TsmHost* host)
 {
     TsmBind(host);
-    InitializeCriticalSection(&g_queueLock);
-}
-
-// Logs to the file log and to the Debug window.
-static void RoadSyncStatus(const char* fmt, ...)
-{
-    char body[512];
-    va_list ap;
-    va_start(ap, fmt);
-    _vsnprintf_s(body, sizeof(body), _TRUNCATE, fmt, ap);
-    va_end(ap);
-
-    Logf("republicmp  ROAD_SYNC: %s", body);
-    DebugLog_Add(body);
 }
 
 static __int64 GetWorldThisPtr()
@@ -252,18 +228,7 @@ static __int64 GetWorldThisPtr()
     return (__int64)((uintptr_t)g_exe + UNIVERSAL_THIS_RVA);
 }
 
-static bool IsWorldLoaded()
-{
-    void** vecBeginPtr = (void**)((uintptr_t)g_exeBase + VEC_BUILDINGS_BEGIN_RVA);
-    void** vecEndPtr   = (void**)((uintptr_t)g_exeBase + VEC_BUILDINGS_END_RVA);
-    __try {
-        return (*vecBeginPtr != nullptr) && (*vecEndPtr != nullptr);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
-}
-
-bool RoadSync_IsApplyingSegment()
+bool Networks_IsApplyingCommand()
 {
     return InterlockedCompareExchange(&g_applyingSegment, 0, 0) != 0;
 }
@@ -294,7 +259,7 @@ static void HoverGlobals_Clear()
     }
 }
 
-void RoadSync_ClearHover()
+void Networks_ClearHover()
 {
     HoverGlobals_Clear();
     __try {
@@ -323,12 +288,12 @@ static __int64 FindLocalBuildingAt(const float pos[3])
 
 // Sets the hovered-port globals to the local copy of `port`'s building, or
 // clears them when the end is not on a building.
-static void SetHoveredPort(const RoadSyncBuildingPort& port, const char* which)
+static void SetHoveredPort(const NetBuildingPort& port, const char* which)
 {
     __int64 bld = 0;
     if (port.valid) {
         bld = FindLocalBuildingAt(port.bldPos);
-        Logf("republicmp  ROAD_SYNC:   %s port: building at (%.2f,%.2f,%.2f) port=%d -> %s",
+        Logf("republicmp  NETWORKS:   %s port: building at (%.2f,%.2f,%.2f) port=%d -> %s",
              which, port.bldPos[0], port.bldPos[1], port.bldPos[2], port.portIndex,
              bld ? "found" : "NOT FOUND (end left unconnected)");
     }
@@ -363,7 +328,7 @@ static bool NodeNear(__int64 node, const float pos[3])
 
 static bool IsPowerLine(int category)
 {
-    return category == ROAD_SYNC_CATEGORY_POWER_HIGH || category == ROAD_SYNC_CATEGORY_POWER_LOW;
+    return category == NET_CATEGORY_POWER_HIGH || category == NET_CATEGORY_POWER_LOW;
 }
 
 // The committed node of `network` the drag tick would take for an end at
@@ -401,7 +366,7 @@ static void CheckAttachedPowerNode(__int64 node, const float want[3], const char
     if (!node) return;
     const float* p = (const float*)(node + NODE_POS_OFFSET);
     if (fabsf(p[1] - want[1]) <= 0.5f) return;
-    Logf("republicmp  ROAD_SYNC:   WARNING %s node at (%.2f,%.2f,%.2f), the sender's at (%.2f,%.2f,%.2f) - put back",
+    Logf("republicmp  NETWORKS:   WARNING %s node at (%.2f,%.2f,%.2f), the sender's at (%.2f,%.2f,%.2f) - put back",
          which, p[0], p[1], p[2], want[0], want[1], want[2]);
     SetNodePos(node, want);
 }
@@ -434,7 +399,7 @@ static __int64 RoadNetwork()
 }
 
 // Caller wraps in __try.
-static void ReadLink(__int64 edge, int pointIndex, __int64 node, RoadSyncRoadLink& out)
+static void ReadLink(__int64 edge, int pointIndex, __int64 node, NetRoadLink& out)
 {
     memset(&out, 0, sizeof(out));
     __int64 roads = RoadNetwork();
@@ -457,11 +422,11 @@ static void ReadLink(__int64 edge, int pointIndex, __int64 node, RoadSyncRoadLin
     }
 }
 
-void RoadSync_ReadFootpathLinks(__int64 manager, int category, RoadSyncSegment& seg)
+void Networks_ReadFootpathLinks(__int64 manager, int category, NetSegment& seg)
 {
     memset(&seg.startLink, 0, sizeof(seg.startLink));
     memset(&seg.endLink, 0, sizeof(seg.endLink));
-    if (category != ROAD_SYNC_CATEGORY_PEDESTRIAN) return;
+    if (category != NET_CATEGORY_PEDESTRIAN) return;
     __try {
         ReadLink(*(__int64*)(manager + MGR_ROAD_LINK_OFFSET), *(int*)(manager + MGR_ROAD_LINK_POINT_OFFSET),
                  *(__int64*)(manager + MGR_ROAD_LINK_EXTRA_OFFSET), seg.startLink);
@@ -474,7 +439,7 @@ void RoadSync_ReadFootpathLinks(__int64 manager, int category, RoadSyncSegment& 
 }
 
 // The local road edge / node of a link, 0 if not here. Caller wraps in __try.
-static __int64 FindLinkEdge(const RoadSyncRoadLink& l)
+static __int64 FindLinkEdge(const NetRoadLink& l)
 {
     __int64 roads = RoadNetwork();
     if (!roads || !l.hasEdge) return 0;
@@ -492,7 +457,7 @@ static __int64 FindLinkEdge(const RoadSyncRoadLink& l)
     return 0;
 }
 
-static __int64 FindLinkNode(const RoadSyncRoadLink& l)
+static __int64 FindLinkNode(const NetRoadLink& l)
 {
     __int64 roads = RoadNetwork();
     if (!roads || !l.hasNode) return 0;
@@ -505,7 +470,7 @@ static __int64 FindLinkNode(const RoadSyncRoadLink& l)
 
 // Puts a link into the hover globals (what the footpath tool reads); false
 // if a part of it is not here (that part stays 0 - the end only touches).
-static bool SetRoadHover(const RoadSyncRoadLink& l, const char* which)
+static bool SetRoadHover(const NetRoadLink& l, const char* which)
 {
     if (!l.hasEdge && !l.hasNode) return true;
     __int64 edge = 0, node = 0;
@@ -520,7 +485,7 @@ static bool SetRoadHover(const RoadSyncRoadLink& l, const char* which)
         return false;
     }
     bool ok = (!l.hasEdge || edge) && (!l.hasNode || node);
-    Logf("republicmp  ROAD_SYNC:   %s joins a road: edge %s (point %d), node %s", which,
+    Logf("republicmp  NETWORKS:   %s joins a road: edge %s (point %d), node %s", which,
          !l.hasEdge ? "-" : edge ? "found" : "NOT FOUND", l.pointIndex,
          !l.hasNode ? "-" : node ? "found" : "NOT FOUND");
     return ok;
@@ -542,11 +507,11 @@ struct RawVectorHeader {
 // nodes with the same number of interior points and the same middle point
 // (either direction). Two different routes between the same nodes are both
 // kept.
-static bool SegmentBetweenNodesExists(const RoadSyncSegment& want)
+static bool SegmentBetweenNodesExists(const NetSegment& want)
 {
     const float* a = want.startNode;
     const float* b = want.endNode;
-    const RoadSyncCategoryInfo* info = RoadSync_GetCategoryInfo(want.category);
+    const NetCategoryInfo* info = Networks_GetCategoryInfo(want.category);
     if (!info) return false;
     __try {
         __int64 manager = *(__int64*)(GetWorldThisPtr() + info->managerOffset);
@@ -562,8 +527,8 @@ static bool SegmentBetweenNodesExists(const RoadSyncSegment& want)
             bool forward = NodeNear(n0, a) && NodeNear(n1, b);
             bool backward = NodeNear(n0, b) && NodeNear(n1, a);
             if (!forward && !backward) continue;
-            const RoadSyncPoint* pts = *(const RoadSyncPoint**)(seg + SEG_POINTS_BEGIN_OFFSET);
-            const RoadSyncPoint* pend = *(const RoadSyncPoint**)(seg + SEG_POINTS_END_OFFSET);
+            const NetPoint* pts = *(const NetPoint**)(seg + SEG_POINTS_BEGIN_OFFSET);
+            const NetPoint* pend = *(const NetPoint**)(seg + SEG_POINTS_END_OFFSET);
             int count = (pts && pend > pts) ? (int)(pend - pts) : 0;
             if (count != want.pointCount) continue;
             if (count == 0) return true;
@@ -578,11 +543,9 @@ static bool SegmentBetweenNodesExists(const RoadSyncSegment& want)
 }
 
 // Rebuilds `seg` on this machine through the tool's own primitives (see
-// road_sync.h). Returns false only if the replay threw; *outEngineAccepted is
+// networks.h). Returns false only if the replay threw; *outEngineAccepted is
 // the engine's verdict right before the commit (+0x315 valid, no error).
 // All spoofed input state is restored before returning.
-// Set by ApplySegmentImpl: the last replay threw inside the engine.
-static bool g_lastApplyThrew = false;
 
 // Margin around a replayed piece for the view-list scope (80 m around a
 // road, 150 m around a building).
@@ -607,29 +570,28 @@ static bool BeginScope(const ScopeBox& b, float margin)
     return b.any && ViewListScope_Begin(b.minX - margin, b.minZ - margin, b.maxX + margin, b.maxZ + margin);
 }
 
-static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAccepted);
+static bool ApplySegmentImplInner(const NetSegment& seg, bool* outEngineAccepted);
 
 // The replay sees the same "camera-visible" edges as the sender's does.
-static bool ApplySegmentImpl(const RoadSyncSegment& seg, bool* outEngineAccepted)
+static bool ApplySegmentImpl(const NetSegment& seg, bool* outEngineAccepted)
 {
     ScopeBox box = {};
     BoxAdd(box, seg.startNode);
     BoxAdd(box, seg.endNode);
-    for (int i = 0; i < seg.pointCount && i < ROAD_SYNC_MAX_POINTS; i++) BoxAdd(box, seg.points[i].pos);
+    for (int i = 0; i < seg.pointCount && i < NET_MAX_POINTS; i++) BoxAdd(box, seg.points[i].pos);
     bool scoped = BeginScope(box, SCOPE_ROAD_MARGIN);
     bool ok = ApplySegmentImplInner(seg, outEngineAccepted);
     if (scoped) ViewListScope_End();
     return ok;
 }
 
-static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAccepted)
+static bool ApplySegmentImplInner(const NetSegment& seg, bool* outEngineAccepted)
 {
     *outEngineAccepted = false;
-    g_lastApplyThrew = false;
 
-    const RoadSyncCategoryInfo* info = RoadSync_GetCategoryInfo(seg.category);
-    if (!info || !info->enabled || seg.pointCount < 0 || seg.pointCount > ROAD_SYNC_MAX_POINTS) {
-        Logf("republicmp  ROAD_SYNC: refusing segment category=%d points=%d", seg.category, seg.pointCount);
+    const NetCategoryInfo* info = Networks_GetCategoryInfo(seg.category);
+    if (!info || !info->enabled || seg.pointCount < 0 || seg.pointCount > NET_MAX_POINTS) {
+        Logf("republicmp  NETWORKS: refusing segment category=%d points=%d", seg.category, seg.pointCount);
         return false;
     }
 
@@ -645,11 +607,11 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
     if (!manager) {
-        Logf("republicmp  ROAD_SYNC: %s manager is null", info->name);
+        Logf("republicmp  NETWORKS: %s manager is null", info->name);
         return false;
     }
     if (ToolWrapperGuardBusy(thisPtr)) {
-        Logf("republicmp  ROAD_SYNC: tool wrapper guard set, not applying");
+        Logf("republicmp  NETWORKS: tool wrapper guard set, not applying");
         return false;
     }
 
@@ -662,7 +624,7 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
 
     __try {
         __try {
-            Logf("republicmp  ROAD_SYNC: applying %s type=%d variant=%d points=%d start=(%.2f,%.2f,%.2f) end=(%.2f,%.2f,%.2f)",
+            Logf("republicmp  NETWORKS: applying %s type=%d variant=%d points=%d start=(%.2f,%.2f,%.2f) end=(%.2f,%.2f,%.2f)",
                  info->name, seg.typeId, seg.variant, seg.pointCount,
                  seg.startNode[0], seg.startNode[1], seg.startNode[2],
                  seg.endNode[0], seg.endNode[1], seg.endNode[2]);
@@ -692,7 +654,7 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
             // fc040 is then re-run with fuzzy node matching so the start
             // attaches to the node already at this position. A footpath takes
             // its start's road link from the hover globals there.
-            if (seg.category == ROAD_SYNC_CATEGORY_PEDESTRIAN) SetRoadHover(seg.startLink, "start");
+            if (seg.category == NET_CATEGORY_PEDESTRIAN) SetRoadHover(seg.startLink, "start");
             SetHoveredPort(seg.startPort, "start");
             *(float*)(thisPtr + CURSOR_X_OFFSET) = seg.startNode[0];
             *(float*)(thisPtr + CURSOR_Y_OFFSET) = seg.startNode[1];
@@ -719,7 +681,7 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
             // copies it into its route buffer instead of routing itself, and
             // matches the end node against existing nodes within +-1m.
             SetHoveredPort(seg.endPort, "end");
-            if (seg.category == ROAD_SYNC_CATEGORY_PEDESTRIAN) {
+            if (seg.category == NET_CATEGORY_PEDESTRIAN) {
                 HoverGlobals_Clear();
                 SetRoadHover(seg.endLink, "end");
             }
@@ -745,12 +707,12 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
             else if (IsPowerLine(seg.category))
                 CheckAttachedPowerNode(*(__int64*)(manager + MGR_END_NODE_OFFSET), seg.endNode, "end");
             if (IsPowerLine(seg.category))
-                Logf("republicmp  ROAD_SYNC:   power line end: %s", endHoverNode ? "on an existing node (hovered)" : "free");
+                Logf("republicmp  NETWORKS:   power line end: %s", endHoverNode ? "on an existing node (hovered)" : "free");
 
             unsigned char valid = *(unsigned char*)(manager + MGR_VALID_OFFSET);
             int errCategory = *(int*)(manager + MGR_ERROR_CATEGORY_OFFSET);
             unsigned int errSubcode = *(unsigned int*)(manager + MGR_ERROR_SUBCODE_OFFSET);
-            Logf("republicmp  ROAD_SYNC:   attach start=%d end=%d valid=%d errCategory=%d errSubcode=0x%x",
+            Logf("republicmp  NETWORKS:   attach start=%d end=%d valid=%d errCategory=%d errSubcode=0x%x",
                  (int)*(unsigned char*)(manager + MGR_START_ATTACHED_OFFSET),
                  (int)*(unsigned char*)(manager + MGR_END_ATTACHED_OFFSET),
                  (int)valid, errCategory, errSubcode);
@@ -760,7 +722,7 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
             *lmbHeld = 0;
             wrapper(thisPtr, seg.typeId, (unsigned int)seg.variant);
             if (*(char*)(thisPtr + TOOL_DRAG_ACTIVE_OFFSET) != 0)
-                Logf("republicmp  ROAD_SYNC:   WARNING drag still active after release");
+                Logf("republicmp  NETWORKS:   WARNING drag still active after release");
             if (endHoverNode) *(long long*)((uintptr_t)g_exe + HOVER_NODE_RVA) = 0;
         } __finally {
             if (saved) {
@@ -775,15 +737,14 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
                 *(float*)(manager + MGR_RELAX_TIMER_OFFSET) = savedRelax;
             }
             ClearHoveredPort();
-            if (seg.category == ROAD_SYNC_CATEGORY_PEDESTRIAN) HoverGlobals_Clear();
+            if (seg.category == NET_CATEGORY_PEDESTRIAN) HoverGlobals_Clear();
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         threw = true;
     }
 
-    g_lastApplyThrew = threw;
     if (threw) {
-        Logf("republicmp  ROAD_SYNC: <exception applying segment>");
+        Logf("republicmp  NETWORKS: <exception applying segment>");
         *outEngineAccepted = false;
         // The release never reached the wrapper's own end of the drag
         // (0x3D6A3F: thisPtr+0xd2ac = 0). Left set, the per-frame tool code
@@ -796,23 +757,19 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
             *(long long*)(manager + MGR_ROAD_LINK_EXTRA_OFFSET) = 0;
             ((ManagerResetFn)((uintptr_t)g_exe + MANAGER_RESET_RVA))(manager, manager + MANAGER_RESET_STATE_OFFSET);
         } __except (EXCEPTION_EXECUTE_HANDLER) {
-            Logf("republicmp  ROAD_SYNC: resetting the tool after the exception threw too");
+            Logf("republicmp  NETWORKS: resetting the tool after the exception threw too");
         }
         HoverGlobals_Clear();
         return false;
     }
-    Logf("republicmp  ROAD_SYNC:   apply done - %s", *outEngineAccepted ? "engine ACCEPTED" : "engine REJECTED");
+    Logf("republicmp  NETWORKS:   apply done - %s", *outEngineAccepted ? "engine ACCEPTED" : "engine REJECTED");
     return true;
 }
 
-static bool ApplySegment(const RoadSyncSegment& seg, bool* outEngineAccepted)
+static bool ApplySegment(const NetSegment& seg, bool* outEngineAccepted)
 {
     InterlockedIncrement(&g_applyingSegment);
-    // The sender's terrain deformation arrives over terrain sync; the
-    // replay's own would apply it a second time.
-    TerrainSync_BeginForeignReplay();
     bool result = ApplySegmentImpl(seg, outEngineAccepted);
-    TerrainSync_EndForeignReplay();
     InterlockedDecrement(&g_applyingSegment);
     return result;
 }
@@ -823,7 +780,7 @@ static bool ApplySegment(const RoadSyncSegment& seg, bool* outEngineAccepted)
 
 // Local segment matching the piece by node positions and point count, in
 // either orientation. Caller wraps in __try.
-static __int64 FindLocalSegment(__int64 manager, const RoadSyncUpgradePiece& piece, bool* outReversed)
+static __int64 FindLocalSegment(__int64 manager, const NetPiece& piece, bool* outReversed)
 {
     __int64* it = *(__int64**)(manager + MGR_SEGMENTS_BEGIN_OFFSET);
     __int64* end = *(__int64**)(manager + MGR_SEGMENTS_END_OFFSET);
@@ -844,9 +801,9 @@ static __int64 FindLocalSegment(__int64 manager, const RoadSyncUpgradePiece& pie
 // Re-types one segment range: resets the manager with fc040, fills in the
 // fields the engine's own re-type drag leaves behind (fcaf0 lines 1864-1907)
 // and runs the commit, which takes its upgrade branch.
-static bool ApplyUpgradePieceInner(int category, const RoadSyncUpgradeMsg& msg, const RoadSyncUpgradePiece& piece);
+static bool ApplyUpgradePieceInner(int category, const NetUpgradeMsg& msg, const NetPiece& piece);
 
-static bool ApplyUpgradePiece(int category, const RoadSyncUpgradeMsg& msg, const RoadSyncUpgradePiece& piece)
+static bool ApplyUpgradePiece(int category, const NetUpgradeMsg& msg, const NetPiece& piece)
 {
     ScopeBox box = {};
     BoxAdd(box, piece.segStart);
@@ -857,9 +814,9 @@ static bool ApplyUpgradePiece(int category, const RoadSyncUpgradeMsg& msg, const
     return ok;
 }
 
-static bool ApplyUpgradePieceInner(int category, const RoadSyncUpgradeMsg& msg, const RoadSyncUpgradePiece& piece)
+static bool ApplyUpgradePieceInner(int category, const NetUpgradeMsg& msg, const NetPiece& piece)
 {
-    const RoadSyncCategoryInfo* info = RoadSync_GetCategoryInfo(category);
+    const NetCategoryInfo* info = Networks_GetCategoryInfo(category);
     __try {
         __int64 manager = *(__int64*)(GetWorldThisPtr() + info->managerOffset);
         if (!manager) return false;
@@ -867,7 +824,7 @@ static bool ApplyUpgradePieceInner(int category, const RoadSyncUpgradeMsg& msg, 
         bool reversed = false;
         __int64 seg = FindLocalSegment(manager, piece, &reversed);
         if (!seg) {
-            Logf("republicmp  ROAD_SYNC: upgrade: no local %s segment at start=(%.2f,%.2f,%.2f) end=(%.2f,%.2f,%.2f) points=%d",
+            Logf("republicmp  NETWORKS: upgrade: no local %s segment at start=(%.2f,%.2f,%.2f) end=(%.2f,%.2f,%.2f) points=%d",
                  info->name, piece.segStart[0], piece.segStart[1], piece.segStart[2],
                  piece.segEnd[0], piece.segEnd[1], piece.segEnd[2], piece.segPointCount);
             return false;
@@ -881,12 +838,12 @@ static bool ApplyUpgradePieceInner(int category, const RoadSyncUpgradeMsg& msg, 
             if (dir == 1) dir = 2; else if (dir == 2) dir = 1;
         }
         if (rs < -1 || re > count || rs >= re) {
-            Logf("republicmp  ROAD_SYNC: upgrade: bad range (%d,%d) for %d points", rs, re, count);
+            Logf("republicmp  NETWORKS: upgrade: bad range (%d,%d) for %d points", rs, re, count);
             return false;
         }
 
         // Range ends: a node or an interior point of the segment.
-        const RoadSyncPoint* pts = *(const RoadSyncPoint**)(seg + SEG_POINTS_BEGIN_OFFSET);
+        const NetPoint* pts = *(const NetPoint**)(seg + SEG_POINTS_BEGIN_OFFSET);
         const float* a = (rs < 0) ? (const float*)(*(__int64*)(seg + SEG_NODE0_OFFSET) + NODE_POS_OFFSET) : pts[rs].pos;
         const float* b = (re >= count) ? (const float*)(*(__int64*)(seg + SEG_NODE1_OFFSET) + NODE_POS_OFFSET) : pts[re].pos;
         float splitStart[3] = { a[0], a[1], a[2] };
@@ -917,7 +874,7 @@ static bool ApplyUpgradePieceInner(int category, const RoadSyncUpgradeMsg& msg, 
         *(int*)(manager + MGR_VARIANT_OFFSET) = msg.newVariant;
         *(int*)(manager + MGR_FLAG_5C4_OFFSET) = msg.flag5c4;
 
-        Logf("republicmp  ROAD_SYNC: %s %s%s range=(%d,%d)/%d type %d/%d -> %d/%d type394=%d dir=%d",
+        Logf("republicmp  NETWORKS: %s %s%s range=(%d,%d)/%d type %d/%d -> %d/%d type394=%d dir=%d",
              piece.oldType == 0x65 ? "DEMOLISH" : "upgrade",
              info->name, reversed ? " (reversed)" : "", rs, re, count,
              *(int*)(seg + SEG_TYPE_OFFSET), *(int*)(seg + SEG_VARIANT_OFFSET), msg.newType, msg.newVariant,
@@ -927,29 +884,27 @@ static bool ApplyUpgradePieceInner(int category, const RoadSyncUpgradeMsg& msg, 
         commit(manager, 0, 0, 0, 0, 0, 0);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        Logf("republicmp  ROAD_SYNC: <exception applying upgrade piece>");
+        Logf("republicmp  NETWORKS: <exception applying upgrade piece>");
         return false;
     }
 }
 
 // Returns the number of pieces applied.
-static int ApplyUpgrade(const RoadSyncUpgradeMsg& msg)
+static int ApplyUpgrade(const NetUpgradeMsg& msg)
 {
-    const RoadSyncCategoryInfo* info = RoadSync_GetCategoryInfo(msg.category);
-    if (!info || !info->enabled || msg.pieceCount < 1 || msg.pieceCount > ROAD_SYNC_MAX_UPGRADE_PIECES) {
-        Logf("republicmp  ROAD_SYNC: refusing upgrade seq=%d category=%d pieces=%d", msg.seq, msg.category, msg.pieceCount);
+    const NetCategoryInfo* info = Networks_GetCategoryInfo(msg.category);
+    if (!info || !info->enabled || msg.pieceCount < 1 || msg.pieceCount > NET_MAX_UPGRADE_PIECES) {
+        Logf("republicmp  NETWORKS: refusing upgrade category=%d pieces=%d", msg.category, msg.pieceCount);
         return 0;
     }
     if (ToolWrapperGuardBusy(GetWorldThisPtr())) return 0;
 
     HoverGlobals_Clear();
     InterlockedIncrement(&g_applyingSegment);
-    TerrainSync_BeginForeignReplay();
     int applied = 0;
     for (int i = 0; i < msg.pieceCount; i++) {
         if (ApplyUpgradePiece(msg.category, msg, msg.pieces[i])) applied++;
     }
-    TerrainSync_EndForeignReplay();
     InterlockedDecrement(&g_applyingSegment);
     return applied;
 }
@@ -962,8 +917,8 @@ static int ApplyUpgrade(const RoadSyncUpgradeMsg& msg)
 // node, an interior point index, or -2 if it is none of them.
 static int IndexOnSegment(__int64 seg, const float pos[3])
 {
-    const RoadSyncPoint* pts = *(const RoadSyncPoint**)(seg + SEG_POINTS_BEGIN_OFFSET);
-    const RoadSyncPoint* end = *(const RoadSyncPoint**)(seg + SEG_POINTS_END_OFFSET);
+    const NetPoint* pts = *(const NetPoint**)(seg + SEG_POINTS_BEGIN_OFFSET);
+    const NetPoint* end = *(const NetPoint**)(seg + SEG_POINTS_END_OFFSET);
     int count = (pts && end > pts) ? (int)(end - pts) : 0;
     __int64 n0 = *(__int64*)(seg + SEG_NODE0_OFFSET);
     __int64 n1 = *(__int64*)(seg + SEG_NODE1_OFFSET);
@@ -1023,7 +978,7 @@ static void EnsureDragNode(__int64 manager, int nodeOffset)
     if (!raw) return;
     __int64 node = ((NodeCtorFn)((uintptr_t)g_exe + NODE_CTOR_RVA))(raw);
     *(__int64*)(manager + nodeOffset) = node;
-    Logf("republicmp  ROAD_SYNC:   made the manager's %s drag node for the demolition", nodeOffset == MGR_START_NODE_OFFSET ? "start" : "end");
+    Logf("republicmp  NETWORKS:   made the manager's %s drag node for the demolition", nodeOffset == MGR_START_NODE_OFFSET ? "start" : "end");
 }
 
 static void DetachDragNode(__int64 manager, int nodeOffset, int attachedOffset, const float target[3])
@@ -1039,7 +994,7 @@ static void DetachDragNode(__int64 manager, int nodeOffset, int attachedOffset, 
     memcpy((void*)(fresh + NODE_POS_OFFSET), p, 12);
     *(__int64*)(manager + nodeOffset) = fresh;
     *(unsigned char*)(manager + attachedOffset) = 0;
-    Logf("republicmp  ROAD_SYNC:   the cut's %s held the segment's own node at (%.2f,%.2f,%.2f) - a fresh node takes its place",
+    Logf("republicmp  NETWORKS:   the cut's %s held the segment's own node at (%.2f,%.2f,%.2f) - a fresh node takes its place",
          nodeOffset == MGR_START_NODE_OFFSET ? "start" : "end", p[0], p[1], p[2]);
 }
 
@@ -1049,7 +1004,7 @@ static void DetachDragNode(__int64 manager, int nodeOffset, int attachedOffset, 
 // same state the upgrade replay builds). If the range is on another segment
 // of the same type, that segment is cut instead. Returns false if the
 // sender's range was not found (nothing is changed then).
-static bool AdoptSenderRange(__int64 manager, const RoadSyncDemolishMsg& m, int* engineRs, int* engineRe,
+static bool AdoptSenderRange(__int64 manager, const NetDemolishMsg& m, int* engineRs, int* engineRe,
                              int* rsOut, int* reOut)
 {
     __int64 seg = *(__int64*)(manager + MGR_UPG_SEGMENT_OFFSET);
@@ -1075,8 +1030,8 @@ static bool AdoptSenderRange(__int64 manager, const RoadSyncDemolishMsg& m, int*
         switched = true; // written to +0x380 only once the range is accepted
     }
     int rs = a < b ? a : b, re = a < b ? b : a;
-    const RoadSyncPoint* pts = *(const RoadSyncPoint**)(seg + SEG_POINTS_BEGIN_OFFSET);
-    int count = (int)(*(const RoadSyncPoint**)(seg + SEG_POINTS_END_OFFSET) - pts);
+    const NetPoint* pts = *(const NetPoint**)(seg + SEG_POINTS_BEGIN_OFFSET);
+    int count = (int)(*(const NetPoint**)(seg + SEG_POINTS_END_OFFSET) - pts);
     if (!switched && rs == *engineRs && re == *engineRe) return true; // same piece - nothing to change
     // A cut at the first/last interior point would leave a stub between it
     // and the node with no points at all; the game's frame code reads the
@@ -1117,11 +1072,11 @@ static bool AdoptSenderRange(__int64 manager, const RoadSyncDemolishMsg& m, int*
 // manager's preview state (as the tool does every frame), let fcaf0 pick the
 // piece under the cursor, and commit if it found one. outRemoved = the engine
 // armed and ran the commit.
-static bool ApplyDemolishInner(const RoadSyncDemolishMsg& m, bool* outRemoved);
+static bool ApplyDemolishInner(const NetDemolishMsg& m, bool* outRemoved);
 
 // The pick finds the piece wherever this player's camera is.
 // Lockstep: the hovered node / edge a hover demolition carries (main thread, during its apply).
-static const RoadSyncDemolishHover* g_applyHover = nullptr;
+static const NetDemolishHover* g_applyHover = nullptr;
 static const unsigned kHoverNodeRvas[2] = { 0x9E4560, 0x9E45E0 };
 static const unsigned kHoverEdgeRvas[2] = { 0x9E4558, 0x9E45D8 };
 
@@ -1135,7 +1090,7 @@ static int EdgePointCount(__int64 edge)
     return (int)((*(__int64*)(edge + SEG_POINTS_END_OFFSET) - *(__int64*)(edge + SEG_POINTS_BEGIN_OFFSET)) / 0x18);
 }
 
-bool RoadSync_ReadDemolishHover(__int64 manager, RoadSyncDemolishHover* h)
+bool Networks_ReadDemolishHover(__int64 manager, NetDemolishHover* h)
 {
     memset(h, 0, sizeof(*h));
     __try {
@@ -1171,7 +1126,7 @@ bool RoadSync_ReadDemolishHover(__int64 manager, RoadSyncDemolishHover* h)
 }
 
 // Sets this PC's hovered node / edge to the carried ones (after the replay cleared them).
-static void ApplyHoverRefs(__int64 manager, const RoadSyncDemolishHover& h)
+static void ApplyHoverRefs(__int64 manager, const NetDemolishHover& h)
 {
     __int64* begin = *(__int64**)(manager + MGR_SEGMENTS_BEGIN_OFFSET);
     __int64* end = *(__int64**)(manager + MGR_SEGMENTS_END_OFFSET);
@@ -1191,19 +1146,19 @@ static void ApplyHoverRefs(__int64 manager, const RoadSyncDemolishHover& h)
     }
     if (node) *(__int64*)((uintptr_t)g_exe + kHoverNodeRvas[h.nodeKind - 1]) = node;
     if (edge) *(__int64*)((uintptr_t)g_exe + kHoverEdgeRvas[h.edgeKind - 1]) = edge;
-    Logf("republicmp  ROAD_SYNC:   hover demolition: node %s, edge %s", !h.nodeKind ? "none" : node ? "found" : "MISSING",
+    Logf("republicmp  NETWORKS:   hover demolition: node %s, edge %s", !h.nodeKind ? "none" : node ? "found" : "MISSING",
          !h.edgeKind ? "none" : edge ? "found" : "MISSING");
 }
 
-bool RoadSync_ApplyCommandDemolishHover(const LsDemolishHoverMsg& msg)
+bool Networks_ApplyCommandDemolishHover(const NetDemolishHoverMsg& msg)
 {
     g_applyHover = &msg.hover;
-    bool ok = RoadSync_ApplyCommandDemolish(msg.m);
+    bool ok = Networks_ApplyCommandDemolish(msg.m);
     g_applyHover = nullptr;
     return ok;
 }
 
-static bool ApplyDemolish(const RoadSyncDemolishMsg& m, bool* outRemoved)
+static bool ApplyDemolish(const NetDemolishMsg& m, bool* outRemoved)
 {
     ScopeBox box = {};
     BoxAdd(box, m.cursor);
@@ -1214,14 +1169,14 @@ static bool ApplyDemolish(const RoadSyncDemolishMsg& m, bool* outRemoved)
     return ok;
 }
 
-static bool ApplyDemolishInner(const RoadSyncDemolishMsg& m, bool* outRemoved)
+static bool ApplyDemolishInner(const NetDemolishMsg& m, bool* outRemoved)
 {
     *outRemoved = false;
     int engineRs = 0, engineRe = 0, rs = 0, re = 0;
     bool adopted = false, viaNode = false, direct = false;
-    const RoadSyncCategoryInfo* info = RoadSync_GetCategoryInfo(m.category);
+    const NetCategoryInfo* info = Networks_GetCategoryInfo(m.category);
     if (!info || !info->enabled) {
-        Logf("republicmp  ROAD_SYNC: refusing demolish category=%d", m.category);
+        Logf("republicmp  NETWORKS: refusing demolish category=%d", m.category);
         return false;
     }
     __int64 thisPtr = GetWorldThisPtr();
@@ -1235,7 +1190,6 @@ static bool ApplyDemolishInner(const RoadSyncDemolishMsg& m, bool* outRemoved)
 
     bool threw = false;
     InterlockedIncrement(&g_applyingSegment);
-    TerrainSync_BeginForeignReplay();
     __try {
         __int64 manager = *(__int64*)(thisPtr + info->managerOffset);
         if (manager) {
@@ -1260,8 +1214,8 @@ static bool ApplyDemolishInner(const RoadSyncDemolishMsg& m, bool* outRemoved)
                     if (seg) {
                         int ia = IndexOnSegment(seg, m.rangeA), ib = IndexOnSegment(seg, m.rangeB);
                         int lo = ia < ib ? ia : ib, hi = ia < ib ? ib : ia;
-                        const RoadSyncPoint* pb = *(const RoadSyncPoint**)(seg + SEG_POINTS_BEGIN_OFFSET);
-                        const RoadSyncPoint* pe = *(const RoadSyncPoint**)(seg + SEG_POINTS_END_OFFSET);
+                        const NetPoint* pb = *(const NetPoint**)(seg + SEG_POINTS_BEGIN_OFFSET);
+                        const NetPoint* pe = *(const NetPoint**)(seg + SEG_POINTS_END_OFFSET);
                         int count = (pb && pe > pb) ? (int)(pe - pb) : 0;
                         // The node the piece touches (node 0 for an interior piece)
                         // first, then the other end: a building's whole access
@@ -1310,9 +1264,9 @@ static bool ApplyDemolishInner(const RoadSyncDemolishMsg& m, bool* outRemoved)
                         if (seg) {
                             const float* n0 = (const float*)(*(__int64*)(seg + SEG_NODE0_OFFSET) + NODE_POS_OFFSET);
                             const float* n1 = (const float*)(*(__int64*)(seg + SEG_NODE1_OFFSET) + NODE_POS_OFFSET);
-                            const RoadSyncPoint* pb = *(const RoadSyncPoint**)(seg + SEG_POINTS_BEGIN_OFFSET);
-                            const RoadSyncPoint* pe = *(const RoadSyncPoint**)(seg + SEG_POINTS_END_OFFSET);
-                            Logf("republicmp  ROAD_SYNC:   fallback segment (%.2f,%.2f,%.2f)-(%.2f,%.2f,%.2f) %d point(s), cut (%d,%d); sender's piece (%.2f,%.2f,%.2f)-(%.2f,%.2f,%.2f)",
+                            const NetPoint* pb = *(const NetPoint**)(seg + SEG_POINTS_BEGIN_OFFSET);
+                            const NetPoint* pe = *(const NetPoint**)(seg + SEG_POINTS_END_OFFSET);
+                            Logf("republicmp  NETWORKS:   fallback segment (%.2f,%.2f,%.2f)-(%.2f,%.2f,%.2f) %d point(s), cut (%d,%d); sender's piece (%.2f,%.2f,%.2f)-(%.2f,%.2f,%.2f)",
                                  n0[0], n0[1], n0[2], n1[0], n1[1], n1[2], (pb && pe > pb) ? (int)(pe - pb) : 0,
                                  *(int*)(manager + MGR_UPG_RANGE_START_OFFSET), *(int*)(manager + MGR_UPG_RANGE_END_OFFSET),
                                  m.rangeA[0], m.rangeA[1], m.rangeA[2], m.rangeB[0], m.rangeB[1], m.rangeB[2]);
@@ -1337,40 +1291,36 @@ static bool ApplyDemolishInner(const RoadSyncDemolishMsg& m, bool* outRemoved)
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         threw = true;
     }
-    TerrainSync_EndForeignReplay();
     InterlockedDecrement(&g_applyingSegment);
-    if (threw) Logf("republicmp  ROAD_SYNC: <exception applying demolish>");
+    if (threw) Logf("republicmp  NETWORKS: <exception applying demolish>");
     else if (*outRemoved) {
         if (direct)
-            Logf("republicmp  ROAD_SYNC:   not picked at the cursor or its nodes - armed directly on the piece");
+            Logf("republicmp  NETWORKS:   not picked at the cursor or its nodes - armed directly on the piece");
         else if (viaNode)
-            Logf("republicmp  ROAD_SYNC:   nothing picked at the cursor - armed through the piece's node");
+            Logf("republicmp  NETWORKS:   nothing picked at the cursor - armed through the piece's node");
         if (!m.hasRange)
-            Logf("republicmp  ROAD_SYNC:   range (%d,%d) chosen here (sender sent no range)", engineRs, engineRe);
+            Logf("republicmp  NETWORKS:   range (%d,%d) chosen here (sender sent no range)", engineRs, engineRe);
         else if (!adopted)
-            Logf("republicmp  ROAD_SYNC:   sender's range is not on the segment here - kept this engine's (%d,%d)",
+            Logf("republicmp  NETWORKS:   sender's range is not on the segment here - kept this engine's (%d,%d)",
                  engineRs, engineRe);
         else if (rs != engineRs || re != engineRe)
-            Logf("republicmp  ROAD_SYNC:   range (%d,%d) -> sender's (%d,%d)", engineRs, engineRe, rs, re);
+            Logf("republicmp  NETWORKS:   range (%d,%d) -> sender's (%d,%d)", engineRs, engineRe, rs, re);
         else
-            Logf("republicmp  ROAD_SYNC:   range (%d,%d) = sender's", rs, re);
+            Logf("republicmp  NETWORKS:   range (%d,%d) = sender's", rs, re);
     }
     return !threw;
 }
 
-static void SendAck(int seq, int category, bool success, int attempts);
-
 // Multi-segment demolish: each whole segment found here by its nodes is
 // demolished on its own - cursor on its middle, range node to node.
-static bool ApplyDemolishPieces(const RoadSyncDemolishMsg& m, bool* outRemoved)
+static bool ApplyDemolishPieces(const NetDemolishMsg& m, bool* outRemoved)
 {
     *outRemoved = false;
-    const RoadSyncCategoryInfo* info = RoadSync_GetCategoryInfo(m.category);
+    const NetCategoryInfo* info = Networks_GetCategoryInfo(m.category);
     if (!info || !info->enabled) return false;
     bool ok = true;
     for (int i = 0; i < m.pieceCount && i < 8; i++) {
-        RoadSyncDemolishMsg one = {};
-        one.seq = m.seq;
+        NetDemolishMsg one = {};
         one.category = m.category;
         bool found = false;
         __try {
@@ -1378,8 +1328,8 @@ static bool ApplyDemolishPieces(const RoadSyncDemolishMsg& m, bool* outRemoved)
             bool reversed = false;
             __int64 seg = manager ? FindLocalSegment(manager, m.pieces[i], &reversed) : 0;
             if (seg) {
-                const RoadSyncPoint* pts = *(const RoadSyncPoint**)(seg + SEG_POINTS_BEGIN_OFFSET);
-                const RoadSyncPoint* pend = *(const RoadSyncPoint**)(seg + SEG_POINTS_END_OFFSET);
+                const NetPoint* pts = *(const NetPoint**)(seg + SEG_POINTS_BEGIN_OFFSET);
+                const NetPoint* pend = *(const NetPoint**)(seg + SEG_POINTS_END_OFFSET);
                 int count = (pts && pend > pts) ? (int)(pend - pts) : 0;
                 const float* n0 = (const float*)(*(__int64*)(seg + SEG_NODE0_OFFSET) + NODE_POS_OFFSET);
                 const float* n1 = (const float*)(*(__int64*)(seg + SEG_NODE1_OFFSET) + NODE_POS_OFFSET);
@@ -1393,7 +1343,7 @@ static bool ApplyDemolishPieces(const RoadSyncDemolishMsg& m, bool* outRemoved)
         } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
         if (!found) {
-            Logf("republicmp  ROAD_SYNC:   demolish piece %d: no local segment (start=(%.2f,%.2f,%.2f) end=(%.2f,%.2f,%.2f) points=%d)",
+            Logf("republicmp  NETWORKS:   demolish piece %d: no local segment (start=(%.2f,%.2f,%.2f) end=(%.2f,%.2f,%.2f) points=%d)",
                  i, m.pieces[i].segStart[0], m.pieces[i].segStart[1], m.pieces[i].segStart[2],
                  m.pieces[i].segEnd[0], m.pieces[i].segEnd[1], m.pieces[i].segEnd[2], m.pieces[i].segPointCount);
             continue;
@@ -1405,698 +1355,8 @@ static bool ApplyDemolishPieces(const RoadSyncDemolishMsg& m, bool* outRemoved)
     return ok;
 }
 
-// True if the piece the sender demolished is still in this network's
-// committed edges.
-// The local segment of the piece the sender demolished, or 0 if it is gone.
-static __int64 FindDemolishPiece(const RoadSyncDemolishMsg& m)
-{
-    const RoadSyncCategoryInfo* info = RoadSync_GetCategoryInfo(m.category);
-    if (!info) return 0;
-    __try {
-        __int64 manager = *(__int64*)(GetWorldThisPtr() + info->managerOffset);
-        if (!manager) return 0;
-        if (m.pieceCount > 0) {
-            for (int i = 0; i < m.pieceCount && i < 8; i++) {
-                bool reversed = false;
-                __int64 seg = FindLocalSegment(manager, m.pieces[i], &reversed);
-                if (seg) return seg;
-            }
-            return 0;
-        }
-        return m.hasRange ? FindSegmentWithRange(manager, m.rangeA, m.rangeB) : 0;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 0;
-    }
-}
-
-static bool DemolishPieceStillHere(const RoadSyncDemolishMsg& m)
-{
-    return FindDemolishPiece(m) != 0;
-}
-
-// The building a segment belongs to (segment +0x138, e.g. the building whose
-// access road it is). The demolish tool skips a segment whose owner is being
-// demolished (owner +0xea8 set - fcaf0 at 0x4FE0B3): a piece next to a
-// building the other PC is still pulling down cannot be picked until that
-// demolition is over. Fills owner details for the log.
-#define SEG_OWNER_OFFSET 0x138
-#define OWNER_DEMOLISHING_OFFSET 0xea8
-#define OWNER_PROGRESS_OFFSET 0x604
-#define OWNER_POS_OFFSET 0x350
-
-struct PieceOwner {
-    bool has;
-    bool demolishing;
-    float pos[3];
-    float progress;
-};
-
-// One line with a segment's state words, to compare a piece the demolish
-// tool will not pick with one it does.
-static void LogSegmentState(const char* what, __int64 seg)
-{
-    __try {
-        Logf("republicmp  ROAD_SYNC:   %s: type %d variant %d +128=%d +129=%d planned(+140)=%d kind(+12c)=%d owner(+138)=%p points=%d",
-             what, *(int*)(seg + 0x120), *(int*)(seg + 0x124), (int)*(unsigned char*)(seg + 0x128),
-             (int)*(unsigned char*)(seg + 0x129), (int)*(unsigned char*)(seg + 0x140), *(int*)(seg + 0x12c),
-             *(void**)(seg + 0x138),
-             (int)((*(__int64*)(seg + SEG_POINTS_END_OFFSET) - *(__int64*)(seg + SEG_POINTS_BEGIN_OFFSET)) / 0x18));
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-    }
-}
-
-static PieceOwner ReadPieceOwner(__int64 seg)
-{
-    PieceOwner o = {};
-    __try {
-        __int64 owner = seg ? *(__int64*)(seg + SEG_OWNER_OFFSET) : 0;
-        if (!owner) return o;
-        o.has = true;
-        o.demolishing = *(unsigned char*)(owner + OWNER_DEMOLISHING_OFFSET) != 0;
-        memcpy(o.pos, (const float*)(owner + OWNER_POS_OFFSET), 12);
-        o.progress = *(float*)(owner + OWNER_PROGRESS_OFFSET);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        o.has = false;
-    }
-    return o;
-}
-
-// Outcome of one try at a remote demolition.
-enum DemolishOutcome {
-    DEMOLISH_DONE,       // removed, gone already, or failed - acked
-    DEMOLISH_RETRY,      // not picked although still here - try again shortly
-    DEMOLISH_WAIT_OWNER  // its building is still being demolished here - wait for that
-};
-
-// DEMOLISH_RETRY: in a batch of demolitions the neighbouring one, applied in
-// the same frame, has just changed the junction, and the game settles it
-// only in its next frame. DEMOLISH_WAIT_OWNER: see ReadPieceOwner.
-static DemolishOutcome ApplyDemolishAndAck(const RoadSyncDemolishMsg& m, bool lastTry, bool ownerWaitOver)
-{
-    bool removed = false;
-    bool ok = m.pieceCount > 0 ? ApplyDemolishPieces(m, &removed) : ApplyDemolish(m, &removed);
-    const char* result;
-    bool success;
-    if (!ok) {
-        result = "FAILED";
-        success = false;
-    } else if (removed) {
-        result = "removed";
-        success = true;
-    } else if (!DemolishPieceStillHere(m)) {
-        result = "already gone here";
-        success = true;
-    } else {
-        PieceOwner owner = ReadPieceOwner(FindDemolishPiece(m));
-        if (owner.demolishing && !ownerWaitOver) {
-            if (!lastTry) // logged once, on the first try
-                Logf("republicmp  ROAD_SYNC: demolish seq=%d %s at (%.2f,%.2f,%.2f) - its building at (%.1f,%.1f) is still being demolished here - waiting for it",
-                     m.seq, CategoryName(m.category), m.cursor[0], m.cursor[1], m.cursor[2], owner.pos[0], owner.pos[2]);
-            return DEMOLISH_WAIT_OWNER;
-        }
-        if (!lastTry) {
-            Logf("republicmp  ROAD_SYNC: demolish seq=%d %s at (%.2f,%.2f,%.2f) - not picked, the piece is still here - trying again",
-                 m.seq, CategoryName(m.category), m.cursor[0], m.cursor[1], m.cursor[2]);
-            return DEMOLISH_RETRY;
-        }
-        LogSegmentState("the piece", FindDemolishPiece(m));
-        if (owner.has)
-            Logf("republicmp  ROAD_SYNC:   the piece belongs to a building at (%.1f,%.1f): %s, progress %.2f",
-                 owner.pos[0], owner.pos[2], owner.demolishing ? "still being demolished" : "not being demolished",
-                 owner.progress);
-        result = "NOT removed - the piece is still here";
-        success = false;
-    }
-    Logf("republicmp  ROAD_SYNC: demolish seq=%d %s at (%.2f,%.2f,%.2f) - %s", m.seq, CategoryName(m.category),
-         m.cursor[0], m.cursor[1], m.cursor[2], result);
-    SendAck(m.seq, m.category, success, 1);
-    return DEMOLISH_DONE;
-}
-
-bool RoadSync_SegmentExists(const RoadSyncSegment& seg)
-{
-    return SegmentBetweenNodesExists(seg);
-}
-
-bool RoadSync_ApplySegmentForBuild(const RoadSyncSegment& seg)
-{
-    if (SegmentBetweenNodesExists(seg)) {
-        Logf("republicmp  ROAD_SYNC: access road %s already exists here - skipped", CategoryName(seg.category));
-        return true;
-    }
-    bool accepted = false;
-    ApplySegment(seg, &accepted);
-    return accepted;
-}
-
 // ---------------------------------------------------------------------------
-// Connection
-// ---------------------------------------------------------------------------
-
-// One queued/received unit of work; segments and upgrades share one ordered
-// stream so an upgrade never overtakes the segment it re-types.
-struct RoadSyncItem {
-    int tag; // ROAD_SYNC_WIRE_SEGMENT, _UPGRADE, _DEMOLISH or _DIRECTION
-    RoadSyncMsg seg;
-    RoadSyncUpgradeMsg up;
-    RoadSyncDemolishMsg dem;
-    RoadSyncDirectionMsg dir;
-    RoadSyncPlanStartMsg plan;
-    RoadSyncGroupToolMsg group;
-    int attempts;                // demolish: tries so far
-    unsigned long long notBeforeMs; // demolish: GetTickCount64() of the next try
-    unsigned long long waitSinceMs; // demolish: waiting for its building's demolition since
-};
-
-#define DEMOLISH_MAX_ATTEMPTS 4
-#define DEMOLISH_RETRY_MS 250
-// A piece whose building is still being demolished here waits aside (the
-// queue goes on), checked every DEMOLISH_OWNER_POLL_MS for up to
-// DEMOLISH_OWNER_WAIT_MS - the other PC's demolition sites work at their
-// own pace.
-#define DEMOLISH_OWNER_POLL_MS 1000
-#define DEMOLISH_OWNER_WAIT_MS 180000
-static std::vector<RoadSyncItem> g_waitingDemolish;
-
-static volatile bool g_connected = false;
-static volatile bool g_connecting = false;
-// Set by Reset to abandon a pending accept/connect (polled every ~200ms).
-static volatile bool g_cancelConnect = false;
-static volatile bool g_isHost = false;
-static SOCKET g_sock = INVALID_SOCKET;
-static char g_targetIp[64] = ROAD_SYNC_TEST_HOST_IP;
-static std::vector<RoadSyncItem> g_incoming;          // receive thread -> game thread
-static std::vector<RoadSyncAckMsg> g_incomingAcks;    // receive thread -> game thread
-
-static void CloseConnection()
-{
-    g_connected = false;
-    NetworkCloseSocket(g_sock);
-    g_sock = INVALID_SOCKET;
-}
-
-static bool SendEnvelope(int tag, const void* payload, size_t payloadSize)
-{
-    if (!NetworkSendExact(g_sock, &tag, sizeof(tag))) return false;
-    return NetworkSendExact(g_sock, payload, payloadSize);
-}
-
-static void LogSegmentPoints(const char* label, int seq, const RoadSyncSegment& seg)
-{
-#if ROAD_SYNC_VERBOSE_LOG
-    for (int i = 0; i < seg.pointCount; i++) {
-        Logf("republicmp  ROAD_SYNC:   %s[seq=%d][%d] x=%.9g y=%.9g z=%.9g", label, seq, i,
-             seg.points[i].pos[0], seg.points[i].pos[1], seg.points[i].pos[2]);
-    }
-#else
-    (void)label; (void)seq; (void)seg;
-#endif
-}
-
-// Receives tagged payloads and hands them to the game thread.
-static DWORD WINAPI ReceiveLoopThread(LPVOID)
-{
-    while (g_connected) {
-        int tag = 0;
-        if (!NetworkRecvExact(g_sock, &tag, sizeof(tag))) {
-            RoadSyncStatus("[ROAD_SYNC] connection lost");
-            CloseConnection();
-            break;
-        }
-
-        if (tag == ROAD_SYNC_WIRE_SEGMENT || tag == ROAD_SYNC_WIRE_UPGRADE) {
-            RoadSyncItem* item = new RoadSyncItem(); // ~50KB, keep it off the thread stack
-            item->tag = tag;
-            bool ok, badCount = false;
-            if (tag == ROAD_SYNC_WIRE_SEGMENT) {
-                // Header, then exactly pointCount points (see road_sync.h).
-                ok = NetworkRecvExact(g_sock, &item->seg, ROAD_SYNC_MSG_HEADER_BYTES);
-                if (ok && !RoadSync_PointCountValid(item->seg.seg.pointCount)) badCount = true;
-                else if (ok && item->seg.seg.pointCount > 0)
-                    ok = NetworkRecvExact(g_sock, item->seg.seg.points, RoadSync_PointBytes(item->seg.seg.pointCount));
-            } else {
-                ok = NetworkRecvExact(g_sock, &item->up, sizeof(item->up));
-            }
-            if (badCount) {
-                // The next message starts after the points - with a bad count
-                // there is no telling where, so the stream cannot go on.
-                Logf("republicmp  ROAD_SYNC: received segment with bad pointCount=%d - dropping the connection",
-                     item->seg.seg.pointCount);
-                delete item;
-                RoadSyncStatus("[ROAD_SYNC] bad segment on the wire, dropping connection");
-                CloseConnection();
-                break;
-            }
-            if (!ok) {
-                delete item;
-                RoadSyncStatus("[ROAD_SYNC] connection lost");
-                CloseConnection();
-                break;
-            }
-
-            if (tag == ROAD_SYNC_WIRE_SEGMENT) {
-                const RoadSyncSegment& seg = item->seg.seg;
-                Logf("republicmp  ROAD_SYNC: received seq=%d %s type=%d variant=%d points=%d",
-                     item->seg.seq, CategoryName(seg.category), seg.typeId, seg.variant, seg.pointCount);
-                LogSegmentPoints("recv", item->seg.seq, seg);
-            } else {
-                Logf("republicmp  ROAD_SYNC: received upgrade seq=%d %s type=%d variant=%d pieces=%d",
-                     item->up.seq, CategoryName(item->up.category), item->up.newType, item->up.newVariant, item->up.pieceCount);
-            }
-
-            EnterCriticalSection(&g_queueLock);
-            g_incoming.push_back(*item);
-            LeaveCriticalSection(&g_queueLock);
-            delete item;
-        } else if (tag == ROAD_SYNC_WIRE_DEMOLISH) {
-            RoadSyncItem* item = new RoadSyncItem();
-            item->tag = tag;
-            if (!NetworkRecvExact(g_sock, &item->dem, sizeof(item->dem))) {
-                delete item;
-                RoadSyncStatus("[ROAD_SYNC] connection lost");
-                CloseConnection();
-                break;
-            }
-            Logf("republicmp  ROAD_SYNC: received demolish seq=%d %s at (%.2f,%.2f,%.2f)", item->dem.seq,
-                 CategoryName(item->dem.category), item->dem.cursor[0], item->dem.cursor[1], item->dem.cursor[2]);
-            EnterCriticalSection(&g_queueLock);
-            g_incoming.push_back(*item);
-            LeaveCriticalSection(&g_queueLock);
-            delete item;
-        } else if (tag == ROAD_SYNC_WIRE_PLAN_START) {
-            RoadSyncItem* item = new RoadSyncItem();
-            item->tag = tag;
-            if (!NetworkRecvExact(g_sock, &item->plan, sizeof(item->plan))) {
-                delete item;
-                RoadSyncStatus("[ROAD_SYNC] connection lost");
-                CloseConnection();
-                break;
-            }
-            Logf("republicmp  ROAD_SYNC: received plan start seq=%d %s", item->plan.seq, CategoryName(item->plan.category));
-            EnterCriticalSection(&g_queueLock);
-            g_incoming.push_back(*item);
-            LeaveCriticalSection(&g_queueLock);
-            delete item;
-        } else if (tag == ROAD_SYNC_WIRE_GROUP_TOOL) {
-            RoadSyncItem* item = new RoadSyncItem();
-            item->tag = tag;
-            if (!NetworkRecvExact(g_sock, &item->group, sizeof(item->group))) {
-                delete item;
-                RoadSyncStatus("[ROAD_SYNC] connection lost");
-                CloseConnection();
-                break;
-            }
-            Logf("republicmp  ROAD_SYNC: received group tool seq=%d mode %d", item->group.seq, item->group.mode);
-            EnterCriticalSection(&g_queueLock);
-            g_incoming.push_back(*item);
-            LeaveCriticalSection(&g_queueLock);
-            delete item;
-        } else if (tag == ROAD_SYNC_WIRE_DIRECTION) {
-            RoadSyncItem* item = new RoadSyncItem();
-            item->tag = tag;
-            if (!NetworkRecvExact(g_sock, &item->dir, sizeof(item->dir))) {
-                delete item;
-                RoadSyncStatus("[ROAD_SYNC] connection lost");
-                CloseConnection();
-                break;
-            }
-            Logf("republicmp  ROAD_SYNC: received direction seq=%d %s -> %d", item->dir.seq,
-                 CategoryName(item->dir.category), item->dir.direction);
-            EnterCriticalSection(&g_queueLock);
-            g_incoming.push_back(*item);
-            LeaveCriticalSection(&g_queueLock);
-            delete item;
-        } else if (tag == ROAD_SYNC_WIRE_ACK) {
-            RoadSyncAckMsg ack = {};
-            if (!NetworkRecvExact(g_sock, &ack, sizeof(ack))) {
-                RoadSyncStatus("[ROAD_SYNC] connection lost");
-                CloseConnection();
-                break;
-            }
-            EnterCriticalSection(&g_queueLock);
-            g_incomingAcks.push_back(ack);
-            LeaveCriticalSection(&g_queueLock);
-        } else {
-            // Framing is out of sync (mismatched builds) - cannot recover.
-            RoadSyncStatus("[ROAD_SYNC] unknown wire tag %d, dropping connection (mismatched build?)", tag);
-            CloseConnection();
-            break;
-        }
-    }
-    return 0;
-}
-
-static void StartConnection(SOCKET sock)
-{
-    g_sock = sock;
-
-    DWORD sendTimeoutMs = 5000;
-    DWORD recvTimeoutMs = 0;
-    setsockopt(g_sock, SOL_SOCKET, SO_SNDTIMEO, (const char*)&sendTimeoutMs, sizeof(sendTimeoutMs));
-    setsockopt(g_sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&recvTimeoutMs, sizeof(recvTimeoutMs));
-
-    g_connected = true;
-    CreateThread(nullptr, 0, ReceiveLoopThread, nullptr, 0, nullptr);
-    RoadSyncStatus("[ROAD_SYNC] connection established");
-}
-
-static DWORD WINAPI HostAcceptWorkerThread(LPVOID)
-{
-    RoadSyncStatus("[ROAD_SYNC] HOST, waiting for a client on port %d...", ROAD_SYNC_PORT);
-    if (!NetworkInit()) {
-        RoadSyncStatus("[ROAD_SYNC] network init failed, aborting");
-        g_connecting = false;
-        return 0;
-    }
-    SOCKET sock = NetworkHostAcceptOne(ROAD_SYNC_PORT, 300000, 30000, &g_cancelConnect);
-    if (sock == INVALID_SOCKET && g_cancelConnect) {
-        RoadSyncStatus("[ROAD_SYNC] stopped waiting for the connection");
-        g_connecting = false;
-        return 0;
-    }
-    if (sock == INVALID_SOCKET) {
-        RoadSyncStatus("[ROAD_SYNC] no client connected within 5 min, aborting - press Host##rs again to retry");
-        g_connecting = false;
-        return 0;
-    }
-    RoadSyncStatus("[ROAD_SYNC] client connected");
-    StartConnection(sock);
-    g_connecting = false;
-    return 0;
-}
-
-static DWORD WINAPI ClientConnectWorkerThread(LPVOID)
-{
-    RoadSyncStatus("[ROAD_SYNC] CLIENT, connecting to host %s:%d...", g_targetIp, ROAD_SYNC_PORT);
-    if (!NetworkInit()) {
-        RoadSyncStatus("[ROAD_SYNC] network init failed, aborting");
-        g_connecting = false;
-        return 0;
-    }
-    SOCKET sock = NetworkConnect(g_targetIp, ROAD_SYNC_PORT, 15000, 30000, &g_cancelConnect);
-    if (sock == INVALID_SOCKET && g_cancelConnect) {
-        RoadSyncStatus("[ROAD_SYNC] stopped waiting for the connection");
-        g_connecting = false;
-        return 0;
-    }
-    if (sock == INVALID_SOCKET) {
-        RoadSyncStatus("[ROAD_SYNC] couldn't connect - is the host listening (Host##rs)? Is the IP right? - press Connect##rs again to retry");
-        g_connecting = false;
-        return 0;
-    }
-    RoadSyncStatus("[ROAD_SYNC] connected to host");
-    StartConnection(sock);
-    g_connecting = false;
-    return 0;
-}
-
-void RoadSync_StartHost()
-{
-    if (g_connected || g_connecting) return;
-    g_isHost = true;
-    g_cancelConnect = false;
-    g_connecting = true;
-    CreateThread(nullptr, 0, HostAcceptWorkerThread, nullptr, 0, nullptr);
-}
-
-void RoadSync_StartClient(const char* hostIp)
-{
-    if (g_connected || g_connecting) return;
-    if (hostIp && hostIp[0]) {
-        strncpy_s(g_targetIp, hostIp, _TRUNCATE);
-    }
-    g_isHost = false;
-    g_cancelConnect = false;
-    g_connecting = true;
-    CreateThread(nullptr, 0, ClientConnectWorkerThread, nullptr, 0, nullptr);
-}
-
-void RoadSync_Reset()
-{
-    if (g_connecting) g_cancelConnect = true;
-    if (g_connected) {
-        RoadSyncStatus("[ROAD_SYNC] connection reset by user");
-        CloseConnection();
-    }
-}
-
-bool RoadSync_IsConnected()  { return g_connected; }
-bool RoadSync_IsConnecting() { return g_connecting; }
-bool RoadSync_IsHostRole()   { return g_isHost; }
-const char* RoadSync_GetTargetIp() { return g_targetIp; }
-
-// ---------------------------------------------------------------------------
-// Sending (game thread only)
-// ---------------------------------------------------------------------------
-
-// Sent items waiting for their ack - used only to flag unmatched acks.
-static std::vector<int> g_pendingSends;
-static int g_nextSeq = 0;
-// Items captured while disconnected, sent in order once connected.
-static std::vector<RoadSyncItem> g_outboundQueue;
-
-static void SendItemNow(RoadSyncItem& item)
-{
-    int seq = ++g_nextSeq;
-    bool sent;
-    if (item.tag == ROAD_SYNC_WIRE_PLAN_START) {
-        RoadSyncPlanStartMsg& plan = item.plan;
-        plan.seq = seq;
-        char mode[96];
-        Logf("republicmp  ROAD_SYNC: sending plan start seq=%d %s%s dollars=%d rubles=%d count=%d group=%d pay=%s - %d plan(s) started here",
-             seq, CategoryName(plan.category), plan.exceptGroup ? " (every group but one)" : "", plan.dollars,
-             plan.rubles, plan.count, plan.group, BuildMode_Describe(plan.mode, mode, sizeof(mode)), plan.started);
-        sent = SendEnvelope(ROAD_SYNC_WIRE_PLAN_START, &plan, sizeof(plan));
-    } else if (item.tag == ROAD_SYNC_WIRE_GROUP_TOOL) {
-        RoadSyncGroupToolMsg& g = item.group;
-        g.seq = seq;
-        char mode[96];
-        Logf("republicmp  ROAD_SYNC: sending group tool seq=%d mode %d box (%.2f,%.2f,%.2f)-(%.2f,%.2f,%.2f) yaw %.4f pay=%s - %d planned piece(s) started here",
-             seq, g.mode, g.box[0], g.box[1], g.box[2], g.box[3], g.box[4], g.box[5], g.yaw,
-             BuildMode_Describe(g.buildMode, mode, sizeof(mode)), g.started);
-        sent = SendEnvelope(ROAD_SYNC_WIRE_GROUP_TOOL, &g, sizeof(g));
-    } else if (item.tag == ROAD_SYNC_WIRE_DIRECTION) {
-        RoadSyncDirectionMsg& dir = item.dir;
-        dir.seq = seq;
-        Logf("republicmp  ROAD_SYNC: sending direction seq=%d %s (%.2f,%.2f,%.2f)-(%.2f,%.2f,%.2f) -> %d",
-             seq, CategoryName(dir.category), dir.piece.segStart[0], dir.piece.segStart[1], dir.piece.segStart[2],
-             dir.piece.segEnd[0], dir.piece.segEnd[1], dir.piece.segEnd[2], dir.direction);
-        sent = SendEnvelope(ROAD_SYNC_WIRE_DIRECTION, &dir, sizeof(dir));
-    } else if (item.tag == ROAD_SYNC_WIRE_DEMOLISH) {
-        RoadSyncDemolishMsg& dem = item.dem;
-        dem.seq = seq;
-        Logf("republicmp  ROAD_SYNC: sending demolish seq=%d %s at (%.2f,%.2f,%.2f)",
-             seq, CategoryName(dem.category), dem.cursor[0], dem.cursor[1], dem.cursor[2]);
-        sent = SendEnvelope(ROAD_SYNC_WIRE_DEMOLISH, &dem, sizeof(dem));
-    } else if (item.tag == ROAD_SYNC_WIRE_UPGRADE) {
-        RoadSyncUpgradeMsg& up = item.up;
-        up.seq = seq;
-        char mode[96];
-        Logf("republicmp  ROAD_SYNC: sending upgrade seq=%d %s type=%d variant=%d pieces=%d pay=%s",
-             seq, CategoryName(up.category), up.newType, up.newVariant, up.pieceCount,
-             BuildMode_Describe(up.mode, mode, sizeof(mode)));
-        sent = SendEnvelope(ROAD_SYNC_WIRE_UPGRADE, &up, sizeof(up));
-    } else {
-        RoadSyncMsg& msg = item.seg;
-        msg.seq = seq;
-        char mode[96];
-        Logf("republicmp  ROAD_SYNC: sending seq=%d %s type=%d variant=%d points=%d pay=%s",
-             seq, CategoryName(msg.seg.category), msg.seg.typeId, msg.seg.variant, msg.seg.pointCount,
-             BuildMode_Describe(msg.mode, mode, sizeof(mode)));
-        LogSegmentPoints("send", seq, msg.seg);
-        sent = RoadSync_PointCountValid(msg.seg.pointCount) &&
-               SendEnvelope(ROAD_SYNC_WIRE_SEGMENT, &msg,
-                            ROAD_SYNC_MSG_HEADER_BYTES + RoadSync_PointBytes(msg.seg.pointCount));
-    }
-
-    if (!sent) {
-        RoadSyncStatus("[ROAD_SYNC] send failed, dropping connection");
-        CloseConnection();
-        return;
-    }
-    g_pendingSends.push_back(seq);
-}
-
-static void FlushOutboundQueue()
-{
-    while (g_connected && !g_outboundQueue.empty()) {
-        SendItemNow(g_outboundQueue.front());
-        if (!g_connected) break; // send failed - keep it for the next connection
-        g_outboundQueue.erase(g_outboundQueue.begin());
-    }
-}
-
-static int SendOrQueue(RoadSyncItem& item)
-{
-    if (!g_connected || !g_outboundQueue.empty()) {
-        g_outboundQueue.push_back(item);
-        Logf("republicmp  ROAD_SYNC: queued %s (%zu waiting for connection)",
-             item.tag == ROAD_SYNC_WIRE_UPGRADE ? "upgrade" : item.tag == ROAD_SYNC_WIRE_DIRECTION ? "direction"
-             : item.tag == ROAD_SYNC_WIRE_PLAN_START ? "plan start"
-             : item.tag == ROAD_SYNC_WIRE_GROUP_TOOL ? "group tool" : "segment",
-             g_outboundQueue.size());
-        return 0;
-    }
-    SendItemNow(item);
-    return g_connected ? g_nextSeq : -1;
-}
-
-int RoadSync_SendSegment(const RoadSyncSegment& seg)
-{
-    if (seg.pointCount < 0 || seg.pointCount > ROAD_SYNC_MAX_POINTS) {
-        Logf("republicmp  ROAD_SYNC: refusing to send segment, pointCount=%d", seg.pointCount);
-        return -1;
-    }
-    static RoadSyncItem s_item; // large - game thread only
-    memset(&s_item, 0, sizeof(s_item));
-    s_item.tag = ROAD_SYNC_WIRE_SEGMENT;
-    s_item.seg.seg = seg;
-    s_item.seg.terrainFence = TerrainSync_GetFenceSeq();
-    s_item.seg.mode = BuildMode_Read();
-    return SendOrQueue(s_item);
-}
-
-int RoadSync_SendDemolish(int category, const float cursor[3], const float* rangeA, const float* rangeB,
-                          const RoadSyncUpgradePiece* pieces, int pieceCount)
-{
-    static RoadSyncItem s_item; // large - game thread only
-    memset(&s_item, 0, sizeof(s_item));
-    s_item.tag = ROAD_SYNC_WIRE_DEMOLISH;
-    s_item.dem.category = category;
-    s_item.dem.cursor[0] = cursor[0];
-    s_item.dem.cursor[1] = cursor[1];
-    s_item.dem.cursor[2] = cursor[2];
-    s_item.dem.terrainFence = TerrainSync_GetFenceSeq();
-    if (rangeA && rangeB) {
-        s_item.dem.hasRange = 1;
-        memcpy(s_item.dem.rangeA, rangeA, sizeof(s_item.dem.rangeA));
-        memcpy(s_item.dem.rangeB, rangeB, sizeof(s_item.dem.rangeB));
-    }
-    if (pieces && pieceCount > 0) {
-        int n = pieceCount < 8 ? pieceCount : 8;
-        memcpy(s_item.dem.pieces, pieces, n * sizeof(RoadSyncUpgradePiece));
-        s_item.dem.pieceCount = n;
-    }
-    return SendOrQueue(s_item);
-}
-
-int RoadSync_SendUpgrade(const RoadSyncUpgradeMsg& up)
-{
-    if (up.pieceCount < 1 || up.pieceCount > ROAD_SYNC_MAX_UPGRADE_PIECES) {
-        Logf("republicmp  ROAD_SYNC: refusing to send upgrade, pieceCount=%d", up.pieceCount);
-        return -1;
-    }
-    static RoadSyncItem s_item;
-    memset(&s_item, 0, sizeof(s_item));
-    s_item.tag = ROAD_SYNC_WIRE_UPGRADE;
-    s_item.up = up;
-    s_item.up.terrainFence = TerrainSync_GetFenceSeq();
-    s_item.up.mode = BuildMode_Read();
-    return SendOrQueue(s_item);
-}
-
-// ---------------------------------------------------------------------------
-// Applying received work (game thread only)
-// ---------------------------------------------------------------------------
-
-static std::vector<RoadSyncItem> g_pending;
-static bool g_warnedWorldNotLoaded = false;
-static ULONGLONG g_fenceWaitStartMs = 0; // when the head item started waiting for its terrain fence
-
-// True when the item may be applied now: its terrain fence is reached, or it
-// has waited ROAD_SYNC_FENCE_TIMEOUT_MS for it.
-static bool TerrainFenceAllows(const RoadSyncItem& item)
-{
-    if (item.tag == ROAD_SYNC_WIRE_DIRECTION) return true; // no terrain involved
-    int fence = item.tag == ROAD_SYNC_WIRE_UPGRADE ? item.up.terrainFence
-              : item.tag == ROAD_SYNC_WIRE_DEMOLISH ? item.dem.terrainFence
-              : item.tag == ROAD_SYNC_WIRE_PLAN_START ? item.plan.terrainFence
-              : item.tag == ROAD_SYNC_WIRE_GROUP_TOOL ? item.group.terrainFence
-              : item.seg.terrainFence;
-    if (TerrainSync_FenceReached(fence)) {
-        if (g_fenceWaitStartMs)
-            Logf("republicmp  ROAD_SYNC: terrain fence %d reached after %llums", fence, GetTickCount64() - g_fenceWaitStartMs);
-        g_fenceWaitStartMs = 0;
-        return true;
-    }
-    ULONGLONG now = GetTickCount64();
-    if (!g_fenceWaitStartMs) g_fenceWaitStartMs = now;
-    if (now - g_fenceWaitStartMs < ROAD_SYNC_FENCE_TIMEOUT_MS) return false;
-    Logf("republicmp  ROAD_SYNC: terrain fence %d not reached after %dms - applying anyway", fence, ROAD_SYNC_FENCE_TIMEOUT_MS);
-    g_fenceWaitStartMs = 0;
-    return true;
-}
-
-static void SendAck(int seq, int category, bool success, int attempts)
-{
-    RoadSyncAckMsg ack = {};
-    ack.seq = seq;
-    ack.category = category;
-    ack.success = success ? 1 : 0;
-    ack.attempts = attempts;
-    if (g_connected && !SendEnvelope(ROAD_SYNC_WIRE_ACK, &ack, sizeof(ack))) {
-        RoadSyncStatus("[ROAD_SYNC] ack send failed, dropping connection");
-        CloseConnection();
-    }
-}
-
-// Applies a received segment, retrying only if the replay threw, and acks
-// the engine's verdict. A segment already present between the same nodes is
-// acked as built without replaying it.
-static void ApplySegmentAndAck(const RoadSyncMsg& msg)
-{
-    const RoadSyncSegment& seg = msg.seg;
-    if (SegmentBetweenNodesExists(seg)) {
-        Logf("republicmp  ROAD_SYNC: seq=%d %s already exists between these nodes - skipped",
-             msg.seq, CategoryName(seg.category));
-        SendAck(msg.seq, seg.category, true, 0);
-        return;
-    }
-
-    // Built the way the sender chose (rubles / dollars / realistic); the
-    // local player's own choice is put back right after.
-    BuildMode mine = BuildMode_Read();
-    BuildMode_Write(msg.mode);
-    bool ok = false;
-    bool engineAccepted = false;
-    int attempt = 1;
-    for (; attempt <= ROAD_SYNC_MAX_APPLY_ATTEMPTS; attempt++) {
-        ok = ApplySegment(seg, &engineAccepted);
-        if (ok) break;
-        // A throw inside the engine is not transient, and the throw may have
-        // left a half-built path behind (a start node, say): a retry on top
-        // of that is what turned one failed path into a crash. A re-sync
-        // brings the path over instead.
-        if (g_lastApplyThrew) {
-            Logf("republicmp  ROAD_SYNC: seq=%d threw inside the engine - not retried", msg.seq);
-            break;
-        }
-    }
-    BuildMode_Write(mine);
-    if (!ok && attempt > ROAD_SYNC_MAX_APPLY_ATTEMPTS) attempt = ROAD_SYNC_MAX_APPLY_ATTEMPTS;
-
-    char theirs[96], local[96];
-    Logf("republicmp  ROAD_SYNC: seq=%d %s after %d attempt(s), pay=%s (mine: %s)", msg.seq,
-         !ok ? "GAVE UP" : engineAccepted ? "applied" : "REJECTED by the engine", attempt,
-         BuildMode_Describe(msg.mode, theirs, sizeof(theirs)), BuildMode_Describe(mine, local, sizeof(local)));
-    SendAck(msg.seq, seg.category, ok && engineAccepted, attempt);
-}
-
-static void ApplyUpgradeAndAck(const RoadSyncUpgradeMsg& up)
-{
-    BuildMode mine = BuildMode_Read();
-    BuildMode_Write(up.mode);
-    int applied = ApplyUpgrade(up);
-    BuildMode_Write(mine);
-    char theirs[96], local[96];
-    Logf("republicmp  ROAD_SYNC: upgrade seq=%d %s applied %d/%d piece(s), pay=%s (mine: %s)",
-         up.seq, CategoryName(up.category), applied, up.pieceCount,
-         BuildMode_Describe(up.mode, theirs, sizeof(theirs)), BuildMode_Describe(mine, local, sizeof(local)));
-    SendAck(up.seq, up.category, applied == up.pieceCount, 1);
-}
-
-// ---------------------------------------------------------------------------
-// Lockstep commands (see road_sync.h)
+// Lockstep commands (see networks.h)
 // ---------------------------------------------------------------------------
 
 // The PC that drew the segment did not make its commit, so its tool still
@@ -2105,7 +1365,7 @@ static void ApplyUpgradeAndAck(const RoadSyncUpgradeMsg& up)
 // while the local player is dragging again.
 static void ClearCommandPreview(int category)
 {
-    const RoadSyncCategoryInfo* info = RoadSync_GetCategoryInfo(category);
+    const NetCategoryInfo* info = Networks_GetCategoryInfo(category);
     if (!info) return;
     __try {
         __int64 thisPtr = GetWorldThisPtr();
@@ -2168,7 +1428,7 @@ static void HookedDragStart(__int64 manager, float* startPoint, unsigned __int64
 // The manager is one of the networks' (it may have been made again since).
 static bool IsNetworkManager(__int64 world, __int64 manager)
 {
-    for (int c = 0; c < ROAD_SYNC_CATEGORY_COUNT; c++)
+    for (int c = 0; c < NET_CATEGORY_COUNT; c++)
         if (manager && *(__int64*)(world + g_categories[c].managerOffset) == manager) return true;
     return false;
 }
@@ -2184,23 +1444,23 @@ static bool NodeListed(__int64 manager, __int64 node)
     return false;
 }
 
-void RoadSync_CancelLocalDrag()
+void Networks_CancelLocalDrag()
 {
     __try {
         __int64 thisPtr = GetWorldThisPtr();
         if (*(char*)(thisPtr + TOOL_DRAG_ACTIVE_OFFSET) == 0) return;
         g_dragYielded = g_dragStart.valid && IsNetworkManager(thisPtr, g_dragStart.manager) ? g_dragStart : DragStart{};
-        for (int c = 0; c < ROAD_SYNC_CATEGORY_COUNT; c++) {
+        for (int c = 0; c < NET_CATEGORY_COUNT; c++) {
             __int64 manager = *(__int64*)(thisPtr + g_categories[c].managerOffset);
             if (manager) ((ManagerResetFn)((uintptr_t)g_exe + MANAGER_RESET_RVA))(manager, manager + MANAGER_RESET_STATE_OFFSET);
         }
         *(char*)(thisPtr + TOOL_DRAG_ACTIVE_OFFSET) = 0;
-        Logf("republicmp  ROAD_SYNC: the local drag was paused for a lockstep command");
+        Logf("republicmp  NETWORKS: the local drag was paused for a lockstep command");
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
 }
 
-void RoadSync_ResumeLocalDrag()
+void Networks_ResumeLocalDrag()
 {
     if (!g_dragYielded.valid) return;
     DragStart s = g_dragYielded;
@@ -2240,8 +1500,8 @@ void RoadSync_ResumeLocalDrag()
         } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
     }
-    if (why) Logf("republicmp  ROAD_SYNC: the paused local drag ended - %s", why);
-    else Logf("republicmp  ROAD_SYNC: the paused local drag goes on from its start");
+    if (why) Logf("republicmp  NETWORKS: the paused local drag ended - %s", why);
+    else Logf("republicmp  NETWORKS: the paused local drag goes on from its start");
 }
 
 // mov [rsp+8],rbx / mov [rsp+10h],rsi / mov [rsp+18h],rdi - 15 bytes
@@ -2249,18 +1509,18 @@ static const unsigned char kDragStartExpect[15] = {
     0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x48, 0x89, 0x7C, 0x24, 0x18
 };
 
-bool RoadSync_InstallDragStartHook()
+bool Networks_InstallDragStartHook()
 {
     return InstallInlineHook(g_exeBase + FC040_RVA, (void*)HookedDragStart, (void**)&g_origDragStart, kDragStartExpect,
                              sizeof(kDragStartExpect), "republicmp drag start");
 }
 
-bool RoadSync_ApplyCommandSegment(const RoadSyncMsg& msg)
+bool Networks_ApplyCommandSegment(const NetSegmentMsg& msg)
 {
-    const RoadSyncSegment& seg = msg.seg;
+    const NetSegment& seg = msg.seg;
     ClearCommandPreview(seg.category);
     if (SegmentBetweenNodesExists(seg)) {
-        Logf("republicmp  ROAD_SYNC: command %s already exists between these nodes - skipped", CategoryName(seg.category));
+        Logf("republicmp  NETWORKS: command %s already exists between these nodes - skipped", CategoryName(seg.category));
         return false;
     }
     BuildMode mine = BuildMode_Read();
@@ -2271,18 +1531,18 @@ bool RoadSync_ApplyCommandSegment(const RoadSyncMsg& msg)
     return ok && engineAccepted;
 }
 
-bool RoadSync_ApplyCommandUpgrade(const RoadSyncUpgradeMsg& msg)
+bool Networks_ApplyCommandUpgrade(const NetUpgradeMsg& msg)
 {
     ClearCommandPreview(msg.category);
     BuildMode mine = BuildMode_Read();
     BuildMode_Write(msg.mode);
     int applied = ApplyUpgrade(msg);
     BuildMode_Write(mine);
-    Logf("republicmp  ROAD_SYNC: command upgrade %s applied %d/%d piece(s)", CategoryName(msg.category), applied, msg.pieceCount);
+    Logf("republicmp  NETWORKS: command upgrade %s applied %d/%d piece(s)", CategoryName(msg.category), applied, msg.pieceCount);
     return applied == msg.pieceCount;
 }
 
-bool RoadSync_ApplyCommandDemolish(const RoadSyncDemolishMsg& msg)
+bool Networks_ApplyCommandDemolish(const NetDemolishMsg& msg)
 {
     bool removed = false;
     bool ok = msg.pieceCount > 0 ? ApplyDemolishPieces(msg, &removed) : ApplyDemolish(msg, &removed);
@@ -2290,26 +1550,21 @@ bool RoadSync_ApplyCommandDemolish(const RoadSyncDemolishMsg& msg)
 }
 
 // ---------------------------------------------------------------------------
-// Factory connection direction (game thread only, see RoadSyncDirectionMsg)
+// Factory connection direction (game thread only, see NetDirectionMsg)
 // ---------------------------------------------------------------------------
 
 #define SEG_DIRECTION_OFFSET 0x1bc       // int: 0 both ways, 1 / 2 one way (node 0 / node 1 relative)
 #define NODE_BUILDINGS_BEGIN_OFFSET 0x70 // node: buildings attached to it
 #define NODE_BUILDINGS_END_OFFSET 0x78
 #define REFRESH_BUILDING_RVA 0x191950    // FUN_140191950(thisPtr, building)
-#define DIR_SCAN_INTERVAL_MS 250
 #define DIR_SCAN_MAX 4096
 
 typedef void (*RefreshBuildingFn)(__int64 thisPtr, __int64 building);
 
-// Last direction seen per local connection segment.
-static std::unordered_map<__int64, int> g_knownDirections;
-static ULONGLONG g_lastDirScanMs = 0;
-
 struct DirSnapshot {
     __int64 seg;
     int direction;
-    RoadSyncUpgradePiece piece;
+    NetPiece piece;
 };
 static DirSnapshot g_dirSnapshot[DIR_SCAN_MAX];
 
@@ -2318,7 +1573,7 @@ static int ReadFactoryDirections()
 {
     int n = 0;
     __try {
-        __int64 manager = *(__int64*)(GetWorldThisPtr() + g_categories[ROAD_SYNC_CATEGORY_FACTORYCONN].managerOffset);
+        __int64 manager = *(__int64*)(GetWorldThisPtr() + g_categories[NET_CATEGORY_FACTORYCONN].managerOffset);
         if (!manager) return 0;
         __int64* it = *(__int64**)(manager + MGR_SEGMENTS_BEGIN_OFFSET);
         __int64* end = *(__int64**)(manager + MGR_SEGMENTS_END_OFFSET);
@@ -2343,35 +1598,11 @@ static int ReadFactoryDirections()
     return n;
 }
 
-// Sends every connection whose direction changed since the last scan. New
-// connections are only recorded - they start out the same on both sides.
-static void ScanFactoryDirections()
-{
-    int n = ReadFactoryDirections();
-    if (n < 0) return;
-    std::unordered_map<__int64, int> seen;
-    seen.reserve(n);
-    for (int i = 0; i < n; i++) {
-        const DirSnapshot& s = g_dirSnapshot[i];
-        seen[s.seg] = s.direction;
-        auto known = g_knownDirections.find(s.seg);
-        if (known == g_knownDirections.end() || known->second == s.direction) continue;
-        static RoadSyncItem s_item; // large - game thread only
-        memset(&s_item, 0, sizeof(s_item));
-        s_item.tag = ROAD_SYNC_WIRE_DIRECTION;
-        s_item.dir.category = ROAD_SYNC_CATEGORY_FACTORYCONN;
-        s_item.dir.piece = s.piece;
-        s_item.dir.direction = s.direction;
-        SendOrQueue(s_item);
-    }
-    g_knownDirections.swap(seen);
-}
-
 // Writes the direction into the local segment and refreshes its buildings.
 // Returns the segment (0 = not found or faulted).
-static __int64 ApplyDirection(const RoadSyncDirectionMsg& m, int* outLocalDirection)
+static __int64 ApplyDirection(const NetDirectionMsg& m, int* outLocalDirection)
 {
-    const RoadSyncCategoryInfo* info = RoadSync_GetCategoryInfo(m.category);
+    const NetCategoryInfo* info = Networks_GetCategoryInfo(m.category);
     if (!info || m.direction < 0 || m.direction > 2) return 0;
     __int64 thisPtr = GetWorldThisPtr();
     RefreshBuildingFn refresh = (RefreshBuildingFn)((uintptr_t)g_exe + REFRESH_BUILDING_RVA);
@@ -2396,26 +1627,14 @@ static __int64 ApplyDirection(const RoadSyncDirectionMsg& m, int* outLocalDirect
     }
 }
 
-static void ApplyDirectionAndAck(const RoadSyncDirectionMsg& m)
-{
-    int localDirection = 0;
-    __int64 seg = ApplyDirection(m, &localDirection);
-    // Recorded as seen, so the next scan does not send it back.
-    if (seg) g_knownDirections[seg] = localDirection;
-    Logf("republicmp  ROAD_SYNC: direction seq=%d %s -> %d %s", m.seq, CategoryName(m.category), m.direction,
-         seg ? "applied" : "NOT APPLIED - connection not found");
-    SendAck(m.seq, m.category, seg != 0, 1);
-}
-
 // ---------------------------------------------------------------------------
-// Starting planned construction (see RoadSyncPlanStartMsg)
+// Starting planned construction (see NetPlanStartMsg)
 // ---------------------------------------------------------------------------
 
 #define PLAN_START_RVA 0x5258E0        // FUN_1405258e0(network, dollars, rubles, count, group)
 #define PLAN_START_EXCEPT_RVA 0x525C30 // FUN_140525c30(network, dollars, rubles, -, group)
 #define EDGE_PLANNED_OFFSET 0x140      // byte: 1 = a plan not started yet
 #define EDGE_GROUP_OFFSET 0x124
-#define PLAN_CAPTURE_MAX 16
 
 // mov rax,rsp / mov [rax+10h],dl / push rbp,rsi,rdi,r12,r13,r14 - 15 bytes
 static const unsigned char kPlanStartExpect[15] = {
@@ -2438,10 +1657,6 @@ static const unsigned int kPlanStartExceptUiReturns[] = { 0x7ECBA, 0x7EEEA, 0x7F
 typedef __int64 (*PlanStartFn)(__int64 network, unsigned char dollars, unsigned char rubles, __int64 count, __int64 group);
 static PlanStartFn g_origPlanStart = nullptr;
 static PlanStartFn g_origPlanStartExcept = nullptr;
-
-// Captured in the hook (interface thread), sent from RoadSync_Tick.
-static RoadSyncPlanStartMsg g_planCaptures[PLAN_CAPTURE_MAX];
-static int g_planCaptureCount = 0;
 
 static bool IsUiCall(void* ret, const unsigned int* rvas, size_t n)
 {
@@ -2483,9 +1698,9 @@ static __int64 PlanStartCommon(bool exceptGroup, void* ret, __int64 network, uns
     if (Commands_TakeLocal() && InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0 &&
         (exceptGroup ? IsUiCall(ret, kPlanStartExceptUiReturns, sizeof(kPlanStartExceptUiReturns) / sizeof(kPlanStartExceptUiReturns[0]))
                      : IsUiCall(ret, kPlanStartUiReturns, sizeof(kPlanStartUiReturns) / sizeof(kPlanStartUiReturns[0])))) {
-        int lsCategory = RoadSync_CategoryForManager(GetWorldThisPtr(), network);
+        int lsCategory = Networks_CategoryForManager(GetWorldThisPtr(), network);
         if (lsCategory >= 0) {
-            RoadSyncPlanStartMsg m = {};
+            NetPlanStartMsg m = {};
             m.category = lsCategory;
             m.exceptGroup = exceptGroup ? 1 : 0;
             m.dollars = dollars ? 1 : 0;
@@ -2497,29 +1712,7 @@ static __int64 PlanStartCommon(bool exceptGroup, void* ret, __int64 network, uns
             return 0;
         }
     }
-    bool capture = g_connected && InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0 &&
-                   (exceptGroup ? IsUiCall(ret, kPlanStartExceptUiReturns, sizeof(kPlanStartExceptUiReturns) / sizeof(kPlanStartExceptUiReturns[0]))
-                                : IsUiCall(ret, kPlanStartUiReturns, sizeof(kPlanStartUiReturns) / sizeof(kPlanStartUiReturns[0])));
-    int category = capture ? RoadSync_CategoryForManager(GetWorldThisPtr(), network) : -1;
-    int before = category >= 0 ? CountStartablePlans(network, exceptGroup, (int)count, (int)group) : 0;
-    __int64 result = orig(network, dollars, rubles, count, group);
-    if (category < 0 || before == 0) return result;
-    int started = before - CountStartablePlans(network, exceptGroup, (int)count, (int)group);
-    EnterCriticalSection(&g_queueLock);
-    if (g_planCaptureCount < PLAN_CAPTURE_MAX) {
-        RoadSyncPlanStartMsg& m = g_planCaptures[g_planCaptureCount++];
-        memset(&m, 0, sizeof(m));
-        m.category = category;
-        m.exceptGroup = exceptGroup ? 1 : 0;
-        m.dollars = dollars ? 1 : 0;
-        m.rubles = rubles ? 1 : 0;
-        m.count = (int)count;
-        m.group = (int)group;
-        m.started = started;
-        m.mode = BuildMode_Read();
-    }
-    LeaveCriticalSection(&g_queueLock);
-    return result;
+    return orig(network, dollars, rubles, count, group);
 }
 
 static __int64 HookedPlanStart(__int64 network, unsigned char dollars, unsigned char rubles, __int64 count, __int64 group)
@@ -2532,7 +1725,7 @@ static __int64 HookedPlanStartExcept(__int64 network, unsigned char dollars, uns
     return PlanStartCommon(true, _ReturnAddress(), network, dollars, rubles, count, group);
 }
 
-bool RoadSync_InstallPlanStartHooks()
+bool Networks_InstallPlanStartHooks()
 {
     bool a = InstallInlineHook(g_exeBase + PLAN_START_RVA, (void*)HookedPlanStart, (void**)&g_origPlanStart,
                                kPlanStartExpect, sizeof(kPlanStartExpect), "republicmp plan start");
@@ -2542,25 +1735,7 @@ bool RoadSync_InstallPlanStartHooks()
     return a && b;
 }
 
-static void SendPlanCaptures()
-{
-    RoadSyncPlanStartMsg captured[PLAN_CAPTURE_MAX];
-    EnterCriticalSection(&g_queueLock);
-    int n = g_planCaptureCount;
-    memcpy(captured, g_planCaptures, sizeof(RoadSyncPlanStartMsg) * n);
-    g_planCaptureCount = 0;
-    LeaveCriticalSection(&g_queueLock);
-    for (int i = 0; i < n; i++) {
-        static RoadSyncItem s_item; // large - game thread only
-        memset(&s_item, 0, sizeof(s_item));
-        s_item.tag = ROAD_SYNC_WIRE_PLAN_START;
-        s_item.plan = captured[i];
-        s_item.plan.terrainFence = TerrainSync_GetFenceSeq();
-        SendOrQueue(s_item);
-    }
-}
-
-static bool CallPlanStart(PlanStartFn fn, __int64 network, const RoadSyncPlanStartMsg& m)
+static bool CallPlanStart(PlanStartFn fn, __int64 network, const NetPlanStartMsg& m)
 {
     __try {
         fn(network, m.dollars ? 1 : 0, m.rubles ? 1 : 0, m.count, m.group);
@@ -2570,9 +1745,9 @@ static bool CallPlanStart(PlanStartFn fn, __int64 network, const RoadSyncPlanSta
     }
 }
 
-static void ApplyPlanStartAndAck(const RoadSyncPlanStartMsg& m)
+static bool ApplyPlanStart(const NetPlanStartMsg& m)
 {
-    const RoadSyncCategoryInfo* info = RoadSync_GetCategoryInfo(m.category);
+    const NetCategoryInfo* info = Networks_GetCategoryInfo(m.category);
     PlanStartFn fn = m.exceptGroup ? g_origPlanStartExcept : g_origPlanStart;
     __int64 network = 0;
     __try {
@@ -2581,32 +1756,29 @@ static void ApplyPlanStartAndAck(const RoadSyncPlanStartMsg& m)
         network = 0;
     }
     if (!network || !fn) {
-        Logf("republicmp  ROAD_SYNC: plan start seq=%d %s - no network here, skipped", m.seq, CategoryName(m.category));
-        SendAck(m.seq, m.category, false, 1);
-        return;
+        Logf("republicmp  NETWORKS: plan start %s - no network here, skipped", CategoryName(m.category));
+        return false;
     }
     bool except = m.exceptGroup != 0;
     int before = CountStartablePlans(network, except, m.count, m.group);
-    // The new sites take the sender's build mode, not this PC's: with
+    // The new sites take the clicking PC's build mode, not this PC's: with
     // "rubles" here a realistic plan from the other PC finished at once.
     BuildMode mine = BuildMode_Read();
     BuildMode_Write(m.mode);
     InterlockedIncrement(&g_applyingSegment);
-    TerrainSync_BeginForeignReplay();
     bool ok = CallPlanStart(fn, network, m);
-    TerrainSync_EndForeignReplay();
     InterlockedDecrement(&g_applyingSegment);
     BuildMode_Write(mine);
     int started = before - CountStartablePlans(network, except, m.count, m.group);
     char theirs[96];
-    Logf("republicmp  ROAD_SYNC: plan start seq=%d %s dollars=%d rubles=%d pay=%s - %s: %d plan(s) started here, %d on the sender%s",
-         m.seq, CategoryName(m.category), m.dollars, m.rubles, BuildMode_Describe(m.mode, theirs, sizeof(theirs)),
-         ok ? "applied" : "THREW", started, m.started, ok && started != m.started ? " (DIFFERENT)" : "");
-    SendAck(m.seq, m.category, ok && started > 0, 1);
+    Logf("republicmp  NETWORKS: plan start %s dollars=%d rubles=%d pay=%s - %s: %d plan(s) started",
+         CategoryName(m.category), m.dollars, m.rubles, BuildMode_Describe(m.mode, theirs, sizeof(theirs)),
+         ok ? "applied" : "THREW", started);
+    return ok && started > 0;
 }
 
 // ---------------------------------------------------------------------------
-// Group construction tools (see RoadSyncGroupToolMsg)
+// Group construction tools (see NetGroupToolMsg)
 // ---------------------------------------------------------------------------
 
 #define GROUP_TOOL_RVA 0x21C110
@@ -2619,7 +1791,6 @@ static void ApplyPlanStartAndAck(const RoadSyncPlanStartMsg& m)
 #define WORLD_NETWORK_COUNT_OFFSET 0x14034 // int: entries below
 #define WORLD_NETWORK_ENTRIES_OFFSET 0x14038 // entries of 0x50, the network at +0
 #define WORLD_NETWORK_ENTRY_SIZE 0x50
-#define GROUP_CAPTURE_MAX 8
 
 // mov rax,rsp / push rbp,rsi,rdi,r12,r13,r14,r15 / lea rbp,[rsp-70h] - 19 bytes
 static const unsigned char kGroupToolExpect[19] = {
@@ -2629,10 +1800,7 @@ static const unsigned char kGroupToolExpect[19] = {
 typedef __int64 (*GroupToolFn)(__int64 world, int mode);
 static GroupToolFn g_origGroupTool = nullptr;
 
-static RoadSyncGroupToolMsg g_groupCaptures[GROUP_CAPTURE_MAX];
-static int g_groupCaptureCount = 0;
-
-// What the commit reads besides the menus (replay_menus.h closes those).
+// What the commit reads besides the menus (menus_closed.h closes those).
 struct GroupToolState {
     float box[6];
     float cursor[3];
@@ -2697,8 +1865,8 @@ static __int64 HookedGroupTool(__int64 world, int mode)
             commit = false;
         }
         if (!commit) return g_origGroupTool(world, mode);
-        RoadSyncGroupToolMsg m = {};
-        m.category = ROAD_SYNC_GROUP_TOOL_CATEGORY;
+        NetGroupToolMsg m = {};
+        m.category = NET_GROUP_TOOL_CATEGORY;
         m.mode = mode;
         memcpy(m.box, s.box, sizeof(m.box));
         memcpy(m.cursor, s.cursor, sizeof(m.cursor));
@@ -2708,63 +1876,13 @@ static __int64 HookedGroupTool(__int64 world, int mode)
         *(unsigned char*)(world + WORLD_GROUP_DRAG_OFFSET) = 0;
         return 0;
     }
-    if (!g_connected || InterlockedCompareExchange(&g_applyingSegment, 0, 0) != 0)
-        return g_origGroupTool(world, mode);
-
-    // The commit frame as the game decides it (menus closed, button up, a
-    // drag marked); every other frame only tracks the drag.
-    GroupToolState s;
-    bool commit = false;
-    __try {
-        BYTE* w = (BYTE*)world;
-        ReadGroupToolState(world, s);
-        commit = !w[0xfbc] && !w[0xfbe] && !w[0xfc3] && !s.down && s.drag;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        commit = false;
-    }
-    if (!commit) return g_origGroupTool(world, mode);
-
-    int before = CountPlannedPieces(world);
-    __int64 result = g_origGroupTool(world, mode);
-    int started = before - CountPlannedPieces(world);
-    EnterCriticalSection(&g_queueLock);
-    if (g_groupCaptureCount < GROUP_CAPTURE_MAX) {
-        RoadSyncGroupToolMsg& m = g_groupCaptures[g_groupCaptureCount++];
-        memset(&m, 0, sizeof(m));
-        m.category = ROAD_SYNC_GROUP_TOOL_CATEGORY;
-        m.mode = mode;
-        memcpy(m.box, s.box, sizeof(m.box));
-        memcpy(m.cursor, s.cursor, sizeof(m.cursor));
-        m.yaw = s.yaw;
-        m.buildMode = BuildMode_Read();
-        m.started = started;
-    }
-    LeaveCriticalSection(&g_queueLock);
-    return result;
+    return g_origGroupTool(world, mode);
 }
 
-bool RoadSync_InstallGroupToolHook()
+bool Networks_InstallGroupToolHook()
 {
     return InstallInlineHook(g_exeBase + GROUP_TOOL_RVA, (void*)HookedGroupTool, (void**)&g_origGroupTool,
                              kGroupToolExpect, sizeof(kGroupToolExpect), "republicmp group tool");
-}
-
-static void SendGroupToolCaptures()
-{
-    RoadSyncGroupToolMsg captured[GROUP_CAPTURE_MAX];
-    EnterCriticalSection(&g_queueLock);
-    int n = g_groupCaptureCount;
-    memcpy(captured, g_groupCaptures, sizeof(RoadSyncGroupToolMsg) * n);
-    g_groupCaptureCount = 0;
-    LeaveCriticalSection(&g_queueLock);
-    for (int i = 0; i < n; i++) {
-        static RoadSyncItem s_item; // large - game thread only
-        memset(&s_item, 0, sizeof(s_item));
-        s_item.tag = ROAD_SYNC_WIRE_GROUP_TOOL;
-        s_item.group = captured[i];
-        s_item.group.terrainFence = TerrainSync_GetFenceSeq();
-        SendOrQueue(s_item);
-    }
 }
 
 static bool CallGroupTool(__int64 world, int mode)
@@ -2777,14 +1895,13 @@ static bool CallGroupTool(__int64 world, int mode)
     }
 }
 
-// The menus are already closed by the caller's ReplayUiScope.
-static void ApplyGroupToolAndAck(const RoadSyncGroupToolMsg& m)
+// The menus are already closed by the caller's MenusClosedScope.
+static bool ApplyGroupTool(const NetGroupToolMsg& m)
 {
     __int64 world = GetWorldThisPtr();
     if (!g_origGroupTool || m.mode < 0 || m.mode > 3) {
-        Logf("republicmp  ROAD_SYNC: group tool seq=%d mode %d - not applied", m.seq, m.mode);
-        SendAck(m.seq, m.category, false, 1);
-        return;
+        Logf("republicmp  NETWORKS: group tool mode %d - not applied", m.mode);
+        return false;
     }
     // All of it lives in the exe image (the world object is a global).
     GroupToolState own, replay;
@@ -2800,36 +1917,31 @@ static void ApplyGroupToolAndAck(const RoadSyncGroupToolMsg& m)
     WriteGroupToolState(world, replay);
     BuildMode_Write(m.buildMode);
     InterlockedIncrement(&g_applyingSegment);
-    TerrainSync_BeginForeignReplay();
     bool ok = CallGroupTool(world, m.mode);
-    TerrainSync_EndForeignReplay();
     InterlockedDecrement(&g_applyingSegment);
     WriteGroupToolState(world, own); // this PC's own drag, cursor, camera and input
     BuildMode_Write(mine);
     int started = before - CountPlannedPieces(world);
     char theirs[96];
-    Logf("republicmp  ROAD_SYNC: group tool seq=%d mode %d pay=%s - %s: %d planned piece(s) started here, %d on the sender%s",
-         m.seq, m.mode, BuildMode_Describe(m.buildMode, theirs, sizeof(theirs)), ok ? "applied" : "THREW",
-         started, m.started, ok && started != m.started ? " (DIFFERENT)" : "");
-    SendAck(m.seq, m.category, ok, 1);
+    Logf("republicmp  NETWORKS: group tool mode %d pay=%s - %s: %d planned piece(s) started",
+         m.mode, BuildMode_Describe(m.buildMode, theirs, sizeof(theirs)), ok ? "applied" : "THREW", started);
+    return ok;
 }
 
-bool RoadSync_ApplyCommandPlanStart(const RoadSyncPlanStartMsg& msg)
+bool Networks_ApplyCommandPlanStart(const NetPlanStartMsg& msg)
 {
-    ApplyPlanStartAndAck(msg); // the ack goes nowhere without the replay channel
-    return true;
+    return ApplyPlanStart(msg);
 }
 
-bool RoadSync_ApplyCommandGroupTool(const RoadSyncGroupToolMsg& msg)
+bool Networks_ApplyCommandGroupTool(const NetGroupToolMsg& msg)
 {
-    ReplayUiScope menus;
-    ApplyGroupToolAndAck(msg);
-    return true;
+    MenusClosedScope menus;
+    return ApplyGroupTool(msg);
 }
 
 static std::unordered_map<__int64, int> g_lsDirections;
 
-void RoadSync_LockstepDirectionsBaseline()
+void Networks_LockstepDirectionsBaseline()
 {
     g_lsDirections.clear();
     int n = ReadFactoryDirections();
@@ -2838,139 +1950,29 @@ void RoadSync_LockstepDirectionsBaseline()
     }
 }
 
-void RoadSync_LockstepDirectionsDetect()
+void Networks_LockstepDirectionsDetect()
 {
     int n = ReadFactoryDirections();
     for (int i = 0; i < n; i++) {
         const DirSnapshot& s = g_dirSnapshot[i];
         auto old = g_lsDirections.find(s.seg);
         if (old == g_lsDirections.end() || old->second == s.direction) continue;
-        RoadSyncDirectionMsg m = {};
-        m.category = ROAD_SYNC_CATEGORY_FACTORYCONN;
+        NetDirectionMsg m = {};
+        m.category = NET_CATEGORY_FACTORYCONN;
         m.piece = s.piece;
         m.direction = s.direction;
         Commands_Submit(LS_CMD_DIRECTION, &m, sizeof(m));
-        RoadSyncDirectionMsg back = m; // this PC's own segment, as it was
+        NetDirectionMsg back = m; // this PC's own segment, as it was
         back.direction = old->second;
         int local = 0;
         ApplyDirection(back, &local);
     }
 }
 
-bool RoadSync_ApplyCommandDirection(const RoadSyncDirectionMsg& msg)
+bool Networks_ApplyCommandDirection(const NetDirectionMsg& msg)
 {
     int local = 0;
     bool ok = ApplyDirection(msg, &local) != 0;
-    Logf("republicmp  ROAD_SYNC: command direction %d %s", msg.direction, ok ? "applied" : "NOT applied - connection not found");
+    Logf("republicmp  NETWORKS: command direction %d %s", msg.direction, ok ? "applied" : "NOT applied - connection not found");
     return ok;
-}
-
-void RoadSync_Tick()
-{
-    FlushOutboundQueue();
-    SendPlanCaptures();
-    SendGroupToolCaptures();
-
-    // Factory connection directions: only while connected and in the world
-    // (the join screen and a fresh load would otherwise look like changes).
-    if (g_connected && !SyncBlock_IsActive() && IsWorldLoaded()) {
-        ULONGLONG nowMs = GetTickCount64();
-        if (nowMs - g_lastDirScanMs >= DIR_SCAN_INTERVAL_MS) {
-            g_lastDirScanMs = nowMs;
-            ScanFactoryDirections();
-        }
-    } else {
-        g_knownDirections.clear();
-    }
-
-    std::vector<RoadSyncAckMsg> acks;
-    EnterCriticalSection(&g_queueLock);
-    acks.swap(g_incomingAcks);
-    if (!g_incoming.empty()) {
-        g_pending.insert(g_pending.end(), g_incoming.begin(), g_incoming.end());
-        g_incoming.clear();
-    }
-    LeaveCriticalSection(&g_queueLock);
-
-    for (const RoadSyncAckMsg& ack : acks) {
-        bool found = false;
-        for (size_t i = 0; i < g_pendingSends.size(); i++) {
-            if (g_pendingSends[i] == ack.seq) {
-                g_pendingSends.erase(g_pendingSends.begin() + i);
-                found = true;
-                break;
-            }
-        }
-        Logf("republicmp  ROAD_SYNC: ack seq=%d %s %s%s", ack.seq, CategoryName(ack.category),
-             ack.success ? "CONFIRMED built" : "FAILED on the other side",
-             found ? "" : " (no matching pending send)");
-    }
-
-    if (g_pending.empty() && g_waitingDemolish.empty()) return;
-
-    if (!IsWorldLoaded()) {
-        if (!g_warnedWorldNotLoaded) {
-            Logf("republicmp  ROAD_SYNC: %zu remote item(s) held until the world is loaded", g_pending.size());
-            g_warnedWorldNotLoaded = true;
-        }
-        return;
-    }
-    g_warnedWorldNotLoaded = false;
-
-    // Never replay into a manager while the local player is dragging, or
-    // while the tool wrappers are blocked by UI - items stay queued.
-    __int64 thisPtr = GetWorldThisPtr();
-    ULONGLONG nowMs = GetTickCount64();
-    // A window or menu open on this PC no longer holds the other player's
-    // roads (replay_menus.h); the join screen still does.
-    if (SyncBlock_IsActive()) return;
-    ReplayUiScope replayUi;
-    for (size_t i = 0; i < g_waitingDemolish.size();) {
-        RoadSyncItem& item = g_waitingDemolish[i];
-        if (nowMs < item.notBeforeMs || LocalBuilds_IsToolDragActive() || ToolWrapperGuardBusy(thisPtr)) {
-            ++i;
-            continue;
-        }
-        bool over = nowMs - item.waitSinceMs >= DEMOLISH_OWNER_WAIT_MS;
-        if (ApplyDemolishAndAck(item.dem, true, over) == DEMOLISH_WAIT_OWNER) {
-            item.notBeforeMs = nowMs + DEMOLISH_OWNER_POLL_MS;
-            ++i;
-        } else {
-            g_waitingDemolish.erase(g_waitingDemolish.begin() + i);
-        }
-    }
-
-    std::vector<RoadSyncItem> toApply;
-    toApply.swap(g_pending);
-    for (size_t i = 0; i < toApply.size(); i++) {
-        if (LocalBuilds_IsToolDragActive() || ToolWrapperGuardBusy(thisPtr) || !TerrainFenceAllows(toApply[i]) ||
-            nowMs < toApply[i].notBeforeMs) {
-            g_pending.insert(g_pending.begin(), toApply.begin() + i, toApply.end());
-            break;
-        }
-        if (toApply[i].tag == ROAD_SYNC_WIRE_PLAN_START)
-            ApplyPlanStartAndAck(toApply[i].plan);
-        else if (toApply[i].tag == ROAD_SYNC_WIRE_GROUP_TOOL)
-            ApplyGroupToolAndAck(toApply[i].group);
-        else if (toApply[i].tag == ROAD_SYNC_WIRE_DIRECTION)
-            ApplyDirectionAndAck(toApply[i].dir);
-        else if (toApply[i].tag == ROAD_SYNC_WIRE_UPGRADE)
-            ApplyUpgradeAndAck(toApply[i].up);
-        else if (toApply[i].tag == ROAD_SYNC_WIRE_DEMOLISH) {
-            RoadSyncItem& item = toApply[i];
-            DemolishOutcome r = ApplyDemolishAndAck(item.dem, item.attempts + 1 >= DEMOLISH_MAX_ATTEMPTS, false);
-            if (r == DEMOLISH_WAIT_OWNER) {
-                item.waitSinceMs = nowMs;
-                item.notBeforeMs = nowMs + DEMOLISH_OWNER_POLL_MS;
-                g_waitingDemolish.push_back(item);
-            } else if (r == DEMOLISH_RETRY) {
-                // Again after the game's next frames; later items wait behind it.
-                item.attempts++;
-                item.notBeforeMs = nowMs + DEMOLISH_RETRY_MS;
-                g_pending.insert(g_pending.begin(), toApply.begin() + i, toApply.end());
-                break;
-            }
-        } else
-            ApplySegmentAndAck(toApply[i].seg);
-    }
 }

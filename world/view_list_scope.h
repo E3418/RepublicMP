@@ -2,7 +2,7 @@
 // Same "camera-visible" edges on both PCs for one command.
 //
 // Every network object (world+0xf7a0 roads, +0xf968 footpaths, ... - the
-// managers in road_sync) keeps, besides its committed edge vector
+// managers in world/networks) keeps, besides its committed edge vector
 // (+0x2b0/+0x2b8), two lists the renderer fills each frame with the edges
 // the local camera sees: +0xaa0/+0xaa8/+0xab0 and +0xab8/+0xac0/+0xac8. The
 // road planner, its picks and a building's automatic access road read

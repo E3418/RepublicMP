@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Multiplayer session: joining a player into the host's running game and
-// keeping track of whether that player is still there.
+// Multiplayer session: taking players into the host's running game, and
+// re-syncs.
 //
 // Host: Host starts hosting and returns - the game keeps running while
-// nobody is connected. When a player connects, both games are paused and
-// locked behind the sync screen (ui/sync_block) while the host saves, packs
-// and sends the world and the player unpacks and loads it. Then the live sync
-// channels (build_sync, road_sync, terrain_sync) connect, the screens lift
-// and both games resume together. The host keeps hosting: if the player
-// leaves or the connection drops, it goes back to waiting for a player, until
-// Stop hosting.
+// nobody is connected. When players connect, every game is paused and locked
+// behind the sync screen (ui/sync_block) while the host saves, packs and
+// sends the world to all of them at once and each unpacks and loads it; the
+// host loads the same save meanwhile. Then the players open the lockstep
+// connection (lockstep/lockstep_net), the screens lift and the shared
+// simulation runs. Up to core/profile's max players (the host included); the
+// join port stays open while there is room (a full session stops
+// listening). The host keeps hosting until Stop hosting: a player who leaves
+// is dropped and the others go on.
 //
 // Client: Connect pauses and locks the game at once and walks the same
 // steps from the other side; the host's steps (saving, packing) are relayed
@@ -17,24 +19,16 @@
 // the connection drops or on Disconnect.
 //
 // Before anything else both sides exchange version, protocol number and a
-// CRC32 of their RepublicMP.dll (version.h); any difference refuses the join.
+// CRC32 of their RepublicMP.dll (version.h), then their DLC lists and the
+// names their players chose; a different build (or DLCs, with the check on)
+// refuses the join.
+//
+// Re-sync: on request or a set time after the games differ, the host
+// announces it on the lockstep connection, closes it and listens again;
+// every player connects straight back and the normal join runs. A player who
+// connects during the game joins through a re-sync of everyone.
 //
 // One session runs at a time: Host/Connect are refused while one is active.
-//
-// Re-sync: both games simulate on their own, so vehicles, citizens,
-// production and storage drift apart. The host can replace the player's world
-// with its own again, by hand or every few minutes: it announces the re-sync
-// on the build_sync channel, closes the live channels and listens again; the
-// player, seeing the announcement instead of a drop, connects straight back
-// and the normal join runs (both games pause, save, send, load).
-//
-// Lockstep takes up to core/profile's max players (the host included): the
-// host saves and packs once and sends the world to every player of a join.
-// The join port stays open while there is room (a full session stops
-// listening). A player who connects during the game joins through a re-sync
-// of everyone - all reconnect and load the same save again; a player who
-// leaves is dropped and the others go on. After the versions and DLCs both
-// sides exchange the names their players chose.
 #pragma once
 
 #include "tesmio_plugin.h"
@@ -48,9 +42,9 @@ enum SessionState {
     SESSION_IDLE = 0,
     SESSION_HOST_LISTENING,  // hosting, no player yet
     SESSION_HOST_JOINING,    // a player is joining (both games locked)
-    SESSION_HOST_IN_GAME,    // the player is in the game, live sync running
+    SESSION_HOST_IN_GAME,    // players are in the game, lockstep running
     SESSION_CLIENT_JOINING,  // connecting / receiving / loading (locked)
-    SESSION_CLIENT_IN_GAME,  // in the host's game, live sync running
+    SESSION_CLIENT_IN_GAME,  // in the host's game, lockstep running
 };
 
 void SaveSync_Bind(const TsmHost* host);
@@ -66,49 +60,33 @@ bool SaveSync_IsWorldLoaded();
 void SaveSync_StartHost();
 void SaveSync_StartClient(const char* hostIp = nullptr); // nullptr = keep last IP
 
-// Ends the session: stops hosting / leaves the host, closes the live sync
-// channels. Waits (accept, connect, save, load) react within ~200ms.
+// Ends the session: stops hosting / leaves the host, closes the lockstep
+// connection. Waits (accept, connect, save, load) react within ~200ms.
 void SaveSync_RequestDisconnect();
 
 // Host, player in the game: re-sync now (no-op otherwise).
 void SaveSync_RequestResync();
 
-// Host: re-sync automatically every `minutes` minutes of live play (0 = off).
-// Lockstep: re-sync this many seconds after the games differ (-1: never by itself).
+// Host: re-sync this many seconds after the games differ (-1: never by itself).
 void SaveSync_SetDesyncResyncSeconds(int seconds);
 int SaveSync_GetDesyncResyncSeconds();
 // Host: ms until that re-sync (0: none pending).
 ULONGLONG SaveSync_GetMsUntilDesyncResync();
-void SaveSync_SetAutoResyncMinutes(int minutes);
-int SaveSync_GetAutoResyncMinutes();
-
-// Host, player in the game: ms until the next automatic re-sync (0 = off).
-ULONGLONG SaveSync_GetMsUntilAutoResync();
-
-// Host, player in the game: ms since the player last received the world (join
-// or re-sync); 0 = no player in the game.
-ULONGLONG SaveSync_GetMsSinceWorldSent();
 
 // True while a re-sync is under way (from the announcement to the player
 // being back in the game).
 bool SaveSync_IsResyncing();
 
-// Client: the host announced a re-sync (build_sync receive thread).
+// Client: the host announced a re-sync.
 void SaveSync_OnResyncAnnounced();
 
-// Per-frame (game thread, Present hook): sends a requested announcement -
-// build_sync only sends from the game thread.
+// Per-frame (game thread, Present hook): ends the session when the player
+// leaves the world.
 void SaveSync_Tick();
 
-// Host: run the next session in lockstep (both PCs simulate the same ticks;
-// lockstep/lockstep_net). The player follows the host's choice.
-void SaveSync_SetLockstep(bool on);
-bool SaveSync_GetLockstep();
 // Refuse a join when the two games' DLCs differ (on by default; a join goes ahead when either player turns it off).
 void SaveSync_SetDlcCheck(bool on);
 bool SaveSync_GetDlcCheck();
-// The current session runs in lockstep.
-bool SaveSync_IsLockstepSession();
 
 SessionState SaveSync_GetState();
 bool SaveSync_IsBusy();     // any state but SESSION_IDLE

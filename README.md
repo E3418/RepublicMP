@@ -1,13 +1,12 @@
 # RepublicMP
 
 Multiplayer mod for *Workers & Resources: Soviet Republic*, built as a
-[TesmioLoader](https://github.com/MaxLegend/TesmioLoader) plugin. Two players
-share one city: the host's game is transferred to the joining player, and
-from there both games run the same simulation tick by tick (**lockstep**),
-or each game simulates on its own and the players' actions are repeated on
-the other side (**replay mode**).
+[TesmioLoader](https://github.com/MaxLegend/TesmioLoader) plugin. Up to four
+players share one city (**co-op**): the host's game is transferred to the
+joining players, and from there every game runs the same simulation tick by
+tick (**lockstep**).
 
-**Status:** alpha, tested with up to four players. Current version: **0.6.2**
+**Status:** alpha, tested with up to four players. Current version: **0.7.0**
 ([changelog](CHANGELOG.md)).
 
 ## Support and community
@@ -15,18 +14,6 @@ the other side (**replay mode**).
 Questions, bug reports and test partners are welcome on
 [Discord](https://discord.gg/BRTAYNKAYu). If you want to support the work,
 you can do it on [Buy Me a Coffee](https://buymeacoffee.com/3418).
-
-## Two modes
-
-| | Lockstep (recommended) | Replay mode |
-| --- | --- | --- |
-| How | Both games run the same ticks; every player action is a command both games make after the same tick | Each game simulates on its own; actions are sent and repeated on the other side |
-| Vehicles, citizens, production | The same on both PCs | Drift apart; a re-sync brings them back |
-| Speed and pause | The host's (Hyper and Plaid included); the player's keys are requests | The host's; the player's keys are requests |
-| Checks | Both games compare a state hash every 60 ticks; a difference is shown on both PCs and can re-sync after a set time | A drift check every game hour |
-
-The host picks **Lockstep** (the default) or **Replay** in the RepublicMP window
-before pressing **Host**; the joining player follows the host's choice.
 
 ## Lockstep
 
@@ -69,32 +56,20 @@ Carried as commands:
 Not carried yet (tools are put away when selected, or the action acts on one
 PC only): removing decoration paths, worker relocation, buoys, Christmas
 lights, merge tools, "Go there", goods purchases in shops, the office
-window's order popup. Saving in a lockstep
-session saves on every PC at once. The construction animation
+window's order popup. Saving in a session saves on every PC at once. The construction animation
 (scaffolding, ground, workers on a building site) is not drawn; the building
 still finishes on time. While the game is paused, what comes into view
 appears only after the pause.
-
-## Replay mode
-
-1. **Buildings and infrastructure** - placed, upgraded and demolished the
-   same way on both PCs, with the sender's construction mode.
-2. **Terrain** - every heightmap and terrain-mask edit is replayed.
-3. **Building settings** and **citizens' destinations** travel to the other
-   side.
-4. **Speed, clock, money and weather** are the host's.
-5. **Drift check and re-sync** - every game hour both games compare
-   citizens, vehicles, storage and production; the host can send its world
-   to the player again by hand or automatically.
 
 ## How it works
 
 The mod hooks the game's own functions instead of simulating input. An
 action is taken where the game decides it (a placement click, a drag
 commit, a Buy press, a pick tool's choice, a window's routine call), and
-every PC makes it again with the game's own code: in lockstep at the same
-tick boundary, in replay mode as soon as it arrives. Objects travel as
-positions or as their place in the world's lists, never as pointers.
+every PC makes it again with the game's own code at the same tick boundary.
+Objects travel as positions or as their place in the world's lists, never as
+pointers. [ARCHITECTURE.md](ARCHITECTURE.md) describes the code: its
+layers, how a command travels and which module owns which hook.
 
 Both players must run the same build of the mod: the version, the protocol
 number and a checksum of `RepublicMP.dll` are compared on join, and a
@@ -120,32 +95,33 @@ mismatch refuses it.
 
 1. Both players start the game with TesmioLoader and the same
    `RepublicMP.dll` installed.
-2. The host loads a city, picks **Lockstep** or **Replay**, and presses
-   **Host** in the RepublicMP window.
-3. The other player enters the host's IP (LAN or VPN) and presses **Connect**.
-   Both games pause behind the join screen while the city is saved, sent and
+2. In the RepublicMP window both pick **Co-op**. The host loads a city, sets
+   the session's size and presses **Host**.
+3. The other players enter the host's IP (LAN or VPN) and press **Connect**.
+   Every game pauses behind the join screen while the city is saved, sent and
    loaded.
-4. Once both sides resume, the session runs. **Disconnect** (client) or
+4. Once all are in, the session runs, paused until a player resumes. **Disconnect** (client) or
    **Stop hosting** (host) ends it.
 
 Both games need the same DLCs: with **Check DLCs** ticked on both PCs (the
 default) a join with different DLCs is refused and names the difference;
 either player can untick it to play a map that needs no DLC content.
 
-Firewalls must allow TCP ports 5556-5559 on the host, and 5560 for lockstep.
+Firewalls must allow TCP ports 5556 and 5560 on the host.
 
 ### Controls
 
 | Key | Action |
 | --- | --- |
 | **Insert** | Show / hide the RepublicMP overlay |
+| **~** | Ping the place under the mouse for every player (another key can be set in the window) |
 
-The **Debug** button in the main window opens manual reconnect controls, the
+The **Debug** button in the main window opens the lockstep state, the
 determinism probe, the money trace (on by default: on a desync each log gets
 the balances and construction sites of the ticks before it) and the detailed
 log. A full log is written to
-`tesmioloader.log`; when reporting a problem, attach the logs of both
-players and say which mode you were in.
+`tesmioloader.log`; when reporting a problem, attach the logs of every
+player.
 
 ## Versioning
 

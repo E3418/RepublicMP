@@ -4,11 +4,11 @@
 // While the determinism layer runs the simulation in whole ticks
 // (determinism/), an action of the local player must not change the world
 // in the middle of a frame on this PC only. The hooks that see the local
-// actions (world_sync/local_builds: building placement and every drag tool's
-// commit; world_sync/buildings/demolish_hook: building demolition) hand them
+// actions (world/local_builds: building placement and every drag tool's
+// commit; world/demolish_hook: building demolition) hand them
 // here instead of letting the game make them, and the action is made later
-// through the same replay the receiving PC of the replay multiplayer uses -
-// on this PC as well, at the start of a frame, before the next tick runs
+// from its data on every PC (world/buildings, world/networks, ...) - on this
+// PC as well, at the start of a frame, before the next tick runs
 // (Determinism_BeforePrepare). Every PC that makes the same commands after the
 // same tick reaches the same world.
 //
@@ -27,15 +27,15 @@
 #include "tesmio_plugin.h"
 
 enum LockstepCommandKind {
-    LS_CMD_SEGMENT = 1,      // RoadSyncMsg: a drag tool's finished segment
-    LS_CMD_UPGRADE = 2,      // RoadSyncUpgradeMsg: re-typing existing pieces
-    LS_CMD_NET_DEMOLISH = 3, // RoadSyncDemolishMsg: the demolition tool on a network
-    LS_CMD_PLACE = 4,        // BuildSyncMsg: building placement inputs
-    LS_CMD_DEMOLISH = 5,     // BuildSyncMsg: building demolition
-    LS_CMD_SETTING = 6,      // SettingWire: a building window setting, pay or stop flags
-    LS_CMD_PLAN_START = 7,   // RoadSyncPlanStartMsg: start planned construction
-    LS_CMD_GROUP_TOOL = 8,   // RoadSyncGroupToolMsg: a group tool's commit
-    LS_CMD_DIRECTION = 9,    // RoadSyncDirectionMsg: a factory connection's direction
+    LS_CMD_SEGMENT = 1,      // NetSegmentMsg: a drag tool's finished segment
+    LS_CMD_UPGRADE = 2,      // NetUpgradeMsg: re-typing existing pieces
+    LS_CMD_NET_DEMOLISH = 3, // NetDemolishMsg: the demolition tool on a network
+    LS_CMD_PLACE = 4,        // BuildingMsg: building placement inputs
+    LS_CMD_DEMOLISH = 5,     // BuildingMsg: building demolition
+    LS_CMD_SETTING = 6,      // BuildingSettingMsg: a building window setting, pay or stop flags
+    LS_CMD_PLAN_START = 7,   // NetPlanStartMsg: start planned construction
+    LS_CMD_GROUP_TOOL = 8,   // NetGroupToolMsg: a group tool's commit
+    LS_CMD_DIRECTION = 9,    // NetDirectionMsg: a factory connection's direction
     LS_CMD_TERRAIN = 10,     // terrain edits of one frame (terrain_hook)
     LS_CMD_MONEY = 11,       // LsMoneyDelta: what a local action paid or got
     LS_CMD_PURCHASE = 12,    // purchase.cpp: a vehicle, licence or blueprint bought in a purchase window

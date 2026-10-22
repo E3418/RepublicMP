@@ -4,15 +4,13 @@
 #include "lockstep_net.h"
 #include "../core/profile.h"
 #include "../game/window_focus.h"
+#include "../game/world.h"
+#include "../game/camera.h"
 #include "../ui/sync_block.h"
 #include "imgui.h"
 #include <math.h>
 #include <string.h>
 
-#define WORLD_RVA 0x9D4F10
-#define MOUSE_POINT_OFFSET 0xF78 // the terrain point under the mouse
-#define CAMERA_RVA 0x9EAD10      // pointer: the camera's view matrix, then its projection
-#define PROJECTION_OFFSET 0xC8
 #define SEND_MS 100              // the cursor is sent at most this often
 #define KEEPALIVE_MS 2000        // and a still one this often
 #define CURSOR_TIMEOUT_MS 6000   // a cursor not heard of for this long is gone
@@ -173,23 +171,13 @@ void Presence_Receive(int player, int kind, const float pos[3], const char* nick
 // This PC's cursor and ping
 // ---------------------------------------------------------------------------
 
-static bool MousePoint(float p[3])
-{
-    __try {
-        memcpy(p, g_exeBase + WORLD_RVA + MOUSE_POINT_OFFSET, 12);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
-    return Finite(p) && (p[0] != 0 || p[1] != 0 || p[2] != 0);
-}
-
 static void SendOwn(ULONGLONG now)
 {
     static ULONGLONG lastSent = 0, lastPing = 0;
     static float sent[3];
     static bool hidden = true, keyWasDown = false;
     float p[3];
-    if (!IsGameWindowFocused() || !MousePoint(p)) {
+    if (!IsGameWindowFocused() || !World_MousePoint(p)) {
         if (!hidden) LockstepNet_SendMark(PRESENCE_HIDDEN, sent);
         hidden = true;
         keyWasDown = false;
@@ -218,33 +206,10 @@ static void SendOwn(ULONGLONG now)
 // Drawing
 // ---------------------------------------------------------------------------
 
-// A world point in clip space (row vector * view * projection, as the game's
-// own projection at 403f70).
-static bool Clip(const float p[3], float c[4])
-{
-    __try {
-        unsigned __int64 camera = *(unsigned __int64*)(g_exeBase + CAMERA_RVA);
-        if (!camera) return false;
-        const float* v = (const float*)camera;
-        const float* m = (const float*)(camera + PROJECTION_OFFSET);
-        float e[3];
-        for (int i = 0; i < 3; i++) e[i] = p[0] * v[i] + p[1] * v[4 + i] + p[2] * v[8 + i] + v[12 + i];
-        for (int i = 0; i < 4; i++) c[i] = e[0] * m[i] + e[1] * m[4 + i] + e[2] * m[8 + i] + m[12 + i];
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
-    return isfinite(c[0]) && isfinite(c[1]) && isfinite(c[3]);
-}
-
-// Where the camera puts a world point, in the overlay's pixels: 1 in front of
-// the camera, -1 behind it (then the point only gives the direction), 0 unknown.
+// Where the camera puts a world point, in the overlay's pixels (game/camera).
 static int Project(const float p[3], const ImVec2& size, ImVec2* out)
 {
-    float c[4];
-    if (!Clip(p, c) || fabsf(c[3]) < 1e-4f) return 0;
-    out->x = (c[0] / fabsf(c[3]) + 1) * 0.5f * size.x;
-    out->y = (1 - c[1] / fabsf(c[3])) * 0.5f * size.y;
-    return c[3] > 0 ? 1 : -1;
+    return Camera_Project(p, size.x, size.y, &out->x, &out->y);
 }
 
 static bool OnScreen(const ImVec2& p, const ImVec2& size)

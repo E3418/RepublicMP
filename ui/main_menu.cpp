@@ -8,10 +8,7 @@
 #include "../session/save_sync.h"
 #include "../lockstep/lockstep_net.h"
 #include "../lockstep/presence.h"
-#include "../world_sync/buildings/build_sync.h"
-#include "../world_sync/networks/road_sync.h"
-#include "../world_sync/terrain/terrain_sync.h"
-#include "../session/sync_check.h"
+#include "../modes/mode.h"
 #include "../determinism/determinism.h"
 #include "../core/profile.h"
 
@@ -53,22 +50,6 @@ static void StatusDot(const ImVec4& color)
                                                 ImGui::GetColorU32(color));
     ImGui::Dummy(ImVec2(h * 0.9f, h));
     ImGui::SameLine();
-}
-
-// Replay mode: "Buildings  Roads  Terrain" with a green/red dot each (lockstep uses none of them).
-static void ChannelIndicators()
-{
-    struct { const char* name; bool up; } ch[] = {
-        { "Buildings", BuildSync_IsConnected() },
-        { "Roads", RoadSync_IsConnected() },
-        { "Terrain", TerrainSync_IsConnected() },
-    };
-    ImGui::TextColored(kGrey, "Live sync:");
-    for (auto& c : ch) {
-        ImGui::SameLine(0, 12);
-        StatusDot(c.up ? kGreen : kRed);
-        ImGui::TextUnformatted(c.name);
-    }
 }
 
 // The current join step (from the sync screen), e.g. "Step 4/7 - Sending...  62%".
@@ -221,73 +202,11 @@ static void LockstepPanel(bool host)
     Wrapped(kGrey, "Re-sync sends your world to every player again; all games then go on from it.");
 }
 
-// Replay mode, host with a player in the game: re-sync now, the interval and the drift.
-static void ReplayResyncControls()
-{
-    static const int kMinutes[] = { 0, 5, 10, 15, 30, 60 };
-    static const char* const kLabels[] = { "Off", "every 5 min", "every 10 min", "every 15 min",
-                                           "every 30 min", "every 60 min" };
-    int current = 0;
-    for (int i = 0; i < IM_ARRAYSIZE(kMinutes); i++)
-        if (kMinutes[i] == SaveSync_GetAutoResyncMinutes()) current = i;
-
-    if (ImGui::Button("Re-sync now"))
-        SaveSync_RequestResync();
-    ImGui::SameLine();
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("Auto:");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(130);
-    if (ImGui::Combo("##autoResync", &current, kLabels, IM_ARRAYSIZE(kLabels)))
-        SaveSync_SetAutoResyncMinutes(kMinutes[current]);
-    ULONGLONG left = SaveSync_GetMsUntilAutoResync();
-    if (left) {
-        char t[16];
-        MinutesSeconds(t, sizeof(t), left);
-        ImGui::SameLine();
-        ImGui::TextColored(kGrey, "next in %s", t);
-    }
-    Wrapped(kGrey, "Re-sync sends your world to the player again (vehicles, citizens, production).");
-
-    SyncDrift d = SyncCheck_GetDrift();
-    if (d.valid) {
-        ImVec4 col = d.total < 2.0f ? kGreen : d.total < 10.0f ? kYellow : kRed;
-        Wrapped(col, "Drift %.1f%% (day %d %02d:00 - citizens %d/%d, vehicles %d/%d, storage %.1f%%)", d.total, d.day, d.hour,
-                d.hostCitizens, d.clientCitizens, d.hostVehicles, d.clientVehicles, d.storage);
-    } else {
-        Wrapped(kGrey, "Drift: measured every game hour");
-    }
-    static const int kLimits[] = { 0, 2, 5, 10, 20 };
-    static const char* const kLimitLabels[] = { "Off", "above 2%", "above 5%", "above 10%", "above 20%" };
-    int limit = 0;
-    for (int i = 0; i < IM_ARRAYSIZE(kLimits); i++)
-        if (kLimits[i] == SyncCheck_GetAutoResyncPercent()) limit = i;
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("Re-sync on drift:");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(110);
-    if (ImGui::Combo("##driftResync", &limit, kLimitLabels, IM_ARRAYSIZE(kLimitLabels)))
-        SyncCheck_SetAutoResyncPercent(kLimits[limit]);
-    // Why an automatic re-sync has not happened yet (see session/sync_check.h).
-    if (kLimits[limit] > 0 && d.valid && d.overLimitChecks > 0) {
-        unsigned long long wait = SyncCheck_GetResyncCooldownMs();
-        if (d.overLimitChecks < SYNC_CHECK_CONFIRM_CHECKS)
-            Wrapped(kYellow, "above for %d/%d hours", d.overLimitChecks, SYNC_CHECK_CONFIRM_CHECKS);
-        else if (wait) {
-            char t[16];
-            MinutesSeconds(t, sizeof(t), wait);
-            Wrapped(kYellow, "waiting %s after the last re-sync", t);
-        }
-    }
-}
-
 static void StatusPanel()
 {
     SessionState st = SaveSync_GetState();
     const char* peer = SaveSync_GetPeerIp();
     const char* lastError = SaveSync_GetLastError();
-    bool lockstep = SaveSync_IsLockstepSession();
-    const char* mode = lockstep ? "lockstep" : "replay mode";
 
     switch (st) {
     case SESSION_IDLE:
@@ -303,10 +222,7 @@ static void StatusPanel()
             break;
         }
         StatusDot(kBlue);
-        if (SaveSync_GetLockstep())
-            Wrapped(kBlue, "Hosting (lockstep) - waiting for players (up to %d)", Profile_GetMaxPlayers() - 1);
-        else
-            Wrapped(kBlue, "Hosting (replay mode) - waiting for a player");
+        Wrapped(kBlue, "Hosting - waiting for players (up to %d)", Profile_GetMaxPlayers() - 1);
         Wrapped(kGrey, "Your game keeps running. Players connect to your IP (port %d).", SAVE_SYNC_PORT);
         if (lastError[0]) Wrapped(kYellow, "%s", lastError);
         break;
@@ -320,12 +236,8 @@ static void StatusPanel()
 
     case SESSION_HOST_IN_GAME:
         StatusDot(kGreen);
-        Wrapped(kGreen, "Hosting (%s) - in the game with %s", mode, peer[0] ? peer : "a player");
-        if (lockstep) LockstepPanel(true);
-        else {
-            ChannelIndicators();
-            ReplayResyncControls();
-        }
+        Wrapped(kGreen, "Hosting - in the game with %s", peer[0] ? peer : "a player");
+        LockstepPanel(true);
         break;
 
     case SESSION_CLIENT_JOINING:
@@ -336,9 +248,8 @@ static void StatusPanel()
 
     case SESSION_CLIENT_IN_GAME:
         StatusDot(kGreen);
-        Wrapped(kGreen, "In the game of %s (%s)", peer[0] ? peer : SaveSync_GetTargetIp(), mode);
-        if (lockstep) LockstepPanel(false);
-        else ChannelIndicators();
+        Wrapped(kGreen, "In the game of %s", peer[0] ? peer : SaveSync_GetTargetIp());
+        LockstepPanel(false);
         break;
     }
 }
@@ -370,35 +281,18 @@ static void SessionButtons(std::string& hostIp)
     float half = (ImGui::GetContentRegionAvail().x - spacing) * 0.5f;
 
     if (st == SESSION_IDLE) {
-        // The host picks the mode; the joining player follows it.
+        static const char* const kPlayers[] = { "2 players", "3 players", "4 players" };
+        int players = Profile_GetMaxPlayers() - PROFILE_MIN_PLAYERS;
         ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Mode:");
+        ImGui::TextUnformatted("Session:");
         ImGui::SameLine();
-        bool lockstep = SaveSync_GetLockstep();
-        if (ImGui::RadioButton("Lockstep (recommended)", lockstep)) SaveSync_SetLockstep(true);
+        ImGui::SetNextItemWidth(110);
+        if (ImGui::Combo("##maxPlayers", &players, kPlayers, IM_ARRAYSIZE(kPlayers)))
+            Profile_SetMaxPlayers(players + PROFILE_MIN_PLAYERS);
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Both games simulate the same ticks, so nothing drifts apart.\n"
-                              "Actions that are not carried yet are put away when selected.");
-        ImGui::SameLine();
-        if (ImGui::RadioButton("Replay", !lockstep)) SaveSync_SetLockstep(false);
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Each game simulates on its own and the players' actions are repeated;\n"
-                              "the games drift and are brought back by re-syncs.");
-        Wrapped(kGrey, "The host's choice - the joining player follows it.");
-        if (lockstep) {
-            static const char* const kPlayers[] = { "2 players", "3 players", "4 players" };
-            int players = Profile_GetMaxPlayers() - PROFILE_MIN_PLAYERS;
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted("Session:");
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth(110);
-            if (ImGui::Combo("##maxPlayers", &players, kPlayers, IM_ARRAYSIZE(kPlayers)))
-                Profile_SetMaxPlayers(players + PROFILE_MIN_PLAYERS);
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("The most players in your session, you included.\n"
-                                  "A full session stops listening for more.\n"
-                                  "A player who joins during the game brings a re-sync for everyone.");
-        }
+            ImGui::SetTooltip("The most players in your session, you included (the host's choice).\n"
+                              "A full session stops listening for more.\n"
+                              "A player who joins during the game brings a re-sync for everyone.");
         bool dlcCheck = SaveSync_GetDlcCheck();
         if (ImGui::Checkbox("Check DLCs", &dlcCheck)) SaveSync_SetDlcCheck(dlcCheck);
         if (ImGui::IsItemHovered())
@@ -474,7 +368,8 @@ static void StartPage()
     if (ModeCard("##coop", "Co-op", "One republic, 2-4 players", "Every PC runs the same city in lockstep", kGreen))
         s_page = PAGE_COOP;
     ImGui::Spacing();
-    if (ModeCard("##republics", "Republics", "Each player their own republic, 2 players", "One map split in two - in development", kBlue))
+    const RmpMode* republics = Modes_Republics();
+    if (republics && ModeCard("##republics", republics->title, republics->line1, republics->line2, kBlue))
         s_page = PAGE_REPUBLICS;
     ImGui::Spacing();
     NameInput();
@@ -487,16 +382,17 @@ static bool BackButton()
     return back;
 }
 
+// The page of the mode plugged in under modes/ (modes/mode.h).
 static void RepublicsPage()
 {
-    if (BackButton()) s_page = PAGE_START;
-    ImGui::TextColored(kBlue, "Republics");
+    const RmpMode* mode = Modes_Republics();
+    if (BackButton() || !mode) {
+        s_page = PAGE_START;
+        return;
+    }
+    ImGui::TextColored(kBlue, "%s", mode->title);
     ImGui::Spacing();
-    Wrapped(ImGui::GetStyleColorVec4(ImGuiCol_Text),
-            "Each player builds their own republic on one map, split in two. "
-            "You see the neighbour's buildings, vehicles and citizens live, and trade with them at the border.");
-    ImGui::Spacing();
-    Wrapped(kYellow, "In development - not playable yet.");
+    if (mode->drawPage) mode->drawPage();
 }
 
 static void CoopPage(std::string& hostIp)

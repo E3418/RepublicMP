@@ -3,7 +3,7 @@
 // read against the disassembly of 1.1.1.9).
 #include "hover_tools.h"
 #include "commands.h"
-#include "../world_sync/view_list_scope.h"
+#include "../world/view_list_scope.h"
 #include <math.h>
 #include <string.h>
 

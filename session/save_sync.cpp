@@ -3,17 +3,14 @@
 #include "save_sync.h"
 #include "../core/version.h"
 #include "game_speed.h"
-#include "sync_check.h"
 #include "../game/save_load.h"
 #include "../save/save_zip.h"
 #include "../ui/ui_log.h"
 #include "../ui/sync_block.h"
 #include "../third_party/miniz/miniz.h" // mz_crc32 for the build check
 #include "../transport/network.h"
-#include "../world_sync/buildings/build_sync.h"
-#include "../world_sync/networks/road_sync.h"
-#include "../world_sync/terrain/terrain_sync.h"
 #include "../determinism/determinism.h"
+#include "../game/world.h"
 #include "../lockstep/lockstep_net.h"
 #include "../core/profile.h"
 #include <stdio.h>
@@ -30,13 +27,6 @@
 
 // Fixed local name for the downloaded zip and its extraction folder on the client.
 #define SAVE_SYNC_CLIENT_STAGING_NAME "mp_syncsave_incoming"
-
-// How long the live sync channels get to connect after the world is loaded.
-#define CHANNELS_CONNECT_TIMEOUT_MS 30000
-#define CHANNELS_RETRY_MS 1000
-// A single dropped channel (network hiccup, Debug window Disconnect) gets
-// this long to reconnect before the session is given up.
-#define CHANNEL_RECONNECT_TIMEOUT_MS 20000
 
 #define JOIN_STEPS 7
 
@@ -68,25 +58,17 @@ static volatile SOCKET g_activeSock = INVALID_SOCKET;
 static volatile ULONGLONG g_sessionStartTick = 0;
 
 // Re-sync (see save_sync.h).
-#define RESYNC_ANNOUNCE_TIMEOUT_MS 3000 // host: the game thread sends the announcement within this
 #define RESYNC_ANNOUNCE_FLUSH_MS 500    // host: lets the announcement leave before the channels close
-#define RESYNC_REJOIN_TIMEOUT_MS 30000  // host: how long the player has to come back; client: how long it retries
+#define RESYNC_REJOIN_TIMEOUT_MS 30000  // host: how long the players have to come back; client: how long it retries
 #define RESYNC_RETRY_MS 500
-static volatile bool g_resyncRequested = false; // host: button or timer
-static volatile bool g_resyncSendNow = false;   // host: the game thread sends the announcement
-static volatile bool g_resyncSent = false;
-static volatile bool g_resyncAnnounced = false; // client: the host announced one
+static volatile bool g_resyncRequested = false; // host: the button
 static volatile bool g_resyncing = false;
-static volatile int g_autoResyncMinutes = 0;
-static volatile int g_desyncResyncSeconds = 60;    // lockstep: re-sync this long after a desync (-1 off)
+static volatile int g_desyncResyncSeconds = 60;    // re-sync this long after a desync (-1 off)
 static volatile ULONGLONG g_desyncSince = 0;       // GetTickCount64 of the desync this session saw (0 none)
-static volatile ULONGLONG g_lastWorldSentTick = 0; // host: when the player last got the world
-// Lockstep: both PCs load the sent save with the determinism layer on and run
-// the same ticks (lockstep/lockstep_net) instead of the live sync channels.
-// The host chooses (lockstep by default); the player follows the host's hello.
-static volatile bool g_lockstepChosen = true;
+static volatile ULONGLONG g_lastWorldSentTick = 0; // host: when the players last got the world
+// Every PC loads the sent save with the determinism layer on and runs the
+// same ticks (lockstep/lockstep_net).
 static volatile bool g_dlcCheck = true; // refuse a join when the DLCs differ (both players' choice)
-static volatile bool g_lockstep = false; // the current session's mode
 #define LOCKSTEP_CONNECT_TIMEOUT_MS 180000 // host: how long the loaded players get to connect
 #define HELLO_ANSWER_TIMEOUT_MS 60000      // client: the host is taking other players in
 #define LOCKSTEP_SILENCE_MS 20000          // a game that sent nothing (not even a keepalive) is gone
@@ -176,7 +158,6 @@ struct SessionHello {
     int protocol;      // REPUBLICMP_PROTOCOL
     char version[16];  // REPUBLICMP_VERSION
     unsigned int dllCrc;
-    int lockstep;      // host: the session runs in lockstep
 };
 
 // Step reports in both directions after the hello.
@@ -217,7 +198,6 @@ static void MakeHello(SessionHello* h)
     h->protocol = REPUBLICMP_PROTOCOL;
     strncpy_s(h->version, REPUBLICMP_VERSION, _TRUNCATE);
     h->dllCrc = SaveSync_GetLocalDllCrc();
-    h->lockstep = g_lockstepChosen ? 1 : 0;
 }
 
 // Compares the peer's hello with ours; fills why on a mismatch.
@@ -242,109 +222,18 @@ static bool HelloMatches(const SessionHello& peer, char* why, size_t whySize)
 }
 
 // ---------------------------------------------------------------------------
-// Live sync channels
+// The lockstep channel
 // ---------------------------------------------------------------------------
 
-static bool AllChannelsConnected()
+static void CloseLockstep()
 {
-    return BuildSync_IsConnected() && RoadSync_IsConnected() && TerrainSync_IsConnected();
-}
-
-// Closes every channel, connected or still waiting for its peer.
-static void ResetChannels()
-{
-    BuildSync_Reset();
-    RoadSync_Reset();
-    TerrainSync_Reset();
     LockstepNet_Close();
     Determinism_EndSession();
 }
 
-static void StartChannelsHost()
-{
-    BuildSync_StartHost();
-    RoadSync_StartHost();
-    TerrainSync_StartHost();
-}
-
-// Re-tries every channel that is neither connected nor connecting (the host
-// may not be listening yet when the first attempt goes out).
-static void StartChannelsClient()
-{
-    if (!BuildSync_IsConnected() && !BuildSync_IsConnecting()) BuildSync_StartClient(g_targetIp);
-    if (!RoadSync_IsConnected() && !RoadSync_IsConnecting()) RoadSync_StartClient(g_targetIp);
-    if (!TerrainSync_IsConnected() && !TerrainSync_IsConnecting()) TerrainSync_StartClient(g_targetIp);
-}
-
-// Waits until all channels are up. Client side keeps re-trying.
-static bool WaitForChannels(bool client)
-{
-    ULONGLONG start = GetTickCount64();
-    ULONGLONG lastTry = 0;
-    while (!g_disconnectRequested) {
-        if (AllChannelsConnected()) return true;
-        ULONGLONG now = GetTickCount64();
-        if (now - start > CHANNELS_CONNECT_TIMEOUT_MS) return false;
-        if (client && now - lastTry >= CHANNELS_RETRY_MS) {
-            StartChannelsClient();
-            lastTry = now;
-        }
-        Sleep(100);
-    }
-    return false;
-}
-
-// Names of the channels that are down, e.g. "roads, terrain".
-static void DownChannels(char* out, size_t outSize)
-{
-    out[0] = 0;
-    if (!BuildSync_IsConnected()) strcat_s(out, outSize, "buildings ");
-    if (!RoadSync_IsConnected()) strcat_s(out, outSize, "roads ");
-    if (!TerrainSync_IsConnected()) strcat_s(out, outSize, "terrain ");
-    size_t n = strlen(out);
-    if (n) out[n - 1] = 0;
-}
-
-static bool ResyncDue()
-{
-    if (g_resyncRequested) return true;
-    int minutes = g_autoResyncMinutes;
-    return minutes > 0 && GetTickCount64() - g_lastWorldSentTick >= (ULONGLONG)minutes * 60000;
-}
-
-// Host: has the game thread send the announcement and waits until it is out.
-// False (re-sync dropped) if it could not be sent.
-static bool AnnounceResync()
-{
-    g_resyncRequested = false;
-    g_resyncSent = false;
-    g_resyncSendNow = true;
-    ULONGLONG start = GetTickCount64();
-    while (!g_resyncSent && !g_disconnectRequested && GetTickCount64() - start < RESYNC_ANNOUNCE_TIMEOUT_MS)
-        Sleep(50);
-    g_resyncSendNow = false;
-    if (!g_resyncSent) {
-        SaveStatus("[HOST] couldn't announce the re-sync - skipped");
-        g_lastWorldSentTick = GetTickCount64(); // the timer tries again a full interval later
-        return false;
-    }
-    Sleep(RESYNC_ANNOUNCE_FLUSH_MS);
-    g_resyncing = true;
-    return true;
-}
-
-// Blocks while the session is live. Returns why it ended (nullptr = the
-// local player stopped it, kResyncReason = a re-sync).
-//
-// All three channels gone at once = the other game closed the session (or
-// is gone). Only some gone = a hiccup or a Debug-window Disconnect: those
-// channels are reconnected (host listens again, client retries) and the
-// session ends only if they are not back within CHANNEL_RECONNECT_TIMEOUT_MS.
-// Messages that were in flight on a dropped channel are lost.
-// Lockstep: the one channel. The host re-syncs on request, on the timer, or
-// on a state difference while "Re-sync on drift" is set (any limit: in
-// lockstep the games either match or they do not); the announcement goes
-// over the lockstep channel and both sides take the usual re-sync path.
+// Player, in the game: blocks while the session is live. Returns why it
+// ended (nullptr = the local player stopped it, kResyncReason = a re-sync the
+// host announced).
 static const char* MonitorLockstep(bool client)
 {
     bool reported = false;
@@ -389,60 +278,6 @@ static const char* MonitorLockstep(bool client)
         return kResyncReason;
     }
     return g_disconnectRequested ? nullptr : "the lockstep connection closed";
-}
-
-static const char* MonitorLiveSession(bool client)
-{
-    if (g_lockstep) return MonitorLockstep(client);
-    static char s_why[160];
-    ULONGLONG downSince = 0;
-    ULONGLONG lastTry = 0;
-    for (;;) {
-        if (g_disconnectRequested) return nullptr;
-        if (client && g_resyncAnnounced) return kResyncReason;
-
-        bool b = BuildSync_IsConnected(), r = RoadSync_IsConnected(), t = TerrainSync_IsConnected();
-        if (b && r && t) {
-            if (downSince) {
-                SaveStatus("live sync restored after %llus", (GetTickCount64() - downSince) / 1000);
-                downSince = 0;
-            }
-            if (!client && ResyncDue() && AnnounceResync()) return kResyncReason;
-            Sleep(200);
-            continue;
-        }
-
-        // The announcement is noted before its connection is seen closing.
-        if (client && g_resyncAnnounced) return kResyncReason;
-
-        char down[64];
-        DownChannels(down, sizeof(down));
-        if (!b && !r && !t) {
-            // When the peer really leaves, the three drop within ~100 ms of
-            // each other; the reconnect branch below covers that gap.
-            _snprintf_s(s_why, sizeof(s_why), _TRUNCATE, "all live sync connections closed");
-            return s_why;
-        }
-
-        ULONGLONG now = GetTickCount64();
-        if (!downSince) {
-            downSince = now;
-            SaveStatus("live sync channel(s) dropped: %s - reconnecting", down);
-        }
-        if (now - downSince > CHANNEL_RECONNECT_TIMEOUT_MS) {
-            _snprintf_s(s_why, sizeof(s_why), _TRUNCATE, "couldn't reconnect: %s", down);
-            return s_why;
-        }
-        if (client) {
-            if (now - lastTry >= CHANNELS_RETRY_MS) {
-                StartChannelsClient();
-                lastTry = now;
-            }
-        } else {
-            StartChannelsHost(); // no-op for channels already connected or listening
-        }
-        Sleep(200);
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -841,8 +676,7 @@ static int JoinersStillThere(void* ctx)
 // One join of one or more players (a re-sync brings everyone back at once,
 // and a new player comes with them), from their connections to the lifted
 // sync screen: one save, packed once, sent to each. Returns how many are in
-// the game (lockstep: connected to the lockstep channel; replay: the one
-// player, with all channels up). The connections are closed.
+// the game (connected to the lockstep channel). The connections are closed.
 static int RunHostJoin(std::vector<Joiner>& js)
 {
     SetJoinSockets(&js);
@@ -909,20 +743,18 @@ static int RunHostJoin(std::vector<Joiner>& js)
             break;
         }
 
-        // Lockstep: this PC loads the same save while the players unpack and
-        // load their copies; their step messages wait in the sockets.
-        if (g_lockstep) {
-            HostStep(5, several ? "Loading the shared world while the players load it" : "Loading the shared world while the player loads it");
-            if (!Determinism_BeginSession(true)) {
-                SetSessionError("lockstep is not available - see the log (determinism layer)");
-                break;
-            }
-            TriggerLoadSave(liveSaveName);
-            if (!WaitForLoadToFinish(0, &g_disconnectRequested) || !Determinism_SessionRunning()) {
-                if (!g_disconnectRequested) SetSessionError("loading the shared world failed");
-                ResetChannels();
-                break;
-            }
+        // This PC loads the same save while the players unpack and load
+        // their copies; their step messages wait in the sockets.
+        HostStep(5, several ? "Loading the shared world while the players load it" : "Loading the shared world while the player loads it");
+        if (!Determinism_BeginSession(true)) {
+            SetSessionError("lockstep is not available - see the log (determinism layer)");
+            break;
+        }
+        TriggerLoadSave(liveSaveName);
+        if (!WaitForLoadToFinish(0, &g_disconnectRequested) || !Determinism_SessionRunning()) {
+            if (!g_disconnectRequested) SetSessionError("loading the shared world failed");
+            CloseLockstep();
+            break;
         }
 
         // 5-6. Each player unpacks and loads; its steps arrive as messages.
@@ -952,32 +784,19 @@ static int RunHostJoin(std::vector<Joiner>& js)
         int ready = AliveCount(js);
         if (!ready) {
             SetSessionError(several ? "no player finished loading" : "the player dropped while loading");
-            if (g_lockstep) ResetChannels();
+            CloseLockstep();
             break;
         }
 
-        // 7. Lockstep: all loaded the same save; the players' channels connect.
-        if (g_lockstep) {
-            HostStep(7, ready > 1 ? "Waiting for the players' lockstep connections" : "Waiting for the player's lockstep connection");
-            joined = LockstepNet_HostAccept(ready, LOCKSTEP_CONNECT_TIMEOUT_MS, &g_disconnectRequested, JoinersStillThere, &js);
-            if (!joined) {
-                if (!g_disconnectRequested) SetSessionError("the lockstep connection didn't arrive - TCP port %d must reach the host", LOCKSTEP_PORT);
-                ResetChannels();
-            } else if (joined < ready) {
-                SaveStatus("[HOST] %d of %d player(s) opened the lockstep connection - going on without the rest", joined, ready);
-            }
-            break;
+        // 7. All loaded the same save; the players' lockstep connections come.
+        HostStep(7, ready > 1 ? "Waiting for the players' lockstep connections" : "Waiting for the player's lockstep connection");
+        joined = LockstepNet_HostAccept(ready, LOCKSTEP_CONNECT_TIMEOUT_MS, &g_disconnectRequested, JoinersStillThere, &js);
+        if (!joined) {
+            if (!g_disconnectRequested) SetSessionError("the lockstep connection didn't arrive - TCP port %d must reach the host", LOCKSTEP_PORT);
+            CloseLockstep();
+        } else if (joined < ready) {
+            SaveStatus("[HOST] %d of %d player(s) opened the lockstep connection - going on without the rest", joined, ready);
         }
-
-        // 7. Replay: the live sync channels (one player).
-        HostStep(7, "Starting live sync");
-        StartChannelsHost();
-        if (!WaitForChannels(false)) {
-            if (!g_disconnectRequested) SetSessionError("the live sync channels didn't connect - TCP ports %d-%d must reach the host too (forward them like port %d)", BUILD_SYNC_PORT, TERRAIN_SYNC_PORT, SAVE_SYNC_PORT);
-            ResetChannels();
-            break;
-        }
-        joined = 1;
     } while (false);
 
     // The zip only existed to be sent.
@@ -988,80 +807,12 @@ static int RunHostJoin(std::vector<Joiner>& js)
     for (Joiner& j : js) DropJoiner(j);
     SyncBlock_SetActive(false, nullptr);
     // Joined players start paused on every PC - any player resumes when all
-    // are ready (issue #18); the speed sync carries it over.
+    // are ready (issue #18).
     if (!joined) EnsureGameUnpaused();
     return joined;
 }
 
-// Replay mode: one player at a time.
-static void RunHostSessionReplay()
-{
-    bool rejoin = false; // a re-sync: the player is expected back right away
-    while (!g_disconnectRequested) {
-        SetState(SESSION_HOST_LISTENING);
-        if (!rejoin) {
-            SetPeerIp("");
-            SaveStatus("[HOST] hosting on port %d - waiting for a player (the game keeps running)", SAVE_SYNC_PORT);
-        }
-
-        // No accept timeout (cancellable) unless the player is coming back
-        // from a re-sync; no I/O timeout - the player may take a while to
-        // unpack and load.
-        SOCKET sock = NetworkHostAcceptOne(SAVE_SYNC_PORT, rejoin ? RESYNC_REJOIN_TIMEOUT_MS : 0, 0,
-                                           &g_disconnectRequested);
-        if (sock == INVALID_SOCKET) {
-            if (g_disconnectRequested) break;
-            if (rejoin) {
-                rejoin = false;
-                g_resyncing = false;
-                SetSessionError("the player didn't come back for the re-sync");
-                SaveStatus("[HOST] the player didn't come back for the re-sync - waiting for a player again");
-                continue;
-            }
-            SetSessionError("couldn't listen on port %d (already in use?)", SAVE_SYNC_PORT);
-            break;
-        }
-
-        std::vector<Joiner> js(1);
-        js[0].sock = sock;
-        NetworkPeerAddress(sock, js[0].ip, sizeof(js[0].ip));
-        js[0].nick[0] = 0;
-        js[0].alive = true;
-        SetPeerIp(js[0].ip);
-        SetState(SESSION_HOST_JOINING);
-        SetSessionError("");
-        SaveStatus(rejoin ? "[HOST] %s is back - re-syncing, both games are paused until it is loaded"
-                          : "[HOST] %s is joining - both games are paused until it is loaded", js[0].ip);
-
-        bool joined = RunHostJoin(js) > 0;
-        rejoin = false;
-        g_resyncing = false;
-        if (!joined) {
-            if (g_disconnectRequested) break;
-            SaveStatus("[HOST] the join failed (%s) - waiting for a player again", SaveSync_GetLastError());
-            continue;
-        }
-        g_lastWorldSentTick = GetTickCount64();
-        g_resyncRequested = false; // one asked for during the join is already done
-
-        char peer[64];
-        strncpy_s(peer, g_peerIp, _TRUNCATE);
-        SetState(SESSION_HOST_IN_GAME);
-        SaveStatus("[HOST] %s is in the game - live sync running, paused until either player resumes", peer);
-        const char* why = MonitorLiveSession(false);
-        ResetChannels();
-        if (!why) break; // Stop hosting
-        if (why == kResyncReason) {
-            rejoin = true;
-            SaveStatus("[HOST] re-syncing - waiting for %s to reconnect", peer);
-            continue;
-        }
-        SetSessionError("%s left: %s", peer, why);
-        SaveStatus("[HOST] %s left (%s) - waiting for a player again", peer, why);
-    }
-}
-
-// Lockstep: up to Profile_GetMaxPlayers() - 1 players. The join port stays
+// The host: up to Profile_GetMaxPlayers() - 1 players. The join port stays
 // open while there is room (a full session stops listening); a player who
 // connects during the game joins through a re-sync of everyone, so all load
 // the same save again.
@@ -1178,7 +929,7 @@ static const char* MonitorLockstepHost(std::vector<Joiner>& batch)
             g_desyncSince = now;
             SaveStatus("[LOCKSTEP] %s", desync);
         }
-        // In lockstep the games match or not: a re-sync comes on request, or a set time after a desync.
+        // The games match or not: a re-sync comes on request, or a set time after a desync.
         int delay = g_desyncResyncSeconds;
         bool onDesync = desync[0] && delay >= 0 && now - g_desyncSince >= (ULONGLONG)delay * 1000;
         if (g_resyncRequested || onDesync) {
@@ -1204,7 +955,7 @@ static const char* MonitorLockstepHost(std::vector<Joiner>& batch)
     return nullptr;
 }
 
-static void RunHostSessionLockstep()
+static void RunHostSessionPlayers()
 {
     std::vector<Joiner> batch;
     std::vector<std::string> comingBack; // the players expected back for a re-sync (addresses)
@@ -1261,12 +1012,12 @@ static void RunHostSessionLockstep()
             comingBack = PlayerIps();
             LockstepNet_SendResync();
             Sleep(RESYNC_ANNOUNCE_FLUSH_MS);
-            ResetChannels();
+            CloseLockstep();
             g_resyncing = true;
             SaveStatus("[HOST] re-syncing - waiting for %d player(s) to reconnect", (int)comingBack.size());
             continue;
         }
-        ResetChannels();
+        CloseLockstep();
         SetSessionError("%s", why);
         SaveStatus("[HOST] %s - waiting for players again", why);
     }
@@ -1280,10 +1031,8 @@ static void RunHostSession()
         SetSessionError("network init failed");
         return;
     }
-    g_lockstep = g_lockstepChosen;
-    if (g_lockstep) RunHostSessionLockstep();
-    else RunHostSessionReplay();
-    ResetChannels();
+    RunHostSessionPlayers();
+    CloseLockstep();
     SetPeerIp("");
     SaveStatus("[HOST] stopped hosting");
 }
@@ -1305,12 +1054,11 @@ static bool JoinHostGone(void* sockPtr)
     return NetworkPeerGone(*(SOCKET*)sockPtr);
 }
 
-// Returns true when the player is in the host's game with all channels up.
-// rejoin: coming back for a re-sync - the host may need a moment to listen
-// again, so refused connects are retried.
+// Returns true when the player is in the host's game with the lockstep
+// connection up. rejoin: coming back for a re-sync - the host may need a
+// moment to listen again, so refused connects are retried.
 static bool RunClientJoin(bool rejoin)
 {
-    g_resyncAnnounced = false;
     SyncBlock_SetActive(true, rejoin ? "Re-syncing with the host" : "Connecting to the host");
     EnsureGamePaused();
 
@@ -1399,8 +1147,6 @@ static bool RunClientJoin(bool rejoin)
         char peer[64];
         _snprintf_s(peer, sizeof(peer), _TRUNCATE, "%s (%s)", hostNick, g_targetIp);
         SetPeerIp(peer);
-        g_lockstep = theirs.lockstep != 0;
-        if (g_lockstep) SaveStatus("[CLIENT] %s runs this session in lockstep", hostNick);
 
         // 2-3. The host saves and packs; its steps arrive as messages.
         ClientStep(2, "Waiting for the host - saving the world");
@@ -1452,7 +1198,7 @@ static bool RunClientJoin(bool rejoin)
         char receivedSaveName[MAX_PATH] = {};
         _snprintf_s(receivedSaveName, sizeof(receivedSaveName), _TRUNCATE, "%s%s",
                     SAVE_SYNC_CLIENT_STAGING_NAME, SAVE_SYNC_RECEIVED_SUFFIX);
-        if (g_lockstep && !Determinism_BeginSession(false)) {
+        if (!Determinism_BeginSession(false)) {
             SetSessionError("lockstep is not available - see the log (determinism layer)");
             SendMsg(sock, MSG_ABORT, 0, -1, "lockstep is not available on the player");
             break;
@@ -1464,58 +1210,47 @@ static bool RunClientJoin(bool rejoin)
             break;
         }
 
-        // 7. Ready -> the host starts listening on the channels; connect them.
-        if (g_lockstep) {
-            ClientStep(7, "Waiting for the host to load the shared world");
-            SendMsg(sock, MSG_READY, 7, -1, "");
-            if (!Determinism_SessionRunning()) {
-                SetSessionError("loading the shared world failed");
-                break;
-            }
-            // In short tries, watching the join connection: the host listens
-            // once every player has loaded (a slow download keeps the others
-            // waiting), and closes it when it crashed or gave up on this one.
-            bool lockstepUp = false, hostGone = false;
-            while (!g_disconnectRequested) {
-                if (LockstepNet_Join(g_targetIp, 6000, &g_disconnectRequested)) {
-                    lockstepUp = true;
-                    break;
-                }
-                if (JoinHostGone(&sock)) {
-                    hostGone = true;
-                    break;
-                }
-            }
-            if (!lockstepUp) {
-                if (hostGone) SetSessionError("the host dropped while the players were loading the shared world");
-                else if (!g_disconnectRequested) SetSessionError("couldn't open the lockstep connection to %s:%d", g_targetIp, LOCKSTEP_PORT);
-                break;
-            }
-            // The game starts once every player is connected (the host's
-            // player list says so); until then nothing is done here that a
-            // player still connecting would miss.
-            SyncBlock_SetStep(7, JOIN_STEPS, "Waiting for the other players to connect", -1);
-            ULONGLONG lastPing = 0;
-            while (!g_disconnectRequested && LockstepNet_IsConnected() && !LockstepNet_SessionStarted()) {
-                ULONGLONG now = GetTickCount64();
-                if (now - lastPing >= 1000) {
-                    LockstepNet_Ping();
-                    lastPing = now;
-                }
-                Sleep(100);
-            }
-            if (!LockstepNet_SessionStarted()) {
-                if (!g_disconnectRequested) SetSessionError("the host dropped while waiting for the other players");
-                break;
-            }
-            joined = true;
+        // 7. Loaded -> the lockstep connection to the host.
+        ClientStep(7, "Waiting for the host to load the shared world");
+        SendMsg(sock, MSG_READY, 7, -1, "");
+        if (!Determinism_SessionRunning()) {
+            SetSessionError("loading the shared world failed");
             break;
         }
-        ClientStep(7, "Starting live sync");
-        SendMsg(sock, MSG_READY, 7, -1, "");
-        if (!WaitForChannels(true)) {
-            if (!g_disconnectRequested) SetSessionError("the live sync channels didn't connect - TCP ports %d-%d of the host are not reachable (only port %d is forwarded?)", BUILD_SYNC_PORT, TERRAIN_SYNC_PORT, SAVE_SYNC_PORT);
-            ResetChannels();
+        // In short tries, watching the join connection: the host listens
+        // once every player has loaded (a slow download keeps the others
+        // waiting), and closes it when it crashed or gave up on this one.
+        bool lockstepUp = false, hostGone = false;
+        while (!g_disconnectRequested) {
+            if (LockstepNet_Join(g_targetIp, 6000, &g_disconnectRequested)) {
+                lockstepUp = true;
+                break;
+            }
+            if (JoinHostGone(&sock)) {
+                hostGone = true;
+                break;
+            }
+        }
+        if (!lockstepUp) {
+            if (hostGone) SetSessionError("the host dropped while the players were loading the shared world");
+            else if (!g_disconnectRequested) SetSessionError("couldn't open the lockstep connection to %s:%d", g_targetIp, LOCKSTEP_PORT);
+            break;
+        }
+        // The game starts once every player is connected (the host's
+        // player list says so); until then nothing is done here that a
+        // player still connecting would miss.
+        SyncBlock_SetStep(7, JOIN_STEPS, "Waiting for the other players to connect", -1);
+        ULONGLONG lastPing = 0;
+        while (!g_disconnectRequested && LockstepNet_IsConnected() && !LockstepNet_SessionStarted()) {
+            ULONGLONG now = GetTickCount64();
+            if (now - lastPing >= 1000) {
+                LockstepNet_Ping();
+                lastPing = now;
+            }
+            Sleep(100);
+        }
+        if (!LockstepNet_SessionStarted()) {
+            if (!g_disconnectRequested) SetSessionError("the host dropped while waiting for the other players");
             break;
         }
         joined = true;
@@ -1538,17 +1273,16 @@ static void RunClientSession()
         bool joined = RunClientJoin(rejoin);
         g_resyncing = false;
         if (!joined) {
-            ResetChannels();
+            CloseLockstep();
             if (g_disconnectRequested) SaveStatus("[CLIENT] cancelled");
             else SaveStatus("[CLIENT] couldn't join: %s", SaveSync_GetLastError());
             return;
         }
 
         SetState(SESSION_CLIENT_IN_GAME);
-        SaveStatus("[CLIENT] in the game of %s - %s running, paused until a player resumes", g_peerIp,
-                   g_lockstep ? "lockstep" : "live sync");
-        const char* why = MonitorLiveSession(true);
-        ResetChannels();
+        SaveStatus("[CLIENT] in the game of %s - lockstep running, paused until a player resumes", g_peerIp);
+        const char* why = MonitorLockstep(true);
+        CloseLockstep();
         if (why == kResyncReason) {
             rejoin = true;
             SaveStatus("[CLIENT] the host is re-syncing the world - reconnecting");
@@ -1583,21 +1317,16 @@ static DWORD WINAPI ClientSessionThread(LPVOID)
     return 0;
 }
 
-// The world's road network (world+0xf7a0): made with every world, an empty
-// map too; deleted and zeroed when the world is torn down (0x9952C,
-// 0x29564E) - back in the main menu, or while another save loads.
-#define WORLD_ROAD_NETWORK_RVA 0x9E46B0
 // Out of the world this long in a session ends it (a load's teardown is
 // shorter, and joins/re-syncs are not checked at all).
 #define OUT_OF_WORLD_GRACE_MS 1500
 
+// The world's road network (world+0xf7a0) is made with every world, an empty
+// map too, and zeroed when the world is torn down (0x9952C, 0x29564E) - back
+// in the main menu, or while another save loads (game/world).
 bool SaveSync_IsWorldLoaded()
 {
-    __try {
-        return *(__int64*)((uintptr_t)g_exe + WORLD_ROAD_NETWORK_RVA) != 0;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
+    return World_IsLoaded();
 }
 
 void SaveSync_StartHost()
@@ -1636,11 +1365,7 @@ void SaveSync_StartClient(const char* hostIp)
 
 void SaveSync_RequestDisconnect()
 {
-    if (g_state == SESSION_IDLE) {
-        // Channels opened by hand from the Debug window.
-        ResetChannels();
-        return;
-    }
+    if (g_state == SESSION_IDLE) return;
     SaveStatus(g_isHost ? "[HOST] stopping..." : "[CLIENT] disconnecting...");
     g_disconnectRequested = true;
     // Wakes a blocking recv on the join connections (closed by their owner).
@@ -1649,7 +1374,7 @@ void SaveSync_RequestDisconnect()
     EnterCriticalSection(&g_lock);
     for (int i = 0; i < g_joinSockCount; i++) shutdown(g_joinSocks[i], SD_BOTH);
     LeaveCriticalSection(&g_lock);
-    ResetChannels();
+    CloseLockstep();
 }
 
 void SaveSync_RequestResync()
@@ -1669,34 +1394,11 @@ ULONGLONG SaveSync_GetMsUntilDesyncResync()
     return elapsed >= wait ? 1 : wait - elapsed;
 }
 
-void SaveSync_SetAutoResyncMinutes(int minutes)
-{
-    g_autoResyncMinutes = minutes > 0 ? minutes : 0;
-}
-
-int SaveSync_GetAutoResyncMinutes() { return g_autoResyncMinutes; }
-
-ULONGLONG SaveSync_GetMsUntilAutoResync()
-{
-    int minutes = g_autoResyncMinutes;
-    if (!g_isHost || g_state != SESSION_HOST_IN_GAME || minutes <= 0) return 0;
-    ULONGLONG interval = (ULONGLONG)minutes * 60000;
-    ULONGLONG elapsed = GetTickCount64() - g_lastWorldSentTick;
-    return elapsed >= interval ? 1 : interval - elapsed;
-}
-
-ULONGLONG SaveSync_GetMsSinceWorldSent()
-{
-    if (!g_isHost || g_state != SESSION_HOST_IN_GAME) return 0;
-    return GetTickCount64() - g_lastWorldSentTick;
-}
-
 bool SaveSync_IsResyncing() { return g_resyncing; }
 
 void SaveSync_OnResyncAnnounced()
 {
     g_resyncing = true;
-    g_resyncAnnounced = true;
 }
 
 // Leaving the world (main menu, another save) ends the session: the other
@@ -1727,14 +1429,9 @@ static void CheckStillInWorld()
 void SaveSync_Tick()
 {
     CheckStillInWorld();
-    if (!g_resyncSendNow || g_resyncSent) return;
-    if (!BuildSync_IsConnected()) return; // AnnounceResync gives up after its timeout
-    BuildSync_SendResync();
-    if (BuildSync_IsConnected()) g_resyncSent = true;
 }
 
 SessionState SaveSync_GetState() { return g_state; }
-void SaveSync_SetLockstep(bool on) { g_lockstepChosen = on; }
 static void LoadSettings() { g_dlcCheck = Profile_GetInt("profile", "dlc_check", 1) != 0; }
 
 void SaveSync_SetDlcCheck(bool on)
@@ -1743,8 +1440,6 @@ void SaveSync_SetDlcCheck(bool on)
     Profile_SetInt("profile", "dlc_check", on ? 1 : 0);
 }
 bool SaveSync_GetDlcCheck() { return g_dlcCheck; }
-bool SaveSync_GetLockstep() { return g_lockstepChosen; }
-bool SaveSync_IsLockstepSession() { return g_lockstep && g_state != SESSION_IDLE; }
 bool SaveSync_IsBusy()           { return g_state != SESSION_IDLE; }
 bool SaveSync_IsHostRole()       { return g_isHost; }
 ULONGLONG SaveSync_GetSessionAgeMs() { return g_state == SESSION_IDLE ? 0 : GetTickCount64() - g_sessionStartTick; }

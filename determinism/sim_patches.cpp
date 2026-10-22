@@ -2,7 +2,7 @@
 // See sim_patches.h.
 #include "sim_patches.h"
 #include "../lockstep/commands.h"
-#include "../world_sync/local_builds.h"
+#include "../world/local_builds.h"
 #include "../lockstep/purchase.h"
 #include "../lockstep/route_tools.h"
 #include "../lockstep/game_calls.h"
@@ -17,7 +17,7 @@
 #include "../lockstep/source_slots.h"
 #include "../lockstep/link_tools.h"
 #include "../lockstep/office_selection.h"
-#include "../world_sync/networks/road_sync.h"
+#include "../world/networks.h"
 #include "determinism.h"
 #include "held_frame.h"
 #include <string.h>
@@ -1043,7 +1043,7 @@ static void DetPrepare(__int64 world)
         Determinism_PrivateScope privateRng;
         // A drag the commands interrupted goes on from its start (this PC's
         // view, draws and searches, like the tool's own frames).
-        RoadSync_ResumeLocalDrag();
+        Networks_ResumeLocalDrag();
         original(world);
     }
     memcpy(timer, tickTimer, sizeof(tickTimer));
@@ -1125,7 +1125,7 @@ static float DetDisplayCost(void* world, BYTE* building, unsigned long long flag
 }
 // The building tool's placing press: 2bade0 reads the left press at 2cc37c
 // and places when the spot is valid. In lockstep that press becomes a
-// placement command instead (world_sync/local_builds), and the game reads it
+// placement command instead (world/local_builds), and the game reads it
 // as not pressed; every other read of the mouse in the tool stays real.
 #define PLACE_PRESS_SITE 0x2CC37C
 #define PLACE_PRESS_IMPORT 0x86C8B8 // C3D_INPUT::GetMouseLeftPress

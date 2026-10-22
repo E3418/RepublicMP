@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // See view_list_scope.h.
 #include "view_list_scope.h"
-#include "networks/road_sync.h" // RoadSync_GetCategoryInfo (the network managers)
+#include "networks.h" // Networks_GetCategoryInfo (the network managers)
 #include <vector>
 #include <algorithm>
 
@@ -39,7 +39,7 @@ struct NetScope {
     std::vector<__int64> before; // the committed edges at Begin, sorted
 };
 
-static NetScope g_nets[ROAD_SYNC_CATEGORY_COUNT];
+static NetScope g_nets[NET_CATEGORY_COUNT];
 static int g_netCount = 0;
 static int g_depth = 0;
 static CRITICAL_SECTION* g_rendererLock = nullptr;
@@ -251,8 +251,8 @@ bool ViewListScope_Begin(float minX, float minZ, float maxX, float maxZ)
     __int64 world = (__int64)(g_exeBase + WORLD_THIS_RVA);
     g_netCount = 0;
     bool ok = true;
-    for (int c = 0; c < ROAD_SYNC_CATEGORY_COUNT && ok; c++) {
-        const RoadSyncCategoryInfo* info = RoadSync_GetCategoryInfo(c);
+    for (int c = 0; c < NET_CATEGORY_COUNT && ok; c++) {
+        const NetCategoryInfo* info = Networks_GetCategoryInfo(c);
         __int64 network = 0;
         __try {
             network = info ? *(__int64*)(world + info->managerOffset) : 0;

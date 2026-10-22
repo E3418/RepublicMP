@@ -1,14 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // See demolish_hook.h.
 #include "demolish_hook.h"
-#include "../local_builds.h"          // LocalBuilds_InBuildingPlacement
-#include "../terrain/terrain_hook.h"          // g_terrainApplyingRemote
-#include "build_sync.h"     // BuildSync_SendDemolish, BuildSync_IsApplyingRemote
-#include "../networks/road_sync.h"      // RoadSync_IsApplyingSegment
-#include "../../lockstep/commands.h"
-#include "../../determinism/determinism.h"
-#include <intrin.h>
-#pragma intrinsic(_ReturnAddress)
+#include "local_builds.h"          // LocalBuilds_InBuildingPlacement
+#include "terrain_hook.h"          // g_terrainApplyingCommand
+#include "buildings.h"     // BuildingMsg, Buildings_IsApplyingCommand
+#include "networks.h"      // Networks_IsApplyingCommand
+#include "../lockstep/commands.h"
 
 #define WORLD_THIS_RVA 0x9D4F10
 #define VEC_BUILDINGS_BEGIN_RVA 0x9E6A18 // = thisPtr+0x11b08, the list terrain_demolish hovers over
@@ -43,18 +40,6 @@ bool DemolishHook_InDemolish()
     return g_depth > 0;
 }
 
-// Captured in the hook, sent from DemolishHook_Tick (game thread, after the
-// frame's terrain batch is closed, so the fence stamp covers it).
-struct DemolishCapture {
-    float pos[3];
-    int category;
-    unsigned long long args[5];
-    unsigned long long callerRva;
-};
-#define MAX_DEMOLISH_CAPTURES 32
-static DemolishCapture g_captures[MAX_DEMOLISH_CAPTURES];
-static int g_captureCount = 0;
-
 static bool IsInBuildingsVector(__int64 building)
 {
     __int64* it = *(__int64**)(g_exeBase + VEC_BUILDINGS_BEGIN_RVA);
@@ -70,46 +55,18 @@ static int BuildingCategory(__int64 building)
     return type ? *(int*)(type + TYPE_CATEGORY_OFFSET) : -1;
 }
 
-static void Capture(__int64 thisPtr, __int64 building, const unsigned long long args[5], void* ret)
-{
-    unsigned long long callerRva = (unsigned long long)((BYTE*)ret - g_exeBase);
-    __try {
-        if (thisPtr != (__int64)(g_exeBase + WORLD_THIS_RVA)) {
-            Logf("republicmp  DEMOLISH: call from 0x%llX with a foreign thisPtr - not sent", callerRva);
-            return;
-        }
-        if (!building || !IsInBuildingsVector(building)) {
-            Logf("republicmp  DEMOLISH: object %p (caller 0x%llX) is not in the buildings vector - not sent",
-                 (void*)building, callerRva);
-            return;
-        }
-        if (g_captureCount == MAX_DEMOLISH_CAPTURES) {
-            Logf("republicmp  DEMOLISH: capture buffer full - demolition at caller 0x%llX not sent", callerRva);
-            return;
-        }
-        DemolishCapture& c = g_captures[g_captureCount++];
-        const float* p = (const float*)(building + OBJ_POS_OFFSET);
-        c.pos[0] = p[0]; c.pos[1] = p[1]; c.pos[2] = p[2];
-        c.category = BuildingCategory(building);
-        for (int k = 0; k < 5; k++) c.args[k] = args[k];
-        c.callerRva = callerRva;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        Logf("republicmp  DEMOLISH: <exception capturing demolition at caller 0x%llX>", callerRva);
-    }
-}
-
 // Lockstep (lockstep/commands): a local demolition becomes a command and is
 // not made here; every PC demolishes the building at the next tick boundary
-// (BuildSync_ApplyDemolishCommand finds it by position and category, as the
-// replay does). True when it was taken.
+// (Buildings_ApplyDemolishCommand finds it by position and category). True
+// when it was taken.
 static bool DemolishAsCommand(__int64 thisPtr, __int64 building, const unsigned long long args[5])
 {
-    BuildSyncMsg msg = {};
+    BuildingMsg msg = {};
     __try {
         if (thisPtr != (__int64)(g_exeBase + WORLD_THIS_RVA) || !building || !IsInBuildingsVector(building))
             return false;
         const float* p = (const float*)(building + OBJ_POS_OFFSET);
-        msg.kind = BUILD_SYNC_KIND_DEMOLISH;
+        msg.kind = BUILDING_DEMOLISH;
         msg.x = p[0];
         msg.y = p[1];
         msg.z = p[2];
@@ -127,20 +84,17 @@ static void HookedDemolish(__int64 thisPtr, __int64 building,
                            unsigned long long p5, unsigned long long p6,
                            unsigned long long p7)
 {
-    void* ret = _ReturnAddress();
     long depth = InterlockedIncrement(&g_depth);
 
     // Only outermost calls by local play; everything else is either a
-    // side effect of one, or remote work being replayed.
-    if (depth == 1 && !LocalBuilds_InBuildingPlacement() && !BuildSync_IsApplyingRemote() &&
-        !RoadSync_IsApplyingSegment() && g_terrainApplyingRemote == 0) {
+    // side effect of one, or a command being made.
+    if (depth == 1 && !LocalBuilds_InBuildingPlacement() && !Buildings_IsApplyingCommand() &&
+        !Networks_IsApplyingCommand() && g_terrainApplyingCommand == 0) {
         unsigned long long args[5] = { p3, p4, p5, p6, p7 };
         if (Commands_TakeLocal() && DemolishAsCommand(thisPtr, building, args)) {
             InterlockedDecrement(&g_depth);
             return;
         }
-        // The replay channels are not used with the determinism layer on.
-        if (!Determinism_IsActive()) Capture(thisPtr, building, args, ret);
     }
 
     g_origDemolish(thisPtr, building, p3, p4, p5, p6, p7);
@@ -152,19 +106,6 @@ bool InstallDemolishHook()
     return InstallInlineHook(g_exeBase + HOOK_DEMOLISH_RVA, (void*)HookedDemolish,
                              (void**)&g_origDemolish, kDemolishExpect, sizeof(kDemolishExpect),
                              "republicmp demolish");
-}
-
-void DemolishHook_Tick()
-{
-    for (int k = 0; k < g_captureCount; k++) {
-        const DemolishCapture& c = g_captures[k];
-        Logf("republicmp  DEMOLISH: local demolition at (%.2f,%.2f,%.2f) category=%d caller=0x%llX "
-             "args=[%llx,%llx,%llx,%llx,%llx] - sending",
-             c.pos[0], c.pos[1], c.pos[2], c.category, c.callerRva,
-             c.args[0] & 0xff, c.args[1] & 0xff, c.args[2] & 0xff, c.args[3] & 0xff, c.args[4] & 0xff);
-        BuildSync_SendDemolish(c.pos, c.category, c.args);
-    }
-    g_captureCount = 0;
 }
 
 bool DemolishHook_CallOriginal(__int64 thisPtr, __int64 building, const unsigned long long args[5])

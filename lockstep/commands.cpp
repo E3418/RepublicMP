@@ -2,14 +2,14 @@
 // See commands.h.
 #include "commands.h"
 #include "../determinism/determinism.h"
-#include "../world_sync/networks/road_sync.h"
-#include "../world_sync/buildings/build_sync.h"
-#include "../world_sync/replay_menus.h"
-#include "../world_sync/local_builds.h"
+#include "../world/networks.h"
+#include "../world/buildings.h"
+#include "../world/menus_closed.h"
+#include "../world/local_builds.h"
 #include "lockstep_net.h"
 #include "../game/input_block.h"
-#include "../session/settings_sync.h"
-#include "../world_sync/terrain/terrain_hook.h"
+#include "building_settings.h"
+#include "../world/terrain_hook.h"
 #include "purchase.h"
 #include "route_tools.h"
 #include "game_calls.h"
@@ -184,8 +184,8 @@ static bool ApplyMoney(const LsMoneyDelta& d)
 
 static bool g_madeThisFrame = false;
 
-// Makes one command through the replay of its kind. The payload layout is the
-// wire layout of the replay multiplayer; a size that does not match refuses it.
+// Makes one command through the module of its kind. A payload whose size does
+// not match the kind's message refuses it.
 static void Apply(const Command& c)
 {
     const void* p = c.data.data();
@@ -199,46 +199,46 @@ static void Apply(const Command& c)
     // A drag the local player has under way would share the tool manager with
     // the replay and change what it builds on this PC only: it is cancelled.
     if (c.kind == LS_CMD_SEGMENT || c.kind == LS_CMD_UPGRADE || c.kind == LS_CMD_NET_DEMOLISH || c.kind == LS_CMD_PLACE)
-        RoadSync_CancelLocalDrag();
+        Networks_CancelLocalDrag();
     // This PC's open menus or a window under its cursor (+fbc/+fbe/+fc3) make
     // the tools return at once: a command is made with them closed, as the
-    // replays are (replay_menus.h). A road from the host was refused on the
+    // replays are (menus_closed.h). A road from the host was refused on the
     // player only because its cursor was over a window.
-    ReplayUiScope menus;
+    MenusClosedScope menus;
     switch (c.kind) {
     case LS_CMD_SEGMENT:
-        if (n == sizeof(RoadSyncMsg)) ok = RoadSync_ApplyCommandSegment(*(const RoadSyncMsg*)p);
+        if (n == sizeof(NetSegmentMsg)) ok = Networks_ApplyCommandSegment(*(const NetSegmentMsg*)p);
         break;
     case LS_CMD_UPGRADE:
-        if (n == sizeof(RoadSyncUpgradeMsg)) ok = RoadSync_ApplyCommandUpgrade(*(const RoadSyncUpgradeMsg*)p);
+        if (n == sizeof(NetUpgradeMsg)) ok = Networks_ApplyCommandUpgrade(*(const NetUpgradeMsg*)p);
         break;
     case LS_CMD_NET_DEMOLISH:
-        if (n == sizeof(RoadSyncDemolishMsg)) {
-            ok = RoadSync_ApplyCommandDemolish(*(const RoadSyncDemolishMsg*)p);
-            LocalBuilds_DemolishMade(*(const RoadSyncDemolishMsg*)p);
-        } else if (n == sizeof(LsDemolishHoverMsg)) {
-            const LsDemolishHoverMsg& h = *(const LsDemolishHoverMsg*)p;
-            ok = RoadSync_ApplyCommandDemolishHover(h);
+        if (n == sizeof(NetDemolishMsg)) {
+            ok = Networks_ApplyCommandDemolish(*(const NetDemolishMsg*)p);
+            LocalBuilds_DemolishMade(*(const NetDemolishMsg*)p);
+        } else if (n == sizeof(NetDemolishHoverMsg)) {
+            const NetDemolishHoverMsg& h = *(const NetDemolishHoverMsg*)p;
+            ok = Networks_ApplyCommandDemolishHover(h);
             LocalBuilds_DemolishMade(h.m, &h.hover);
         }
         break;
     case LS_CMD_PLACE:
-        if (n == sizeof(BuildSyncMsg)) ok = BuildSync_ApplyPlacementCommand(*(const BuildSyncMsg*)p);
+        if (n == sizeof(BuildingMsg)) ok = Buildings_ApplyPlacementCommand(*(const BuildingMsg*)p);
         break;
     case LS_CMD_DEMOLISH:
-        if (n == sizeof(BuildSyncMsg)) ok = BuildSync_ApplyDemolishCommand(*(const BuildSyncMsg*)p);
+        if (n == sizeof(BuildingMsg)) ok = Buildings_ApplyDemolishCommand(*(const BuildingMsg*)p);
         break;
     case LS_CMD_SETTING:
-        if (n == sizeof(SettingWire)) ok = SettingsSync_ApplyCommand(*(const SettingWire*)p);
+        if (n == sizeof(BuildingSettingMsg)) ok = BuildingSettings_ApplyCommand(*(const BuildingSettingMsg*)p);
         break;
     case LS_CMD_PLAN_START:
-        if (n == sizeof(RoadSyncPlanStartMsg)) ok = RoadSync_ApplyCommandPlanStart(*(const RoadSyncPlanStartMsg*)p);
+        if (n == sizeof(NetPlanStartMsg)) ok = Networks_ApplyCommandPlanStart(*(const NetPlanStartMsg*)p);
         break;
     case LS_CMD_GROUP_TOOL:
-        if (n == sizeof(RoadSyncGroupToolMsg)) ok = RoadSync_ApplyCommandGroupTool(*(const RoadSyncGroupToolMsg*)p);
+        if (n == sizeof(NetGroupToolMsg)) ok = Networks_ApplyCommandGroupTool(*(const NetGroupToolMsg*)p);
         break;
     case LS_CMD_DIRECTION:
-        if (n == sizeof(RoadSyncDirectionMsg)) ok = RoadSync_ApplyCommandDirection(*(const RoadSyncDirectionMsg*)p);
+        if (n == sizeof(NetDirectionMsg)) ok = Networks_ApplyCommandDirection(*(const NetDirectionMsg*)p);
         break;
     case LS_CMD_TERRAIN:
         ok = TerrainHook_ApplyCommand(p, n);
@@ -555,7 +555,7 @@ void Commands_Collect()
     PutAwayUncarriedTool();
     TerrainHook_LockstepFlush();
     if (!g_haveFrameRecord) return;
-    SettingsSync_LockstepDetect();
+    BuildingSettings_LockstepDetect();
     TakeMoney(g_frameRubles, g_frameDollars, "the interface");
 }
 
@@ -567,7 +567,7 @@ void Commands_AfterFrame(bool tickRan)
     }
     // The settings record is only taken again when something could have
     // changed them for every PC: a tick, a command, or the first frame.
-    if (tickRan || g_madeThisFrame || !g_haveFrameRecord) SettingsSync_LockstepBaseline();
+    if (tickRan || g_madeThisFrame || !g_haveFrameRecord) BuildingSettings_LockstepBaseline();
     g_frameRubles = *Rubles();
     g_frameDollars = *Dollars();
     g_haveFrameRecord = true;
@@ -592,8 +592,8 @@ void Commands_LateBegin()
     g_inLateRecord = g_capturing;
     if (!g_inLateRecord) return;
     Commands_CheckMoney("the held frame before Late");
-    SettingsSync_LockstepBaseline();
-    RoadSync_LockstepDirectionsBaseline();
+    BuildingSettings_LockstepBaseline();
+    Networks_LockstepDirectionsBaseline();
     g_lateRubles = *Rubles();
     g_lateDollars = *Dollars();
 }
@@ -602,8 +602,8 @@ void Commands_LateEnd()
 {
     if (!g_inLateRecord) return;
     g_inLateRecord = false;
-    SettingsSync_LockstepDetect();
-    RoadSync_LockstepDirectionsDetect();
+    BuildingSettings_LockstepDetect();
+    Networks_LockstepDirectionsDetect();
     TakeMoney(g_lateRubles, g_lateDollars, "a held frame's Late (tools)");
 }
 

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Debug window (opened from the main menu): manual sync connections and the
-// verbose sync log.
+// Debug window (opened from the main menu): the lockstep state, the
+// determinism probe, the diagnostic logs and the verbose debug log.
 #pragma once
 
 class DebugWindow

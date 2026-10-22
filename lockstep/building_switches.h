@@ -12,7 +12,7 @@
 // click (or Enter) over the interface, they are copied and compared
 // afterwards; the changed words are put back at once and one command per
 // object writes them on every PC at the boundary. Words the building settings
-// sync carries with its own follow-up steps (session/settings_sync) are left
+// sync carries with its own follow-up steps (lockstep/building_settings) are left
 // to it, heap addresses are not carried, and words the interface changes
 // without a click are learned from sampled frames and left out.
 #pragma once

@@ -19,11 +19,9 @@
 //                 option 0; -270 = off, 70%, option 2.
 //   +0xb04        read when a building is created (fill level)
 //
-// A remote placement/path is replayed with the SENDER's mode: written here
-// just before the replay and the local player's own restored right after,
-// so the window keeps showing what the local player chose. Both sides pay
-// for a replay; the client's balances are then overwritten by the host's
-// (session/money).
+// A placement / path command is made with the clicking PC's mode: written
+// here just before it and the local player's own restored right after, so
+// the window keeps showing what the local player chose.
 #pragma once
 
 #include "tesmio_plugin.h"

@@ -1163,7 +1163,7 @@ static void LogSessionProgress(const StateSummary& s)
     double progress = 0;
     int sites = 0, paid = 0, stopped = 0, free = 0;
     __try {
-        free = *(int*)(g_exeBase + 0x9D4F10 + 0x578); // != 0: nothing is ever charged (session/money.h)
+        free = *(int*)(g_exeBase + 0x9D4F10 + 0x578); // != 0: nothing is ever charged
         BYTE** it = *(BYTE***)(g_exeBase + 0x9E6A18);
         BYTE** end = *(BYTE***)(g_exeBase + 0x9E6A20);
         for (; it && it < end; ++it) {

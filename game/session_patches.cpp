@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // See session_patches.h.
 #include "session_patches.h"
-#include "../world_sync/buildings/build_sync.h" // BuildSync_IsConnected
 #include "../determinism/determinism.h"        // Determinism_IsActive (the probe)
 #include <string.h>
 #include <limits.h>
@@ -173,7 +172,7 @@ static void Restore()
 
 void SessionPatches_Tick()
 {
-    bool want = BuildSync_IsConnected() || Determinism_IsActive();
+    bool want = Determinism_IsActive();
     if (want && !g_applied && !g_refused) Apply();
     else if (!want && g_applied) Restore();
 }

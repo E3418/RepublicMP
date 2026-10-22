@@ -5,6 +5,7 @@
 #include "../ui/debug_window.h"
 #include "../ui/sync_block.h"
 #include "../lockstep/presence.h"
+#include "../modes/mode.h"
 
 #include "imgui.h"
 #include "imgui_impl_win32.h"
@@ -148,7 +149,8 @@ void ImGuiHook_NewFrameAndRender()
 
     // The other players' cursors and pings show while the overlay is hidden too.
     bool presence = Presence_Active();
-    if (!g_imguiVisible && !syncBlocking && !presence)
+    bool modeOverlay = Modes_WantsOverlay();
+    if (!g_imguiVisible && !syncBlocking && !presence && !modeOverlay)
         return;
 
     ImGui_ImplDX11_NewFrame();
@@ -160,6 +162,7 @@ void ImGuiHook_NewFrameAndRender()
         g_debug_window.Draw();
     }
     if (presence) Presence_Frame(); // under the windows (background draw list)
+    if (modeOverlay) Modes_DrawOverlay();
     SyncBlock_Draw(); // drawn last (on top), independent of g_imguiVisible
 
     ImGui::Render();

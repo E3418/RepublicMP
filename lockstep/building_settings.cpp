@@ -1,10 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// See settings_sync.h.
-#include "settings_sync.h"
-#include "../world_sync/citizens/citizen_destinations.h"
-#include "../world_sync/buildings/build_sync.h"
-#include "../ui/sync_block.h"
-#include "../lockstep/commands.h"
+// See building_settings.h.
+#include "building_settings.h"
+#include "commands.h"
 #include "../core/profile.h"
 #include <unordered_map>
 #include <vector>
@@ -71,11 +68,10 @@ static const int kFieldCount = sizeof(kFields) / sizeof(kFields[0]);
 
 static void LoadSettings();
 
-void SettingsSync_Bind(const TsmHost* host)
+void BuildingSettings_Bind(const TsmHost* host)
 {
     TsmBind(host);
     LoadSettings();
-    CitizenDestinations_Bind(host);
 }
 
 static bool FieldApplies(const WatchedField& f, int category)
@@ -154,14 +150,6 @@ static int SlotCount(BYTE* b)
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return 0;
     }
-}
-
-static unsigned long long HashSlot(const float* data, int n)
-{
-    unsigned long long h = 0xcbf29ce484222325ull ^ (unsigned)n;
-    const unsigned char* p = (const unsigned char*)data;
-    for (int i = 0; i < n * 2 * 4; i++) { h ^= p[i]; h *= 0x100000001b3ull; }
-    return h;
 }
 
 // Snapshot of the building list (pointers only valid for this scan).
@@ -257,57 +245,12 @@ static bool WriteSlot(BYTE* b, int slot, const float* data, int n)
 }
 
 // ---------------------------------------------------------------------------
-// Scanning (game thread)
+// Clicks
 // ---------------------------------------------------------------------------
 
-struct FieldState {
-    unsigned long long value = 0;
-    bool known = false;
-    bool muted = false;          // flooding - no longer watched on this building
-    int changes = 0;
-    ULONGLONG windowStart = 0;
-};
-struct BuildingState {
-    FieldState fields[sizeof(kFields) / sizeof(kFields[0])];
-    unsigned long long slotHash[MAX_SLOTS] = {};
-    bool slotKnown[MAX_SLOTS] = {};
-    FieldState slotFlood[MAX_SLOTS];
-    bool seen = false;           // in this scan's building list
-    bool scanned = false;        // went through a scan before
-};
-
-static std::unordered_map<BYTE*, BuildingState> g_states;
-static ULONGLONG g_lastScanMs = 0;
-static std::vector<BYTE*> g_scanList;
-
-struct PendingSetting {
-    SettingWire w;
-    ULONGLONG since;
-};
-static std::vector<PendingSetting> g_pending;
-
-static void Send(BYTE* b, int field, unsigned long long value, int slot, const float* data, int count)
-{
-    SettingWire w = {};
-    if (!ReadIdentity(b, &w.category, w.pos)) return;
-    w.field = field;
-    w.value = value;
-    w.slot = slot;
-    w.count = count;
-    if (data && count > 0) memcpy(w.data, data, count * 2 * sizeof(float));
-    BuildSync_SendSetting(w);
-    if (field == SETTINGS_FIELD_SLOT)
-        Logf("republicmp  SETTINGS: sending storage slot %d (%d entries) of category 0x%X at (%.1f,%.1f)", slot,
-             count, w.category, w.pos[0], w.pos[2]);
-    else
-        Logf("republicmp  SETTINGS: sending [%s] = 0x%llx of category 0x%X at (%.1f,%.1f)", kFields[field].name,
-             value, w.category, w.pos[0], w.pos[2]);
-}
-
 // Last time the local player had the left mouse button down (the game's own
-// button bytes, see game/input_block). Every setting is changed with a click
-// or a slider drag, so a change seen without a recent click was made by the
-// simulation: it is recorded but not sent.
+// button bytes, see game/input_block): the field diff logs only what changed
+// right after a click.
 #define LMB_HELD_RVA 0xA54E90
 #define LMB_JUST_PRESSED_RVA 0xA54E91
 static ULONGLONG g_lastClickMs = 0;
@@ -325,78 +268,8 @@ static bool ClickedRecently(ULONGLONG now)
     return g_lastClickMs && now - g_lastClickMs <= SETTINGS_CLICK_WINDOW_MS;
 }
 
-// True if the change may be sent; mutes a field that changes too often.
-static bool CountChange(FieldState& st, int field, ULONGLONG now)
-{
-    if (now - st.windowStart > SETTINGS_FLOOD_WINDOW_MS) {
-        st.windowStart = now;
-        st.changes = 0;
-    }
-    if (++st.changes > SETTINGS_FLOOD_LIMIT) {
-        st.muted = true;
-        Logf("republicmp  SETTINGS: [%s] changes too often on a building - no longer synced there",
-             field == SETTINGS_FIELD_SLOT ? "storage slot" : kFields[field].name);
-        return false;
-    }
-    return true;
-}
-
-static void Scan(bool sendChanges)
-{
-    g_scanList.resize(200000);
-    int n = CopyBuildings(g_scanList.data(), (int)g_scanList.size());
-    ULONGLONG now = GetTickCount64();
-    bool byPlayer = ClickedRecently(now);
-    for (auto& kv : g_states) kv.second.seen = false;
-
-    for (int i = 0; i < n; i++) {
-        BYTE* b = g_scanList[i];
-        int category;
-        float pos[3];
-        if (!ReadIdentity(b, &category, pos)) continue;
-        BuildingState& st = g_states[b];
-        // Not "!seen": seen is cleared at the start of every scan, and
-        // fields[0] / slot 0 only exist on some buildings - a house without
-        // storage would then count as new on every scan and never send.
-        bool fresh = !st.scanned;
-        st.seen = true;
-        st.scanned = true;
-
-        for (int f = 0; f < kFieldCount; f++) {
-            if (!FieldApplies(kFields[f], category)) continue;
-            FieldState& fs = st.fields[f];
-            if (fs.muted) continue;
-            unsigned long long v;
-            if (!ReadField(b, kFields[f], &v)) continue;
-            if (fs.known && v != fs.value && sendChanges && !fresh && byPlayer && CountChange(fs, f, now))
-                Send(b, f, v, 0, nullptr, 0);
-            fs.value = v;
-            fs.known = true;
-        }
-
-        int slots = SlotCount(b);
-        for (int s = 0; s < slots; s++) {
-            float data[SETTINGS_MAX_SLOT_ENTRIES * 2];
-            int count = ReadSlot(b, s, data);
-            if (count < 0 || st.slotFlood[s].muted) continue;
-            unsigned long long h = HashSlot(data, count);
-            if (st.slotKnown[s] && h != st.slotHash[s] && sendChanges && !fresh && byPlayer &&
-                CountChange(st.slotFlood[s], SETTINGS_FIELD_SLOT, now))
-                Send(b, SETTINGS_FIELD_SLOT, 0, s, data, count);
-            st.slotHash[s] = h;
-            st.slotKnown[s] = true;
-        }
-    }
-    CitizenDestinations_Scan(g_scanList.data(), n, sendChanges, byPlayer);
-    // Forget demolished buildings (their address may be reused).
-    for (auto it = g_states.begin(); it != g_states.end();) {
-        if (!it->second.seen) it = g_states.erase(it);
-        else ++it;
-    }
-}
-
 // ---------------------------------------------------------------------------
-// Lockstep (see settings_sync.h)
+// Lockstep (see building_settings.h)
 // ---------------------------------------------------------------------------
 
 #define SET_PAY_RVA 0x160550 // FUN_140160550(world, building, rubles, dollars)
@@ -465,7 +338,7 @@ static int SafeCategory(const BYTE* b)
     }
 }
 
-bool SettingsSync_OwnsBuildingWord(const BYTE* building, unsigned offset)
+bool BuildingSettings_OwnsBuildingWord(const BYTE* building, unsigned offset)
 {
     int category = SafeCategory(building);
     for (int f = 0; f < kFieldCount; f++)
@@ -474,7 +347,7 @@ bool SettingsSync_OwnsBuildingWord(const BYTE* building, unsigned offset)
     return Overlaps(offset, BLD_PAY_OFFSET, 2) || Overlaps(offset, BLD_STOPPED_OFFSET, 1);
 }
 
-bool SettingsSync_OwnsSlotWord(const BYTE* building, unsigned slot, unsigned region, unsigned local)
+bool BuildingSettings_OwnsSlotWord(const BYTE* building, unsigned slot, unsigned region, unsigned local)
 {
     if (region == 2) return (local % SLOT_ENTRY_SIZE) >= 8; // share and enabled of each entry
     if (region != 0 || slot != 0) return false;
@@ -485,7 +358,7 @@ bool SettingsSync_OwnsSlotWord(const BYTE* building, unsigned slot, unsigned reg
     return false;
 }
 
-void SettingsSync_LockstepBaseline()
+void BuildingSettings_LockstepBaseline()
 {
     g_lsList.resize(200000);
     int n = CopyBuildings(g_lsList.data(), (int)g_lsList.size());
@@ -496,7 +369,7 @@ void SettingsSync_LockstepBaseline()
 
 static void SubmitSetting(const LsBuilding& s, int field, unsigned long long value, int slot, const float* data, int count)
 {
-    SettingWire w = {};
+    BuildingSettingMsg w = {};
     w.field = field;
     w.category = s.category;
     memcpy(w.pos, s.pos, sizeof(w.pos));
@@ -515,7 +388,7 @@ static void RawWrite(BYTE* p, const void* v, int size)
     }
 }
 
-void SettingsSync_LockstepDetect()
+void BuildingSettings_LockstepDetect()
 {
     for (const LsBuilding& old : g_lsBuildings) {
         if (!old.b) continue;
@@ -582,10 +455,10 @@ static bool ApplyConstruction(BYTE* b, int field, unsigned long long value)
     }
 }
 
-// Applies one received setting; false if its building is not there (yet).
-static bool Apply(const SettingWire& w);
+// Writes one setting; false if its building is not there.
+static bool Apply(const BuildingSettingMsg& w);
 
-bool SettingsSync_ApplyCommand(const SettingWire& w)
+bool BuildingSettings_ApplyCommand(const BuildingSettingMsg& w)
 {
     if (w.field == SETTINGS_FIELD_PAY || w.field == SETTINGS_FIELD_STOP) {
         BYTE* b = FindBuilding(w.pos, w.category);
@@ -594,54 +467,25 @@ bool SettingsSync_ApplyCommand(const SettingWire& w)
              w.value, w.pos[0], w.pos[2], ok ? "applied" : "NOT applied");
         return ok;
     }
-    if (w.field == CITIZEN_DESTINATIONS_FIELD) return false;
-    return FindBuilding(w.pos, w.category) && Apply(w);
+    return Apply(w);
 }
 
-// Applies one received setting; false if its building is not there (yet).
-static bool Apply(const SettingWire& w)
+static bool Apply(const BuildingSettingMsg& w)
 {
-    if (w.field == CITIZEN_DESTINATIONS_FIELD) return CitizenDestinations_Apply(w);
     BYTE* b = FindBuilding(w.pos, w.category);
     if (!b) return false;
-    BuildingState& st = g_states[b];
     if (w.field == SETTINGS_FIELD_SLOT) {
         if (w.slot < 0 || w.slot >= MAX_SLOTS || w.count < 0 || w.count > SETTINGS_MAX_SLOT_ENTRIES) return true;
         bool ok = WriteSlot(b, w.slot, w.data, w.count);
-        st.slotHash[w.slot] = HashSlot(w.data, w.count); // not echoed back
-        st.slotKnown[w.slot] = true;
         Logf("republicmp  SETTINGS: storage slot %d of category 0x%X at (%.1f,%.1f) %s", w.slot, w.category,
              w.pos[0], w.pos[2], ok ? "applied" : "NOT applied (different resource list)");
         return true;
     }
     if (w.field < 0 || w.field >= kFieldCount || !FieldApplies(kFields[w.field], w.category)) return true;
     bool ok = WriteField(b, kFields[w.field], w.value);
-    unsigned long long now = 0;
-    if (ReadField(b, kFields[w.field], &now)) {
-        st.fields[w.field].value = now; // not echoed back
-        st.fields[w.field].known = true;
-    }
     Logf("republicmp  SETTINGS: [%s] = 0x%llx at (%.1f,%.1f) %s", kFields[w.field].name, w.value, w.pos[0],
          w.pos[2], ok ? "applied" : "FAILED");
     return true;
-}
-
-void SettingsSync_OnRemote(const SettingWire& w)
-{
-    // A newer full list supersedes an older list waiting for an endpoint.
-    if (w.field == CITIZEN_DESTINATIONS_FIELD) {
-        for (auto it = g_pending.begin(); it != g_pending.end();) {
-            const SettingWire& old = it->w;
-            if (old.field == w.field && old.slot == w.slot && old.category == w.category &&
-                old.value == w.value && !memcmp(old.pos, w.pos, sizeof(w.pos)))
-                it = g_pending.erase(it);
-            else ++it;
-        }
-    }
-    if (!Apply(w)) {
-        if (w.field == CITIZEN_DESTINATIONS_FIELD) CitizenDestinations_LogPending(w, "queued");
-        g_pending.push_back({ w, GetTickCount64() });
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -738,7 +582,7 @@ static void FieldDiffScan(bool byPlayer)
 
 static void LoadSettings() { g_fieldDiffOn = Profile_GetInt("debug", "field_diff", 0) != 0; }
 
-void SettingsSync_SetFieldDiff(bool on)
+void BuildingSettings_SetFieldDiff(bool on)
 {
     g_fieldDiffOn = on;
     g_diff.clear();
@@ -746,11 +590,11 @@ void SettingsSync_SetFieldDiff(bool on)
     Logf("republicmp  FIELD_DIFF: %s", on ? "on - leave the building alone a few seconds, then click" : "off");
 }
 
-bool SettingsSync_GetFieldDiff() { return g_fieldDiffOn; }
+bool BuildingSettings_GetFieldDiff() { return g_fieldDiffOn; }
 
-bool SettingsSync_ClickedRecently() { return ClickedRecently(GetTickCount64()); }
+bool BuildingSettings_ClickedRecently() { return ClickedRecently(GetTickCount64()); }
 
-void SettingsSync_Tick()
+void BuildingSettings_Tick()
 {
     ULONGLONG now = GetTickCount64();
     TrackClick(now); // every frame - a click can be shorter than the scan interval
@@ -758,31 +602,4 @@ void SettingsSync_Tick()
         g_lastDiffMs = now;
         FieldDiffScan(ClickedRecently(now));
     }
-
-    bool syncing = BuildSync_IsConnected() && !SyncBlock_IsActive();
-    if (!syncing) {
-        CitizenDestinations_Reset();
-        g_states.clear();
-        g_pending.clear();
-        return;
-    }
-    // A setting for a building whose placement is still on its way waits for it.
-    for (size_t i = 0; i < g_pending.size();) {
-        if (Apply(g_pending[i].w)) {
-            g_pending.erase(g_pending.begin() + i);
-        } else if (now - g_pending[i].since > SETTINGS_RETRY_MS) {
-            if (g_pending[i].w.field == CITIZEN_DESTINATIONS_FIELD)
-                CitizenDestinations_LogPending(g_pending[i].w, "timeout - dropped");
-            else
-                Logf("republicmp  SETTINGS: building for a setting at (%.1f,%.1f) never appeared - dropped",
-                     g_pending[i].w.pos[0], g_pending[i].w.pos[2]);
-            g_pending.erase(g_pending.begin() + i);
-        } else {
-            ++i;
-        }
-    }
-    if (now - g_lastScanMs < SETTINGS_SCAN_INTERVAL_MS) return;
-    bool first = g_lastScanMs == 0 || g_states.empty();
-    g_lastScanMs = now;
-    Scan(!first);
 }

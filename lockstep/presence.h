@@ -4,12 +4,10 @@
 // Presentation only: the positions go through the lockstep connection beside
 // the commands (the host passes a player's on to the others) and are drawn in
 // the overlay; the simulation never sees them. The cursor is the terrain point
-// under the mouse (world +f78: the game's own pick, made each frame by
-// 2f0f10 before a tool snaps it); a ping marks that point for a few seconds
-// when the player presses the ping key (any key or mouse button, chosen in
-// the RepublicMP window; ~ by default). A world point is drawn where the
-// game's camera ([exe +9ead10]: view at +0, projection at +c8, as 403f70
-// projects) puts it.
+// under the mouse (World_MousePoint); a ping marks that point for a few
+// seconds when the player presses the ping key (any key or mouse button,
+// chosen in the RepublicMP window; ~ by default). A world point is drawn
+// where the game's camera puts it (game/camera).
 #pragma once
 
 #include "tesmio_plugin.h"

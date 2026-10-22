@@ -4,13 +4,10 @@
 #include "imgui.h"
 #include <misc/cpp/imgui_stdlib.h> // ImGui::InputText(const char*, std::string*)
 #include "../game/present_hook.h"
-#include "../world_sync/buildings/build_sync.h"
-#include "../world_sync/networks/road_sync.h"
-#include "../world_sync/terrain/terrain_sync.h"
-#include "../world_sync/terrain/terrain_hook.h"
+#include "../world/terrain_hook.h"
 #include "../session/save_sync.h"
 #include "../determinism/determinism.h"
-#include "../session/settings_sync.h"
+#include "../lockstep/building_settings.h"
 #include "debug_log.h"
 #include "../lockstep/lockstep_net.h"
 #include <vector>
@@ -21,32 +18,14 @@ DebugWindow g_debug_window;
 void DebugWindow::Open()  { isOpen = true; }
 void DebugWindow::Close() { isOpen = false; }
 
-// Draws the Debug window: manual building/road sync connection controls and
-// the verbose debug log.
+// Draws the Debug window: the lockstep state, the determinism probe, the
+// diagnostic logs and the verbose debug log.
 void DebugWindow::Draw()
 {
     if (!isOpen)
         return;
 
-    static std::string s_buildSyncIp;
-    static bool s_buildSyncIpInit = false;
-    static std::string s_roadSyncIp;
-    static bool s_roadSyncIpInit = false;
-    static std::string s_terrainSyncIp;
-    static bool s_terrainSyncIpInit = false;
     static bool s_autoScrollDebugLog = true;
-    if (!s_buildSyncIpInit) {
-        s_buildSyncIp = BuildSync_GetTargetIp();
-        s_buildSyncIpInit = true;
-    }
-    if (!s_roadSyncIpInit) {
-        s_roadSyncIp = RoadSync_GetTargetIp();
-        s_roadSyncIpInit = true;
-    }
-    if (!s_terrainSyncIpInit) {
-        s_terrainSyncIp = TerrainSync_GetTargetIp();
-        s_terrainSyncIpInit = true;
-    }
 
     ImGui::SetNextWindowSize(ImVec2(460, 520), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("Debug", &isOpen))
@@ -58,7 +37,7 @@ void DebugWindow::Draw()
         ImGui::Spacing();
 
         // --- Lockstep (lockstep/lockstep_net) ---
-        if (SaveSync_IsLockstepSession() && LockstepNet_IsConnected()) {
+        if (SaveSync_IsBusy() && LockstepNet_IsConnected()) {
             bool paused = true;
             int speed = 1;
             Determinism_SessionSpeed(&paused, &speed);
@@ -78,117 +57,6 @@ void DebugWindow::Draw()
             ImGui::Separator();
             ImGui::Spacing();
         }
-
-        // --- Building sync (started automatically by the session; these
-        // buttons are for manual reconnects) ---
-        ImGui::TextUnformatted("Building sync:");
-
-        bool bsBusy = BuildSync_IsConnected() || BuildSync_IsConnecting();
-        bool bsIsHost = BuildSync_IsHostRole();
-
-        ImGui::BeginDisabled(bsBusy);
-        if (ImGui::Button("Host##bs"))
-            BuildSync_StartHost();
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(150);
-        ImGui::InputText("##bsIp", &s_buildSyncIp);
-        ImGui::SameLine();
-        if (ImGui::Button("Connect##bs"))
-            BuildSync_StartClient(s_buildSyncIp.c_str());
-        ImGui::EndDisabled();
-
-        ImGui::SameLine();
-        ImGui::BeginDisabled(!bsBusy);
-        if (ImGui::Button("Disconnect##bs"))
-            BuildSync_Reset();
-        ImGui::EndDisabled();
-
-        ImGui::TextUnformatted("Status:");
-        ImGui::SameLine();
-        if (BuildSync_IsConnected())
-            ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.3f, 1.0f), bsIsHost ? "Hosting" : "Connected");
-        else if (BuildSync_IsConnecting())
-            ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.2f, 1.0f), bsIsHost ? "Waiting for client..." : "Connecting...");
-        else
-            ImGui::TextDisabled("Idle");
-
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-
-        // --- Infrastructure sync (started automatically by the save-sync
-        // flow; these buttons are for manual reconnects) ---
-        ImGui::TextUnformatted("Infrastructure sync:");
-
-        bool rsBusy = RoadSync_IsConnected() || RoadSync_IsConnecting();
-        bool rsIsHost = RoadSync_IsHostRole();
-
-        ImGui::BeginDisabled(rsBusy);
-        if (ImGui::Button("Host##rs"))
-            RoadSync_StartHost();
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(150);
-        ImGui::InputText("##rsIp", &s_roadSyncIp);
-        ImGui::SameLine();
-        if (ImGui::Button("Connect##rs"))
-            RoadSync_StartClient(s_roadSyncIp.c_str());
-        ImGui::EndDisabled();
-
-        ImGui::SameLine();
-        ImGui::BeginDisabled(!rsBusy);
-        if (ImGui::Button("Disconnect##rs"))
-            RoadSync_Reset();
-        ImGui::EndDisabled();
-
-        ImGui::TextUnformatted("Status:");
-        ImGui::SameLine();
-        if (RoadSync_IsConnected())
-            ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.3f, 1.0f), rsIsHost ? "Hosting" : "Connected");
-        else if (RoadSync_IsConnecting())
-            ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.2f, 1.0f), rsIsHost ? "Waiting for client..." : "Connecting...");
-        else
-            ImGui::TextDisabled("Idle");
-
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-
-        // --- Terrain sync (started automatically by the save-sync flow;
-        // these buttons are for manual reconnects) ---
-        ImGui::TextUnformatted("Terrain sync:");
-
-        bool tsBusy = TerrainSync_IsConnected() || TerrainSync_IsConnecting();
-        bool tsIsHost = TerrainSync_IsHostRole();
-
-        ImGui::BeginDisabled(tsBusy);
-        if (ImGui::Button("Host##ts"))
-            TerrainSync_StartHost();
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(150);
-        ImGui::InputText("##tsIp", &s_terrainSyncIp);
-        ImGui::SameLine();
-        if (ImGui::Button("Connect##ts"))
-            TerrainSync_StartClient(s_terrainSyncIp.c_str());
-        ImGui::EndDisabled();
-
-        ImGui::SameLine();
-        ImGui::BeginDisabled(!tsBusy);
-        if (ImGui::Button("Disconnect##ts"))
-            TerrainSync_Reset();
-        ImGui::EndDisabled();
-
-        ImGui::TextUnformatted("Status:");
-        ImGui::SameLine();
-        if (TerrainSync_IsConnected())
-            ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.3f, 1.0f), tsIsHost ? "Hosting" : "Connected");
-        else if (TerrainSync_IsConnecting())
-            ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.2f, 1.0f), tsIsHost ? "Waiting for client..." : "Connecting...");
-        else
-            ImGui::TextDisabled("Idle");
-
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
 
         // --- Determinism probe (determinism/determinism) ---
         ImGui::TextUnformatted("Determinism probe:");
@@ -215,7 +83,7 @@ void DebugWindow::Draw()
         ImGui::Separator();
         ImGui::Spacing();
 
-        // --- Terrain call log (world_sync/terrain/terrain_hook) ---
+        // --- Terrain call log (world/terrain_hook) ---
         static const char* const kTerrainLog[] = { "Off", "Per frame", "Per call" };
         int terrainLog = TerrainHook_GetLogMode();
         ImGui::SetNextItemWidth(130);
@@ -232,10 +100,10 @@ void DebugWindow::Draw()
                            "of the ticks before it, and every command that changed the money.");
         ImGui::Spacing();
 
-        // --- Field diff (session/settings_sync) ---
-        bool fieldDiff = SettingsSync_GetFieldDiff();
+        // --- Field diff (lockstep/building_settings) ---
+        bool fieldDiff = BuildingSettings_GetFieldDiff();
         if (ImGui::Checkbox("Log building fields changed by clicks (FIELD_DIFF)", &fieldDiff))
-            SettingsSync_SetFieldDiff(fieldDiff);
+            BuildingSettings_SetFieldDiff(fieldDiff);
         ImGui::TextWrapped("For finding window settings that are not synced yet: open the building's window, "
                            "leave it a few seconds, then click the setting. The changed bytes go to the log.");
 
