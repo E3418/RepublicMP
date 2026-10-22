@@ -20,6 +20,7 @@
 #include "../world/networks.h"
 #include "determinism.h"
 #include "held_frame.h"
+#include "construction_view.h"
 #include <string.h>
 #include <intrin.h>
 #include <limits.h>
@@ -1242,6 +1243,30 @@ static U64 DetSiteUpdate(U64 world, U64 building, float a3, U64 a4)
     return r;
 }
 
+// Construction sites drawn with this PC's view (construction_view.h): the
+// colour pass's (3dd999, pass 0) and the second pass's (ad26, pass 1) calls of
+// the site drawer 2dc470 come through here.
+#define SITE_DRAW_RVA 0x2DC470
+typedef U64 (*SiteDrawFn)(U64 world, U64 pass);
+
+static U64 DetSiteDraw(U64 world, U64 pass)
+{
+    SiteDrawFn original = (SiteDrawFn)(g_exeBase + SITE_DRAW_RVA);
+    bool fix = g_on && ConstructionView_GetDraw() && !g_inPhase;
+    ConstructionView_Sample((BYTE*)world, (int)(pass & 0xFF));
+    bool view = fix && VisibleIn();
+    ConstructionView_View();
+    ConstructionView_Keep((BYTE*)world, view);
+    U64 r;
+    {
+        Determinism_PrivateScope privateRng(view);
+        r = original(world, pass);
+    }
+    ConstructionView_After(view);
+    VisibleOut(view);
+    return r;
+}
+
 static bool SiteUpdateCallIs()
 {
     BYTE* call = g_exeBase + SITE_UPDATE_CALL;
@@ -1250,17 +1275,17 @@ static bool SiteUpdateCallIs()
     return *call == 0xE8 && SITE_UPDATE_CALL + 5 + rel == SITE_UPDATE_RVA;
 }
 
-#define STEP_CALL_COUNT 24
+#define STEP_CALL_COUNT 26
 static const unsigned kStepCalls[STEP_CALL_COUNT] = { 0x30E3AC, 0x30E3B8, 0x30E3C4, 0x30D9DD, 0x30D9E7, 0x30D6BC, 0x30D6C4, 0x3155F4,
                                                       0x6F91DF, 0x6F92C8, 0x6F940E, 0x6FA603, 0x6FA657, 0x7FCAE6, 0x7FCBDC, 0x7FCD00,
                                                       0x2B2800, 0x2B4B03, 0x2B505C, 0x2B3790, 0x2B75E9, 0x2B8480,
-                                                      0x1D4D35, 0x1D74C4 };
+                                                      0x1D4D35, 0x1D74C4, 0x3DD999, 0xAD26 };
 static const unsigned kStepTargets[STEP_CALL_COUNT] = { 0x547EF0, 0x547EF0, 0x547EF0, 0x333BD0, 0x5CFEA0, 0x12FD80, 0x12EC40, 0x40ECE0,
                                                         0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0,
                                                         0x2B5120, 0x2B5120, 0x40CDE0, 0x40BD60, 0x40BD60, 0x40BD60,
-                                                        0x40BD60, 0x40BD60 };
+                                                        0x40BD60, 0x40BD60, 0x2DC470, 0x2DC470 };
 static const int kStepSlots[STEP_CALL_COUNT] = { 6, 6, 6, 7, 8, 9, 10, 11, 12, 12, 12, 12, 12, 12, 12, 12, 15, 16, 17, 18, 21, 21,
-                                                 21, 21 }; // relay slot of each site
+                                                 21, 21, 22, 22 }; // relay slot of each site
 static bool VerifyStepCalls()
 {
     for (int i = 0; i < STEP_CALL_COUNT; i++) {
@@ -1278,7 +1303,7 @@ static bool VerifyStepCalls()
 
 // A relay page near the exe: one `jmp [rip+0]` per target, 16 bytes apart.
 static BYTE* g_relay = nullptr;
-#define RELAY_SLOTS 22
+#define RELAY_SLOTS 23
 
 static bool CallTo(unsigned int site, BYTE* target, unsigned char out[5])
 {
@@ -1314,7 +1339,7 @@ bool SimPatches_Install()
                               (void*)&DetBuildingLinks, (void*)&DetConnectionChecks, (void*)&DetGroundPaint, (void*)&DetDisplayCost,
                               (void*)&DetPlacePress, (void*)&DetBuyPress, (void*)&DetStopPickVehicle, (void*)&DetStopPickLine,
                               (void*)&DetLineMark, (void*)&DetDepotMark, (void*)&DetPickRay, (void*)&DetSiteUpdate,
-                              (void*)&DetLinkMark };
+                              (void*)&DetLinkMark, (void*)&DetSiteDraw };
         for (int i = 0; i < RELAY_SLOTS; i++) {
             BYTE* r = g_relay + i * 16;
             r[0] = 0xff; r[1] = 0x25; r[2] = r[3] = r[4] = r[5] = 0;

@@ -12,7 +12,8 @@
 //             dlc_check    refuse a join when the DLCs differ (session/save_sync)
 //   [overlay] show_cursors, ping_key (a virtual-key code; lockstep/presence)
 //   [debug]   money_trace (determinism), field_diff (lockstep/building_settings),
-//             terrain_log (world/terrain_hook)
+//             terrain_log (world/terrain_hook), construction_draw and
+//             construction_log (determinism/construction_view)
 //
 // Each module reads its own setting when it is bound and writes it when it
 // is changed (Profile_GetInt / Profile_SetInt).
