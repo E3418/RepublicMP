@@ -100,6 +100,10 @@ extern "C" __declspec(dllexport) int TsmPluginStart(void)
     Logf("republicmp  plan start hooks: %d%s", okPlanStart,
          okPlanStart ? "" : " - starting planned roads/rails will NOT be synced");
 
+    bool okDragStart = RoadSync_InstallDragStartHook();
+    Logf("republicmp  drag start hook: %d%s", okDragStart,
+         okDragStart ? "" : " - another player's command ends the local drag instead of pausing it");
+
     bool okGroupTool = RoadSync_InstallGroupToolHook();
     Logf("republicmp  group tool hook: %d%s", okGroupTool,
          okGroupTool ? "" : " - the group construction tools will NOT be synced");

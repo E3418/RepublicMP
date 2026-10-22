@@ -2116,19 +2116,143 @@ static void ClearCommandPreview(int category)
     }
 }
 
+// A drag's start as this PC's tool made it (FUN_1404fc040's arguments and the
+// hover it read), kept by the hook below; the replays' own starts are not.
+#define SELECTED_TOOL_OFFSET 0xd428
+#define HOVER_BLOCK_RVA 0x9E4558 // the hover globals (kHoverPtrRvas, the flag, the port)
+#define HOVER_BLOCK_BYTES 0xA8
+struct DragStart {
+    bool valid;
+    __int64 manager;
+    float start[3];
+    unsigned __int64 p3;
+    char fuzzy;
+    int p5;
+    unsigned __int64 node;
+    bool hasDirection;
+    float direction[3];
+    unsigned char hover[HOVER_BLOCK_BYTES];
+    __int64 tool;
+};
+static DragStart g_dragStart = {};  // the latest local start
+static DragStart g_dragYielded = {}; // the drag a command ended, to begin again
+static Fc040Fn g_origDragStart = nullptr;
+static bool g_resumingDrag = false;
+
+static void HookedDragStart(__int64 manager, float* startPoint, unsigned __int64 p3, char fuzzy, int p5,
+                            unsigned __int64 node, float* direction)
+{
+    if (!g_resumingDrag && !Commands_Applying() && InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0) {
+        __try {
+            DragStart s = {};
+            s.manager = manager;
+            if (startPoint) memcpy(s.start, startPoint, sizeof(s.start));
+            s.p3 = p3;
+            s.fuzzy = fuzzy;
+            s.p5 = p5;
+            s.node = node;
+            s.hasDirection = direction != nullptr;
+            if (direction) memcpy(s.direction, direction, sizeof(s.direction));
+            memcpy(s.hover, (const void*)((uintptr_t)g_exe + HOVER_BLOCK_RVA), HOVER_BLOCK_BYTES);
+            __int64 world = GetWorldThisPtr();
+            s.tool = *(__int64*)(world + SELECTED_TOOL_OFFSET);
+            s.valid = startPoint != nullptr;
+            g_dragStart = s;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            g_dragStart.valid = false;
+        }
+    }
+    g_origDragStart(manager, startPoint, p3, fuzzy, p5, node, direction);
+}
+
+// The manager is one of the networks' (it may have been made again since).
+static bool IsNetworkManager(__int64 world, __int64 manager)
+{
+    for (int c = 0; c < ROAD_SYNC_CATEGORY_COUNT; c++)
+        if (manager && *(__int64*)(world + g_categories[c].managerOffset) == manager) return true;
+    return false;
+}
+
+// The node is still one of the network's committed nodes.
+static bool NodeListed(__int64 manager, __int64 node)
+{
+    __int64* it = *(__int64**)(manager + NET_NODES_OFFSET);
+    __int64* end = *(__int64**)(manager + NET_NODES_OFFSET + 8);
+    if (!it || end < it || end - it > 4000000) return false;
+    for (; it < end; ++it)
+        if (*it == node) return true;
+    return false;
+}
+
 void RoadSync_CancelLocalDrag()
 {
     __try {
         __int64 thisPtr = GetWorldThisPtr();
         if (*(char*)(thisPtr + TOOL_DRAG_ACTIVE_OFFSET) == 0) return;
+        g_dragYielded = g_dragStart.valid && IsNetworkManager(thisPtr, g_dragStart.manager) ? g_dragStart : DragStart{};
         for (int c = 0; c < ROAD_SYNC_CATEGORY_COUNT; c++) {
             __int64 manager = *(__int64*)(thisPtr + g_categories[c].managerOffset);
             if (manager) ((ManagerResetFn)((uintptr_t)g_exe + MANAGER_RESET_RVA))(manager, manager + MANAGER_RESET_STATE_OFFSET);
         }
         *(char*)(thisPtr + TOOL_DRAG_ACTIVE_OFFSET) = 0;
-        Logf("republicmp  ROAD_SYNC: the local drag was cancelled for a lockstep command");
+        Logf("republicmp  ROAD_SYNC: the local drag was paused for a lockstep command");
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
+}
+
+void RoadSync_ResumeLocalDrag()
+{
+    if (!g_dragYielded.valid) return;
+    DragStart s = g_dragYielded;
+    g_dragYielded.valid = false;
+    if (!g_origDragStart) return;
+    const char* why = nullptr;
+    unsigned char now[HOVER_BLOCK_BYTES];
+    __try {
+        __int64 world = GetWorldThisPtr();
+        if (*(unsigned char*)((uintptr_t)g_exe + LMB_HELD_RVA) == 0) why = "the button was let go";
+        else if (*(__int64*)(world + SELECTED_TOOL_OFFSET) != s.tool) why = "another tool is in hand";
+        else if (*(char*)(world + TOOL_DRAG_ACTIVE_OFFSET) != 0) why = "another drag began";
+        else if (!IsNetworkManager(world, s.manager)) why = "the network is gone";
+        if (!why) {
+            // A start node the command removed: the start attaches by position instead.
+            if (s.node && !NodeListed(s.manager, (__int64)s.node)) {
+                s.node = 0;
+                s.fuzzy = 1;
+            }
+            unsigned char* hover = (unsigned char*)((uintptr_t)g_exe + HOVER_BLOCK_RVA);
+            memcpy(now, hover, HOVER_BLOCK_BYTES);
+            memcpy(hover, s.hover, HOVER_BLOCK_BYTES);
+            g_resumingDrag = true;
+            __try {
+                g_origDragStart(s.manager, s.start, s.p3, s.fuzzy, s.p5, s.node, s.hasDirection ? s.direction : nullptr);
+            } __finally {
+                g_resumingDrag = false;
+                memcpy(hover, now, HOVER_BLOCK_BYTES);
+            }
+            *(char*)(world + TOOL_DRAG_ACTIVE_OFFSET) = 1;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        why = "a fault while beginning it";
+        __try {
+            *(char*)(GetWorldThisPtr() + TOOL_DRAG_ACTIVE_OFFSET) = 0;
+            ((ManagerResetFn)((uintptr_t)g_exe + MANAGER_RESET_RVA))(s.manager, s.manager + MANAGER_RESET_STATE_OFFSET);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
+    if (why) Logf("republicmp  ROAD_SYNC: the paused local drag ended - %s", why);
+    else Logf("republicmp  ROAD_SYNC: the paused local drag goes on from its start");
+}
+
+// mov [rsp+8],rbx / mov [rsp+10h],rsi / mov [rsp+18h],rdi - 15 bytes
+static const unsigned char kDragStartExpect[15] = {
+    0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x48, 0x89, 0x7C, 0x24, 0x18
+};
+
+bool RoadSync_InstallDragStartHook()
+{
+    return InstallInlineHook(g_exeBase + FC040_RVA, (void*)HookedDragStart, (void**)&g_origDragStart, kDragStartExpect,
+                             sizeof(kDragStartExpect), "republicmp drag start");
 }
 
 bool RoadSync_ApplyCommandSegment(const RoadSyncMsg& msg)

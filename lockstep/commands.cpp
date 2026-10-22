@@ -320,6 +320,11 @@ bool Commands_Due(unsigned long long completed)
     return any;
 }
 
+bool Commands_Applying()
+{
+    return InterlockedCompareExchange(&g_applying, 0, 0) != 0;
+}
+
 // Player: its own actions go to the host; what the host made after this
 // tick is made here now (TCP brought it before the grant of the next tick).
 static void PlayerBoundary(unsigned long long completed)

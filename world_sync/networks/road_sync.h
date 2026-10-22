@@ -378,8 +378,19 @@ bool RoadSync_IsApplyingSegment();
 // thread. True when the engine made it.
 bool RoadSync_ApplyCommandSegment(const RoadSyncMsg& msg);
 // Ends a drag the local player has under way (every tool manager's preview
-// cleared, the drag flag down) before a command uses the tools.
+// cleared, the drag flag down) before a command uses the tools; the drag's
+// start is kept for RoadSync_ResumeLocalDrag.
 void RoadSync_CancelLocalDrag();
+// After the commands, in this PC's private scope (its draws, searches and
+// view): a drag RoadSync_CancelLocalDrag ended begins again from its start
+// (FUN_1404fc040 with the start's own arguments and hover) when the button is
+// still held and the same tool is in hand - another player's command no
+// longer drops the road being drawn. The next held frame draws it on to the
+// cursor. Otherwise the drag stays ended.
+void RoadSync_ResumeLocalDrag();
+// Hooks FUN_1404fc040 (a drag's start) to keep this PC's own starts. Call
+// once from TsmPluginStart.
+bool RoadSync_InstallDragStartHook();
 // Start planned construction (the interface's buttons) and the group tools'
 // commit frame become commands while commands are captured; made through the
 // replays above.

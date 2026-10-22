@@ -117,6 +117,8 @@ void Commands_CheckMoney(const char* where);
 void Commands_Boundary(unsigned long long completed);
 // True when Commands_Boundary has something to make at `completed`.
 bool Commands_Due(unsigned long long completed);
+// True while a command is being made (its replay runs).
+bool Commands_Applying();
 
 // Probe (main thread, right after a run's load): run 0 with `record` captures
 // and records; run 1 makes the recorded commands again. record = false: off.
