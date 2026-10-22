@@ -2,8 +2,8 @@
 
 ## 0.6.1
 
-Early Start fix and building together. Protocol 40 - every player needs
-this build (0.6.0 and 0.6.1 do not join each other).
+Early Start fix, building together and construction offices. Protocol 42 -
+every player needs this build (0.6.0 and 0.6.1 do not join each other).
 
 - **Early Start cities** - a fresh city in an early era (Early Start DLC)
   no longer gets the era's start again at the session's load on one PC:
@@ -13,6 +13,18 @@ this build (0.6.0 and 0.6.1 do not join each other).
 - **Building together** - a road, rail or pipe you are drawing is no longer
   dropped when another player builds or demolishes something: it pauses for
   their command and goes on from its start while you still hold the button.
+- **Construction offices** - the office pick tools work in a session again:
+  adding construction or demolition to an office, copying one office's
+  constructions to another (offices sharing their sites work as one
+  company), the area office tool, the office window's "add construction",
+  starting a reconstruction and continuing a construction from the building
+  windows (by SoylentGreed).
+- **Offices assign tool** - the tool's window is shared: the selected
+  offices, the mode and the quick selection slots are the same on every PC,
+  so any player can assign constructions with the same group of offices.
+- **Copy tools** - copying waste and transfer settings, distribution links
+  and specific sources, and the distribution office's lists work in a
+  session again (by SoylentGreed).
 
 ## 0.6.0
 

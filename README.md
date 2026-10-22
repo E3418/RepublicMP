@@ -69,9 +69,8 @@ Carried as commands:
 Not carried yet (tools are put away when selected, or the action acts on one
 PC only): removing decoration paths, worker relocation, buoys, Christmas
 lights, merge tools, "Go there", goods purchases in shops, the building pick
-tools besides add field, add source and the link tools (copying settings,
-adding construction or demolition to an office, distribution office lists,
-the fire station's dispatch, the area office tool). Saving in a lockstep
+tools that copy the weights or send the fire station's vehicles, the office
+window's order popup. Saving in a lockstep
 session saves on every PC at once. The construction animation
 (scaffolding, ground, workers on a building site) is not drawn; the building
 still finishes on time. While the game is paused, what comes into view
