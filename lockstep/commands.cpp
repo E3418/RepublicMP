@@ -27,6 +27,7 @@
 #include "shared_save.h"
 #include "research.h"
 #include "link_tools.h"
+#include "office_selection.h"
 #include <vector>
 #include <string.h>
 
@@ -50,6 +51,7 @@ void Commands_Bind(const TsmHost* host)
     SharedSave_Bind(host);
     Research_Bind(host);
     LinkTools_Bind(host);
+    OfficeSelection_Bind(host);
 }
 
 struct Command {
@@ -140,6 +142,7 @@ static const char* KindName(int kind)
     case LS_CMD_SAVE: return "save";
     case LS_CMD_RESEARCH: return "research";
     case LS_CMD_LINK: return "link";
+    case LS_CMD_OFFICE_SELECTION: return "office selection";
     }
     return "?";
 }
@@ -295,6 +298,9 @@ static void Apply(const Command& c)
     case LS_CMD_LINK:
         ok = LinkTools_ApplyCommand(p, n);
         break;
+    case LS_CMD_OFFICE_SELECTION:
+        ok = OfficeSelection_ApplyCommand(p, n);
+        break;
     }
     InputBlock_EndNeutral();
     InterlockedDecrement(&g_applying);
@@ -412,13 +418,12 @@ static const char* const kCarriedTools[] = { "vehicle_addstop", "line_addstop", 
                                               // the second-road drags (a road sync category; their removal stays put away)
                                               "second_road_airplane", "second_road_basicroad", "second_road_l2",
                                               "second_road_l3", "second_road_l4" };
-// The building pick tools besides the add-field, add-source and link tools write
-// heap lists or other buildings' words inline (copies, office and demolition
-// assignment, distribution lists, the fire dispatch, the area office tool).
+// Two building pick tools write other buildings' words inline: copying the
+// weights and the fire station's dispatch (the others are game calls).
 static const char* const kUncarriedTools[] = {
     "vehicle_", "worker_relocate", "building_addsource", "line_addstop", "second_road", "water_square",
-    "bojka", "christmas_", "join_hub", "terrain_go_there", "building_addstation", "building_copy",
-    "building_distribution", "building_addconstruction", "building_adddemolition", "firestation_addfire", "assign_co",
+    "bojka", "christmas_", "join_hub", "terrain_go_there", "building_addstation", "building_copyweights",
+    "firestation_addfire",
 };
 // The single-tree tools and the tree demolition brush (brush_tools.cpp): put away only when their routine differs.
 static const char* const kTreeTools[] = { "tree_", "palma", "jungle_", "fjord_", "afgan_", "afghan_", "tallkriak", "leafkriak" };

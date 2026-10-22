@@ -16,6 +16,7 @@
 #include "../lockstep/cargo_settings.h"
 #include "../lockstep/source_slots.h"
 #include "../lockstep/link_tools.h"
+#include "../lockstep/office_selection.h"
 #include "../world_sync/networks/road_sync.h"
 #include "determinism.h"
 #include "held_frame.h"
@@ -1013,6 +1014,7 @@ static void DetPrepare(__int64 world)
         original(world);
         return;
     }
+    OfficeSelection_Poll(); // a change of the assign tool's selection becomes a command at this boundary
     BYTE** buildingsBegin = *(BYTE***)(g_exeBase + BUILDINGS_BEGIN_RVA);
     BYTE** buildingsEnd = *(BYTE***)(g_exeBase + BUILDINGS_END_RVA);
     bool emptied = CommandViewIn();
