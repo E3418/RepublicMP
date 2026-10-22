@@ -22,7 +22,8 @@
 // Argument kinds: x ignored (0), W the world, M the pointer world+worldPointer
 // holds, V a vehicle, B a building, L a line, O a vehicle, building or line,
 // o the same or null, b a byte, I a 32-bit integer, F a float (the fourth
-// argument only: it travels in xmm3).
+// argument only: it travels in xmm3), A the world address world+worldPointer
+// or null, R a building's address plus worldPointer (a list inside it).
 struct GameCallSite {
     unsigned site, target;
     const char* name;
@@ -55,7 +56,12 @@ enum {
     CALL_DRAG,
     // The rename window's write (5290 = swprintf): a city's or a crossroad's name goes to rename.cpp.
     CALL_RENAME,
+    // A window that makes the call on every frame it is open: the same call again within
+    // REPEAT_MS is the same request, taken here but sent again only REFRESH_MS after the last.
+    CALL_REPEATING,
 };
+#define REPEAT_MS 1500
+#define REFRESH_MS 20000
 
 // Appended only: a command names its site by index.
 static const GameCallSite kSites[] = {
@@ -144,6 +150,56 @@ static const GameCallSite kSites[] = {
     { 0x7C8458, 0x497B10, "depot window: line copy tool (put the row's vehicle on the line)", "MLVbo", 0x12800, 0, false },
     { 0x7C846C, 0x3BB330, "depot window: line copy tool (refresh the vehicle)", "WO", 0, 0, false },
     { 0x8018D0, 0x5290, "rename window: write the name", "xxx", 0, 0, false, CALL_RENAME },
+    // Construction offices (by SoylentGreed). The office pick tools of the Late dispatcher
+    // (building_copyconstruction 1d6cb0 / 1d8330, building_addconstruction 1d9980,
+    // building_adddemolition 1da580): every routine a click makes, in click order -
+    // assignment 161c90, a reconstruction 1a8d70 first where needed, the construction list's
+    // refresh 1a04f0. Their demolitions (168730) go through the demolition hook.
+    { 0x1D70EE, 0x161C90, "office pick tool: assign", "WOOFbb", 0, 0, false },
+    { 0x1D83C2, 0x161C90, "office pick tool: assign (each listed)", "WOOFbb", 0, 0, false },
+    { 0x1D9FFD, 0x1A8D70, "office pick tool: start reconstruction", "WObb", 0, 0, false },
+    { 0x1DA02A, 0x161C90, "office pick tool: assign after reconstruction", "WOOFbb", 0, 0, false },
+    { 0x1DA48D, 0x161C90, "office pick tool: assign (second path)", "WOOFbb", 0, 0, false },
+    { 0x1DAAD2, 0x161C90, "office pick tool: assign demolition", "WOOFbb", 0, 0, false },
+    { 0x1DAAE9, 0x1A04F0, "office pick tool: refresh construction list", "WBb", 0, 0, false },
+    { 0x1DB07D, 0x161C90, "office pick tool: assign demolition (second path)", "WOOFbb", 0, 0, false },
+    { 0x1DB0A1, 0x1A04F0, "office pick tool: refresh construction list (second path)", "WBb", 0, 0, false },
+    // The area office tool (assign_co, 5eedf0): its selection assigned one by one (a
+    // reconstruction first where needed) or unassigned; the selection is cleared locally.
+    { 0x5E9C86, 0x1A8D70, "area office tool: start reconstruction", "WObb", 0, 0, false },
+    { 0x5E9CB1, 0x161C90, "area office tool: assign", "WOOFbb", 0, 0, false },
+    { 0x5E9D76, 0x1A8D70, "area office tool: start reconstruction (second)", "WObb", 0, 0, false },
+    { 0x5E9D95, 0x161C90, "area office tool: assign (second)", "WOOFbb", 0, 0, false },
+    { 0x5EA0F6, 0x1A8D70, "area office tool: start reconstruction (third)", "WObb", 0, 0, false },
+    { 0x5EA121, 0x161C90, "area office tool: assign (third)", "WOOFbb", 0, 0, false },
+    { 0x5EA1E6, 0x1A8D70, "area office tool: start reconstruction (fourth)", "WObb", 0, 0, false },
+    { 0x5EA205, 0x161C90, "area office tool: assign (fourth)", "WOOFbb", 0, 0, false },
+    { 0x5EA305, 0x162360, "area office tool: unassign", "WOO", 0, 0, false },
+    { 0x5EA3D6, 0x162360, "area office tool: unassign (second)", "WOO", 0, 0, false },
+    // The office window's "add construction": 1561c0(world, 0, office, resource mode, byte)
+    // assigns the waiting sites of that resource to the office, on every frame the window is open.
+    { 0x779AE0, 0x1561C0, "office window: add construction (each resource)", "WxBIb", 0, 0, false, CALL_REPEATING },
+    { 0x779CB5, 0x1561C0, "office window: add construction (mode 7)", "WxBIb", 0, 0, false, CALL_REPEATING },
+    { 0x779D77, 0x1561C0, "office window: add construction (mode 8)", "WxBIb", 0, 0, false, CALL_REPEATING },
+    { 0x779E07, 0x1561C0, "office window: add construction (mode 0)", "WxBIb", 0, 0, false, CALL_REPEATING },
+    { 0x779E98, 0x1561C0, "office window: add construction (mode 1)", "WxBIb", 0, 0, false, CALL_REPEATING },
+    { 0x779F3A, 0x1561C0, "office window: add construction (mode 2)", "WxBIb", 0, 0, false, CALL_REPEATING },
+    // Construction buttons of the building windows.
+    { 0x776144, 0x1A8D70, "building window: start reconstruction", "WObb", 0, 0, false },
+    { 0x7763B7, 0x1A8D70, "building window: start reconstruction (second button)", "WObb", 0, 0, false },
+    { 0x6F9F42, 0x160570, "building window header: continue construction", "WOb", 0, 0, false },
+    { 0x7702C4, 0x1A04F0, "construction panel: rebuild the construction list", "WBb", 0, 0, false },
+    { 0x77DBB7, 0x1A04F0, "construction window: rebuild the construction list", "WBb", 0, 0, false },
+    // Building pick tools: one routine call per click (copy waste and transfer settings, copy
+    // distribution links, copy specific sources) and the distribution office's lists.
+    { 0x1DBCBE, 0x1DC5D0, "copy waste settings tool: copy", "WBB", 0, 0, false },
+    { 0x1DC00F, 0x1DC7D0, "copy transfer settings tool: copy", "WBB", 0, 0, false },
+    { 0x2B8A8E, 0x2B8B10, "copy distribution tool: copy links", "xBB", 0, 0, false },
+    { 0x1D6C18, 0x1D7E10, "copy sources tool: copy", "xBBxA", 0xF5C8, 0, false },
+    { 0x1DB790, 0x1D4330, "distribution office tool: add to list +f18", "WBR", 0xF18, 0, false },
+    { 0x1DB7A5, 0x1D4330, "distribution office tool: add to list +f48", "WBR", 0xF48, 0, false },
+    { 0x1DB7BA, 0x1D4330, "distribution office tool: add to list +f30", "WBR", 0xF30, 0, false },
+    { 0x1DB7D3, 0x1D4330, "distribution office tool: add to list +f60", "WBR", 0xF60, 0, false },
 };
 #define SITE_COUNT (sizeof(kSites) / sizeof(kSites[0]))
 
@@ -245,6 +301,14 @@ static const char* Capture(unsigned index, const U64* a, GameCallMsg& m)
             break;
         case 'b': m.values[j] = (unsigned)(a[j] & 0xff); break;
         case 'I': case 'F': m.values[j] = (unsigned)a[j]; break;
+        case 'A':
+            if (a[j] && a[j] != world + s.worldPointer) return "an argument is not the world's field";
+            m.values[j] = a[j] ? 1 : 0;
+            break;
+        case 'R':
+            if (!a[j] || !Ref_Building(a[j] - s.worldPointer, m.refs[j])) return "a list's building is not in the world's list";
+            m.kinds[j] = OBJ_BUILDING;
+            break;
         default: return "unknown argument kind";
         }
     }
@@ -269,9 +333,44 @@ static const char* Rebuild(const GameCallMsg& m, U64* a)
             break;
         case 'b': a[j] = m.values[j] & 0xff; break;
         case 'I': case 'F': a[j] = m.values[j]; break;
+        case 'A': a[j] = m.values[j] ? world + s.worldPointer : 0; break;
+        case 'R':
+            if (m.kinds[j] != OBJ_BUILDING || !(a[j] = Ref_BuildingAt(m.refs[j]))) return "a list's building is gone";
+            a[j] += s.worldPointer;
+            break;
         }
     }
     return nullptr;
+}
+
+// CALL_REPEATING: the calls seen lately (the interface thread only).
+struct RepeatSeen {
+    GameCallMsg msg;
+    ULONGLONG seen, sent;
+};
+static RepeatSeen g_repeats[32];
+
+// True when this repeating call is to be sent now: a new one, or one sent REFRESH_MS ago.
+static bool RepeatDue(const GameCallMsg& m)
+{
+    ULONGLONG now = GetTickCount64();
+    RepeatSeen* free = nullptr;
+    for (RepeatSeen& r : g_repeats) {
+        if (r.seen && now - r.seen > REPEAT_MS) r.seen = 0;
+        if (!r.seen) {
+            if (!free) free = &r;
+            continue;
+        }
+        if (memcmp(&r.msg, &m, sizeof(m)) != 0) continue;
+        r.seen = now;
+        if (now - r.sent < REFRESH_MS) return false;
+        r.sent = now;
+        return true;
+    }
+    if (!free) free = &g_repeats[0];
+    free->msg = m;
+    free->seen = free->sent = now;
+    return true;
 }
 
 static U64 Run(unsigned index, const U64* a)
@@ -327,7 +426,7 @@ static U64 Run(unsigned index, const U64* a)
     }
     if (why)
         Logf("republicmp  GAME CALL: %s not shared - %s; nothing is done", s.name, why);
-    else
+    else if (s.special != CALL_REPEATING || RepeatDue(m))
         Commands_Submit(LS_CMD_GAME_CALL, &m, sizeof(m));
     return s.result;
 }
@@ -378,7 +477,9 @@ bool GameCalls_ApplyCommand(const void* data, size_t size)
     U64 dragged = 0;
     __try {
         why = Rebuild(m, a);
-        if (!why && s.special != CALL_PLAIN && s.special != CALL_DELETE_LINE && s.special != CALL_DRAG) why = "not a command site";
+        if (!why && s.special != CALL_PLAIN && s.special != CALL_DELETE_LINE && s.special != CALL_DRAG &&
+            s.special != CALL_REPEATING)
+            why = "not a command site";
         if (!why) {
             if (s.special == CALL_DELETE_LINE) *(BYTE*)(a[1] + 1) = 0;
             if (s.special == CALL_DRAG) {
