@@ -16,6 +16,7 @@
 #include "../lockstep/cargo_settings.h"
 #include "../lockstep/source_slots.h"
 #include "../lockstep/link_tools.h"
+#include "../world_sync/networks/road_sync.h"
 #include "determinism.h"
 #include "held_frame.h"
 #include <string.h>
@@ -80,6 +81,16 @@ static const DetPatch kPatches[] = {
     // cmp byte [rdi+115a],0; je 15ba4c -> jmp 15b8d8 (past the distance test); nop8
     { 0x15b8b6, 13, { 0x80, 0xbf, 0x5a, 0x11, 0x00, 0x00, 0x00, 0x0f, 0x84, 0x89, 0x01, 0x00, 0x00 },
       { 0xe9, 0x1d, 0x00, 0x00, 0x00, NOP8 }, "construction update: every site as one on the camera" },
+    // The price and era step 2fb1d0 (called by the load and the economy update) runs a new game's
+    // start once more while the world request byte exe+993c66 is up (a load or a new game pending)
+    // and the city is in an early era (world +d70 3..6) with at most one record in +11728: money
+    // and every resource price times the era's factor (0.35 for the 1920s), and a record added.
+    // A fresh city's save (Early Start, day 0) got it again at the session's load on one PC only:
+    // 3.5 million rubles there, 1.2 million on the other. A session's world is the host's save,
+    // which holds that start already: never in a session.
+    // je 2fbfb4 -> jmp 2fbfb4; nop
+    { 0x2fbcec, 6, { 0x0f, 0x84, 0xc2, 0x02, 0x00, 0x00 }, { 0xe9, 0xc3, 0x02, 0x00, 0x00, 0x90 },
+      "era start scaling: never at a session's load" },
     // the camera's own update of a followed vehicle -> nop5; the worker's skip -> nop
     { 0x10e4f, 5, { 0xe8, 0xdc, 0xc6, 0x65, 0x00 }, { NOP5 }, "follow camera: train head" },
     { 0x10e87, 5, { 0xe8, 0xa4, 0xc6, 0x65, 0x00 }, { NOP5 }, "follow camera: wagon" },
@@ -1026,6 +1037,9 @@ static void DetPrepare(__int64 world)
     timer[12] = 0;
     {
         Determinism_PrivateScope privateRng;
+        // A drag the commands interrupted goes on from its start (this PC's
+        // view, draws and searches, like the tool's own frames).
+        RoadSync_ResumeLocalDrag();
         original(world);
     }
     memcpy(timer, tickTimer, sizeof(tickTimer));
