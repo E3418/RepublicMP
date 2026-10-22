@@ -59,7 +59,7 @@ struct LsMessage {
 
 // One connection: on the host a player, on a player the host (slot 0).
 struct Peer {
-    SOCKET sock;
+    NetLink sock;
     HANDLE thread;
     volatile bool connected;
     char nick[PROFILE_NICK_BYTES];
@@ -112,7 +112,7 @@ static void Locks()
     InitializeCriticalSection(&g_listLock);
     for (Peer& p : g_peers) {
         InitializeCriticalSection(&p.sendLock);
-        p.sock = INVALID_SOCKET;
+        p.sock = NET_NO_LINK;
         p.thread = nullptr;
         p.connected = false;
     }
@@ -226,7 +226,7 @@ static void ResetState()
     LeaveCriticalSection(&g_inLock);
     for (Peer& p : g_peers) {
         p.connected = false;
-        p.sock = INVALID_SOCKET;
+        p.sock = NET_NO_LINK;
         p.thread = nullptr;
         p.nick[0] = 0;
         p.ip[0] = 0;
@@ -258,7 +258,7 @@ static void ResetState()
     g_grantBacklog = 0;
 }
 
-static void StartPeer(SOCKET s, const char* nick, const char* ip)
+static void StartPeer(NetLink s, const char* nick, const char* ip)
 {
     Peer& p = g_peers[g_peerSlots];
     p.sock = s;
@@ -278,8 +278,8 @@ int LockstepNet_HostAccept(int expected, DWORD timeoutMs, volatile bool* cancel,
     ResetState();
     g_isHost = true;
     if (expected > LOCKSTEP_MAX_PEERS) expected = LOCKSTEP_MAX_PEERS;
-    SOCKET listener = NetworkListen(LOCKSTEP_PORT, LOCKSTEP_MAX_PEERS);
-    if (listener == INVALID_SOCKET) return 0;
+    NetLink listener = NetworkListen(LOCKSTEP_PORT, LOCKSTEP_MAX_PEERS);
+    if (listener == NET_NO_LINK) return 0;
     ULONGLONG start = GetTickCount64();
     while (g_peerSlots < expected && !(cancel && *cancel) && GetTickCount64() - start < timeoutMs) {
         if (stillExpected) {
@@ -290,15 +290,15 @@ int LockstepNet_HostAccept(int expected, DWORD timeoutMs, volatile bool* cancel,
                 continue;
             }
         }
-        SOCKET s = NetworkAcceptReady(listener, 200, LS_HELLO_TIMEOUT_MS);
-        if (s == INVALID_SOCKET) continue;
+        NetLink s = NetworkAcceptReady(listener, 200, LS_HELLO_TIMEOUT_MS);
+        if (s == NET_NO_LINK) continue;
         // A player opens with its name; anything else is not one of ours.
         LsHeader h = {};
         LsHello hello = {};
         if (!NetworkRecvExact(s, &h, sizeof(h)) || h.type != LS_HELLO || h.size != sizeof(hello) ||
             !NetworkRecvExact(s, &hello, sizeof(hello)) || memcmp(hello.magic, kHelloMagic, sizeof(kHelloMagic)) != 0) {
             Logf("republicmp  LOCKSTEP: a connection without a player's hello - closed");
-            NetworkCloseSocket(s);
+            NetworkClose(s);
             continue;
         }
         hello.nick[PROFILE_NICK_BYTES - 1] = 0;
@@ -308,7 +308,7 @@ int LockstepNet_HostAccept(int expected, DWORD timeoutMs, volatile bool* cancel,
         StartPeer(s, hello.nick, ip);
         Logf("republicmp  LOCKSTEP: %s (%s) connected - %d of %d", hello.nick, ip, g_peerSlots, expected);
     }
-    NetworkCloseSocket(listener);
+    NetworkClose(listener);
     // The first ones waited for the others: their silence so far is not a drop.
     for (int i = 0; i < g_peerSlots; i++) g_peers[i].lastReceived = GetTickCount64();
     if (g_peerSlots) Logf("republicmp  LOCKSTEP: connected as host with %d player(s)", g_peerSlots);
@@ -330,8 +330,8 @@ bool LockstepNet_Join(const char* hostIp, DWORD timeoutMs, volatile bool* cancel
     if (!NetworkInit()) return false;
     ULONGLONG start = GetTickCount64();
     for (;;) {
-        SOCKET s = NetworkConnect(hostIp, LOCKSTEP_PORT, 5000, 0, cancel);
-        if (s != INVALID_SOCKET) {
+        NetLink s = NetworkConnect(hostIp, LOCKSTEP_PORT, 5000, 0, cancel);
+        if (s != NET_NO_LINK) {
             ResetState();
             g_isHost = false;
             LsHeader h = { LS_HELLO, sizeof(LsHello) };
@@ -339,7 +339,7 @@ bool LockstepNet_Join(const char* hostIp, DWORD timeoutMs, volatile bool* cancel
             memcpy(hello.magic, kHelloMagic, sizeof(kHelloMagic));
             strncpy_s(hello.nick, Profile_GetNick(), _TRUNCATE);
             if (!NetworkSendExact(s, &h, sizeof(h)) || !NetworkSendExact(s, &hello, sizeof(hello))) {
-                NetworkCloseSocket(s);
+                NetworkClose(s);
                 return false;
             }
             StartPeer(s, "host", hostIp);
@@ -356,11 +356,11 @@ void LockstepNet_Close()
     Locks();
     for (int i = 0; i < g_peerSlots; i++) {
         Peer& p = g_peers[i];
-        if (p.sock != INVALID_SOCKET) {
+        if (p.sock != NET_NO_LINK) {
             if (p.connected) Send(p, LS_BYE, nullptr, 0);
             p.connected = false;
-            NetworkCloseSocket(p.sock);
-            p.sock = INVALID_SOCKET;
+            NetworkClose(p.sock);
+            p.sock = NET_NO_LINK;
         }
         if (p.thread) {
             WaitForSingleObject(p.thread, 5000);
@@ -630,7 +630,7 @@ int LockstepNet_DropSilent(unsigned long long ms)
         if (!p.connected || now - p.lastReceived <= ms) continue;
         Logf("republicmp  LOCKSTEP: %s stopped answering - dropped", p.nick);
         p.connected = false;
-        shutdown(p.sock, SD_BOTH); // its receive thread ends
+        NetworkShutdown(p.sock); // its receive thread ends
         dropped++;
     }
     return dropped;

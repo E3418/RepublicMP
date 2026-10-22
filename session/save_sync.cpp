@@ -52,7 +52,7 @@ static char g_lastError[256] = "";
 static volatile bool g_disconnectRequested = false;
 
 // The join connection in use, so Disconnect can break a blocking recv.
-static volatile SOCKET g_activeSock = INVALID_SOCKET;
+static volatile NetLink g_activeSock = NET_NO_LINK;
 
 // GetTickCount64 when the current session was started (Host / Connect).
 static volatile ULONGLONG g_sessionStartTick = 0;
@@ -174,7 +174,7 @@ struct SessionMsg {
     char text[64];
 };
 
-static bool SendMsg(SOCKET sock, int code, int step, int percent, const char* text)
+static bool SendMsg(NetLink sock, int code, int step, int percent, const char* text)
 {
     SessionMsg m = {};
     m.code = code;
@@ -184,7 +184,7 @@ static bool SendMsg(SOCKET sock, int code, int step, int percent, const char* te
     return NetworkSendExact(sock, &m, sizeof(m));
 }
 
-static bool RecvMsg(SOCKET sock, SessionMsg* m)
+static bool RecvMsg(NetLink sock, SessionMsg* m)
 {
     if (!NetworkRecvExact(sock, m, sizeof(*m))) return false;
     m->text[sizeof(m->text) - 1] = 0;
@@ -287,7 +287,7 @@ static const char* MonitorLockstep(bool client)
 // A player in a host's join (several come together: a re-sync brings
 // everyone back at once).
 struct Joiner {
-    SOCKET sock;
+    NetLink sock;
     char ip[64];
     char nick[PROFILE_NICK_BYTES];
     bool alive;
@@ -297,7 +297,7 @@ struct Joiner {
 // relay of the percentage to the other side every 10% (the client to the
 // host, or the host to every player of a join).
 struct ProgressCtx {
-    SOCKET relaySock;              // INVALID_SOCKET = do not relay
+    NetLink relaySock;             // NET_NO_LINK = do not relay
     std::vector<Joiner>* relayTo;  // nullptr = none
     int step;
     const char* text;
@@ -311,7 +311,7 @@ static void OnProgress(ProgressCtx* ctx, unsigned long long done, unsigned long 
     SyncBlock_SetPercent(percent);
     if (!ctx || percent / 10 == ctx->lastRelayed / 10) return;
     ctx->lastRelayed = percent;
-    if (ctx->relaySock != INVALID_SOCKET) SendMsg(ctx->relaySock, MSG_STEP, ctx->step, percent, ctx->text);
+    if (ctx->relaySock != NET_NO_LINK) SendMsg(ctx->relaySock, MSG_STEP, ctx->step, percent, ctx->text);
     if (ctx->relayTo)
         for (Joiner& j : *ctx->relayTo)
             if (j.alive) SendMsg(j.sock, MSG_STEP, ctx->step, percent, ctx->text);
@@ -427,7 +427,7 @@ struct SessionNick {
 };
 
 // Sends this player's name and takes the other side's; false: the connection is gone.
-static bool ExchangeNicks(SOCKET sock, char* theirs, size_t theirsSize)
+static bool ExchangeNicks(NetLink sock, char* theirs, size_t theirsSize)
 {
     SessionNick mine = {}, other = {};
     memcpy(mine.magic, "RPMPNIK", 8);
@@ -509,13 +509,13 @@ static const char* NameOf(const Joiner& j)
 
 static void DropJoiner(Joiner& j)
 {
-    if (j.sock != INVALID_SOCKET) NetworkCloseSocket(j.sock);
-    j.sock = INVALID_SOCKET;
+    if (j.sock != NET_NO_LINK) NetworkClose(j.sock);
+    j.sock = NET_NO_LINK;
     j.alive = false;
 }
 
 // The join connections in use, so Disconnect can break their blocking recvs.
-static SOCKET g_joinSocks[PROFILE_MAX_PLAYERS];
+static NetLink g_joinSocks[PROFILE_MAX_PLAYERS];
 static int g_joinSockCount = 0;
 
 static void SetJoinSockets(const std::vector<Joiner>* js)
@@ -724,7 +724,7 @@ static int RunHostJoin(std::vector<Joiner>& js)
         _snprintf_s(zipPath, sizeof(zipPath), _TRUNCATE, "%s.republicmp.zip", saveDir);
         HostStep(3, "Packing the save", 0);
         SendAll(js, MSG_STEP, 3, 0, "packing the save");
-        ProgressCtx packCtx = { INVALID_SOCKET, &js, 3, "packing the save", -100 };
+        ProgressCtx packCtx = { NET_NO_LINK, &js, 3, "packing the save", -100 };
         strncpy_s(madeZip, zipPath, _TRUNCATE);
         if (!ZipSaveDirectory(saveDir, zipPath, ZipProgressCb, &packCtx)) {
             SetSessionError("packing the save failed");
@@ -816,24 +816,24 @@ static int RunHostJoin(std::vector<Joiner>& js)
 // open while there is room (a full session stops listening); a player who
 // connects during the game joins through a re-sync of everyone, so all load
 // the same save again.
-static SOCKET g_listener = INVALID_SOCKET;
+static NetLink g_listener = NET_NO_LINK;
 static const char* const kJoinReason = "a player joins";
 
 static bool OpenListener()
 {
-    if (g_listener == INVALID_SOCKET) g_listener = NetworkListen(SAVE_SYNC_PORT, PROFILE_MAX_PLAYERS);
-    return g_listener != INVALID_SOCKET;
+    if (g_listener == NET_NO_LINK) g_listener = NetworkListen(SAVE_SYNC_PORT, PROFILE_MAX_PLAYERS);
+    return g_listener != NET_NO_LINK;
 }
 
 static void CloseListener(const char* why)
 {
-    if (g_listener == INVALID_SOCKET) return;
-    NetworkCloseSocket(g_listener);
-    g_listener = INVALID_SOCKET;
+    if (g_listener == NET_NO_LINK) return;
+    NetworkClose(g_listener);
+    g_listener = NET_NO_LINK;
     Logf("republicmp  SESSION: %s - not listening on port %d", why, SAVE_SYNC_PORT);
 }
 
-static void TakeJoiner(SOCKET s, std::vector<Joiner>& batch)
+static void TakeJoiner(NetLink s, std::vector<Joiner>& batch)
 {
     Joiner j = {};
     j.sock = s;
@@ -880,8 +880,8 @@ static void Gather(std::vector<Joiner>& batch, int room, const std::vector<std::
         ULONGLONG now = GetTickCount64();
         if (expect && (!MissingOf(batch, *expect) || now - start >= timeoutMs)) break;
         if (!expect && firstAt && now - firstAt >= GATHER_MORE_MS) break;
-        SOCKET s = NetworkAcceptReady(g_listener, 200, 0);
-        if (s == INVALID_SOCKET) continue;
+        NetLink s = NetworkAcceptReady(g_listener, 200, 0);
+        if (s == NET_NO_LINK) continue;
         int missingBefore = expect ? MissingOf(batch, *expect) : 0;
         TakeJoiner(s, batch);
         if (expect && MissingOf(batch, *expect) == missingBefore && (int)batch.size() + missingBefore > room) {
@@ -940,8 +940,8 @@ static const char* MonitorLockstepHost(std::vector<Joiner>& batch)
         // Room for more: a new player joins through a re-sync of everyone.
         if (count < Profile_GetMaxPlayers() - 1) {
             if (OpenListener()) {
-                SOCKET s = NetworkAcceptReady(g_listener, 0, 0);
-                if (s != INVALID_SOCKET) {
+                NetLink s = NetworkAcceptReady(g_listener, 0, 0);
+                if (s != NET_NO_LINK) {
                     TakeJoiner(s, batch);
                     SaveStatus("[HOST] %s connects - re-syncing everyone so all load the same world", batch.back().ip);
                     return kJoinReason;
@@ -1051,7 +1051,7 @@ static void ClientStep(int step, const char* text, int percent = -1)
 // loads, so anything readable here is the connection closing or failing.
 static bool JoinHostGone(void* sockPtr)
 {
-    return NetworkPeerGone(*(SOCKET*)sockPtr);
+    return NetworkPeerGone(*(NetLink*)sockPtr);
 }
 
 // Returns true when the player is in the host's game with the lockstep
@@ -1062,7 +1062,7 @@ static bool RunClientJoin(bool rejoin)
     SyncBlock_SetActive(true, rejoin ? "Re-syncing with the host" : "Connecting to the host");
     EnsureGamePaused();
 
-    SOCKET sock = INVALID_SOCKET;
+    NetLink sock = NET_NO_LINK;
     bool joined = false;
 
     do {
@@ -1085,12 +1085,12 @@ static bool RunClientJoin(bool rejoin)
         ULONGLONG connectStart = GetTickCount64();
         for (;;) {
             sock = NetworkConnect(g_targetIp, SAVE_SYNC_PORT, 15000, 0, &g_disconnectRequested);
-            if (sock != INVALID_SOCKET || !rejoin || g_disconnectRequested) break;
+            if (sock != NET_NO_LINK || !rejoin || g_disconnectRequested) break;
             if (GetTickCount64() - connectStart > RESYNC_REJOIN_TIMEOUT_MS) break;
             SyncBlock_SetStep(1, JOIN_STEPS, "Re-sync: waiting for the host to open for the players again", -1);
             Sleep(RESYNC_RETRY_MS);
         }
-        if (sock == INVALID_SOCKET) {
+        if (sock == NET_NO_LINK) {
             if (!g_disconnectRequested)
                 SetSessionError("couldn't reach %s:%d - is the host hosting, with room for you? is the IP right? (while players are loading in, the host takes no one else - try again in a minute)", g_targetIp, SAVE_SYNC_PORT);
             break;
@@ -1172,7 +1172,7 @@ static bool RunClientJoin(bool rejoin)
 
         // 4. Receive.
         ClientStep(4, "Receiving the world", 0);
-        ProgressCtx recvCtx = { INVALID_SOCKET, nullptr, 4, nullptr, 0 };
+        ProgressCtx recvCtx = { NET_NO_LINK, nullptr, 4, nullptr, 0 };
         if (!NetworkReceiveFile(sock, zipPath, NetworkProgressCb, &recvCtx)) {
             SetSessionError("receiving the world failed - connection lost");
             break;
@@ -1256,8 +1256,8 @@ static bool RunClientJoin(bool rejoin)
         joined = true;
     } while (false);
 
-    g_activeSock = INVALID_SOCKET;
-    if (sock != INVALID_SOCKET) NetworkCloseSocket(sock);
+    g_activeSock = NET_NO_LINK;
+    if (sock != NET_NO_LINK) NetworkClose(sock);
     SyncBlock_SetActive(false, nullptr);
     // Joined: stays paused until either player resumes (see RunHostJoin).
     if (!joined) EnsureGameUnpaused();
@@ -1369,10 +1369,10 @@ void SaveSync_RequestDisconnect()
     SaveStatus(g_isHost ? "[HOST] stopping..." : "[CLIENT] disconnecting...");
     g_disconnectRequested = true;
     // Wakes a blocking recv on the join connections (closed by their owner).
-    SOCKET s = g_activeSock;
-    if (s != INVALID_SOCKET) shutdown(s, SD_BOTH);
+    NetLink s = g_activeSock;
+    if (s != NET_NO_LINK) NetworkShutdown(s);
     EnterCriticalSection(&g_lock);
-    for (int i = 0; i < g_joinSockCount; i++) shutdown(g_joinSocks[i], SD_BOTH);
+    for (int i = 0; i < g_joinSockCount; i++) NetworkShutdown(g_joinSocks[i]);
     LeaveCriticalSection(&g_lock);
     CloseLockstep();
 }
