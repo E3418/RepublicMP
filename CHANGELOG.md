@@ -2,7 +2,7 @@
 
 ## 0.6.1
 
-Early Start fix, building together and construction offices. Protocol 42 -
+Early Start fix, building together, construction offices, cursors and pings. Protocol 43 -
 every player needs this build (0.6.0 and 0.6.1 do not join each other).
 
 - **Early Start cities** - a fresh city in an early era (Early Start DLC)
@@ -25,6 +25,17 @@ every player needs this build (0.6.0 and 0.6.1 do not join each other).
 - **Copy tools** - copying waste and transfer settings, distribution links
   and specific sources, and the distribution office's lists work in a
   session again (by SoylentGreed).
+- **Weights and fire stations** - copying a building's weights and sending
+  the fire station's vehicles to a burning building with the pick tool are
+  made on every PC (by SoylentGreed).
+- **Cursors and pings** - the other players' cursors are shown on the map
+  with their names, and pressing ~ pings the place under your mouse for
+  everyone (an arrow at the screen's edge when it is out of view). The
+  RepublicMP window can hide the cursors and set another ping key or mouse
+  button.
+- **Settings remembered** - besides the name and the session's size,
+  RepublicMP.profile.ini keeps the DLC check, the cursors and ping key and
+  the Debug window's logs (money trace, field diff, terrain log).
 
 ## 0.6.0
 

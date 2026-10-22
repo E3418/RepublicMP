@@ -115,6 +115,10 @@ void LockstepNet_SendSpeed(int speed);
 // The host's pause and speed for the buttons; false until it sent them.
 bool LockstepNet_HostState(bool* paused, int* speed);
 
+// Both, any thread: this PC's cursor or ping (lockstep/presence) - not a
+// command, the simulation never sees it.
+void LockstepNet_SendMark(int kind, const float pos[3]);
+
 // Both: commands (host: made after `afterTick`, to every player; player: to the host).
 void LockstepNet_SendCommand(int kind, unsigned long long afterTick, const void* data, size_t size);
 // Both, after tick `tick`: the state summary for the comparison.

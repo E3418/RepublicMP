@@ -200,6 +200,7 @@
     <ClCompile Include="lockstep\source_slots.cpp" />
     <ClCompile Include="lockstep\link_tools.cpp" />
     <ClCompile Include="lockstep\office_selection.cpp" />
+    <ClCompile Include="lockstep\presence.cpp" />
     <ClCompile Include="lockstep\rename.cpp" />
     <ClCompile Include="lockstep\lockstep_net.cpp" />
     <ClCompile Include="determinism\determinism.cpp" />
@@ -269,6 +270,7 @@
     <ClInclude Include="lockstep\source_slots.h" />
     <ClInclude Include="lockstep\link_tools.h" />
     <ClInclude Include="lockstep\office_selection.h" />
+    <ClInclude Include="lockstep\presence.h" />
     <ClInclude Include="lockstep\rename.h" />
     <ClInclude Include="lockstep\lockstep_net.h" />
     <ClInclude Include="determinism\determinism.h" />

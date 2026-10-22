@@ -2,6 +2,7 @@
 // See lockstep_net.h.
 #include "lockstep_net.h"
 #include "commands.h"
+#include "presence.h"
 #include "../determinism/determinism.h"
 #include "../transport/network.h"
 #include <deque>
@@ -29,6 +30,7 @@ enum LockstepMsgType {
     LS_DESYNC = 12, // host -> player: the first state difference (text)
     LS_HELLO = 13,  // player -> host, first: LsHello
     LS_PLAYERS = 14, // host -> player: LsPlayers (once a second)
+    LS_MARK = 15,    // either way: LsMark, a cursor or ping (lockstep/presence; the host passes it on)
 };
 
 #pragma pack(push, 1)
@@ -41,6 +43,7 @@ struct LsPing { unsigned long long sentMs; int reply; };
 struct LsHello { char magic[8]; char nick[PROFILE_NICK_BYTES]; };
 struct LsPlayerEntry { char nick[PROFILE_NICK_BYTES]; int rttMs; unsigned behind; unsigned char host, self, pad[2]; };
 struct LsPlayers { unsigned count; LsPlayerEntry e[PROFILE_MAX_PLAYERS]; };
+struct LsMark { int player; int kind; float pos[3]; char nick[PROFILE_NICK_BYTES]; };
 #pragma pack(pop)
 
 #define LS_MAX_PAYLOAD (1u << 20)
@@ -178,6 +181,21 @@ static DWORD WINAPI RecvThread(LPVOID param)
                 EnterCriticalSection(&g_listLock);
                 memcpy(&g_list, m.data.data(), sizeof(g_list));
                 LeaveCriticalSection(&g_listLock);
+            }
+            continue;
+        }
+        if (h.type == LS_MARK) {
+            if (m.data.size() == sizeof(LsMark)) {
+                LsMark k = *(const LsMark*)m.data.data();
+                if (g_isHost) {
+                    // A player's: numbered and named by the host, passed on to the others.
+                    k.player = index + 1;
+                    strncpy_s(k.nick, peer.nick, _TRUNCATE);
+                    for (int i = 0; i < g_peerSlots; i++)
+                        if (i != index) Send(g_peers[i], LS_MARK, &k, sizeof(k));
+                }
+                k.nick[PROFILE_NICK_BYTES - 1] = 0;
+                Presence_Receive(k.player, k.kind, k.pos, k.nick);
             }
             continue;
         }
@@ -725,6 +743,15 @@ bool LockstepNet_HostState(bool* paused, int* speed)
     *paused = g_hostState.paused != 0;
     *speed = g_hostState.speed;
     return true;
+}
+
+void LockstepNet_SendMark(int kind, const float pos[3])
+{
+    if (!g_locksReady) return;
+    LsMark k = { 0, kind, { pos[0], pos[1], pos[2] }, {} };
+    strncpy_s(k.nick, Profile_GetNick(), _TRUNCATE);
+    if (g_isHost) Broadcast(LS_MARK, &k, sizeof(k));
+    else Send(g_peers[0], LS_MARK, &k, sizeof(k));
 }
 
 void LockstepNet_SendCommand(int kind, unsigned long long afterTick, const void* data, size_t size)

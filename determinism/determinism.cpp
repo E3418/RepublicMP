@@ -11,6 +11,7 @@
 #include "../game/save_load.h"
 #include "../session/game_speed.h"
 #include "../session/save_sync.h" // SaveSync_IsBusy - no probe during a session
+#include "../core/profile.h"
 #include <intrin.h>           // _ReturnAddress
 #include <math.h>
 #include <stdio.h>
@@ -52,8 +53,11 @@ static const unsigned char kLoadWorldExpect[18] = {
     0x48, 0x8D, 0xAC, 0x24, 0x00, 0x38, 0xFF, 0xFF,
 };
 
+static void LoadSettings();
+
 void Determinism_Bind(const TsmHost* host)
 {
+    LoadSettings();
     TsmBind(host);
     HeldFrame_Bind(host);
     Commands_Bind(host);
@@ -1012,11 +1016,14 @@ struct SitePayment {
 static SitePayment g_sitePayments[SITE_PAYMENTS];
 static unsigned long long g_sitePaymentCount = 0;
 
+static void LoadSettings() { g_moneyTrace = Profile_GetInt("debug", "money_trace", 1) != 0; }
+
 void Determinism_SetMoneyTrace(bool on)
 {
     g_moneyTrace = on;
     g_moneyTickCount = 0;
     g_sitePaymentCount = 0;
+    Profile_SetInt("debug", "money_trace", on ? 1 : 0);
 }
 
 void Determinism_NoteSitePayment(unsigned char* b, double rubles, double dollars)

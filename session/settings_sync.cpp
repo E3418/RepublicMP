@@ -5,6 +5,7 @@
 #include "../world_sync/buildings/build_sync.h"
 #include "../ui/sync_block.h"
 #include "../lockstep/commands.h"
+#include "../core/profile.h"
 #include <unordered_map>
 #include <vector>
 #include <math.h>
@@ -68,9 +69,12 @@ static const WatchedField kFields[] = {
 };
 static const int kFieldCount = sizeof(kFields) / sizeof(kFields[0]);
 
+static void LoadSettings();
+
 void SettingsSync_Bind(const TsmHost* host)
 {
     TsmBind(host);
+    LoadSettings();
     CitizenDestinations_Bind(host);
 }
 
@@ -732,10 +736,13 @@ static void FieldDiffScan(bool byPlayer)
     }
 }
 
+static void LoadSettings() { g_fieldDiffOn = Profile_GetInt("debug", "field_diff", 0) != 0; }
+
 void SettingsSync_SetFieldDiff(bool on)
 {
     g_fieldDiffOn = on;
     g_diff.clear();
+    Profile_SetInt("debug", "field_diff", on ? 1 : 0);
     Logf("republicmp  FIELD_DIFF: %s", on ? "on - leave the building alone a few seconds, then click" : "off");
 }
 

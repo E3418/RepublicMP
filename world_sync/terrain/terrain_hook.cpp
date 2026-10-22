@@ -7,6 +7,7 @@
 // escape into the game.
 #include "terrain_hook.h"
 #include "../../lockstep/commands.h"
+#include "../../core/profile.h"
 #include <vector>
 #include "terrain_sync.h"
 #include <intrin.h>
@@ -19,9 +20,12 @@
 
 volatile long g_terrainApplyingRemote = 0;
 
+static void LoadSettings();
+
 void TerrainHook_Bind(const TsmHost* host)
 {
     TsmBind(host);
+    LoadSettings();
 }
 
 // ------------------------------------------------------------------ methods
@@ -170,7 +174,7 @@ static volatile long long g_frame = 0;
 static volatile long g_depthHeight = 0;
 static volatile long g_depthMask = 0;
 // 0 = off (default: a busy brush logs several lines a frame on both machines),
-// 1 = aggregated per frame, 2 = one line per call. F8 cycles.
+// 1 = aggregated per frame, 2 = one line per call. Set in the Debug window.
 static volatile long g_logMode = 0;
 static LARGE_INTEGER g_qpcStart;
 static LARGE_INTEGER g_qpcFreq;
@@ -684,10 +688,17 @@ bool InstallTerrainHooks()
 
 // ------------------------------------------------------------------ tick
 
+static void LoadSettings()
+{
+    int mode = Profile_GetInt("debug", "terrain_log", 0);
+    g_logMode = mode < 0 || mode > 2 ? 0 : mode;
+}
+
 void TerrainHook_SetLogMode(int mode)
 {
     long v = mode < 0 || mode > 2 ? 0 : mode;
     InterlockedExchange(&g_logMode, v);
+    Profile_SetInt("debug", "terrain_log", (int)v);
     Logf("republicmp  TERRAIN: log %s", v == 0 ? "OFF" : v == 1 ? "aggregated per frame" : "verbose (one line per call)");
 }
 

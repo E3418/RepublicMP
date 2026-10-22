@@ -90,3 +90,19 @@ void Profile_SetMaxPlayers(int players)
     g_maxPlayers = clamped;
     Save();
 }
+
+int Profile_GetInt(const char* section, const char* key, int def)
+{
+    if (!g_file[0]) FindFile();
+    if (!g_file[0]) return def;
+    return (int)GetPrivateProfileIntA(section, key, def, g_file);
+}
+
+void Profile_SetInt(const char* section, const char* key, int value)
+{
+    if (!g_file[0]) FindFile();
+    if (!g_file[0] || Profile_GetInt(section, key, value + 1) == value) return;
+    char text[16];
+    _snprintf_s(text, sizeof(text), _TRUNCATE, "%d", value);
+    WritePrivateProfileStringA(section, key, text, g_file);
+}

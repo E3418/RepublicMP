@@ -7,6 +7,7 @@
 #include "../game/imgui_hook.h" // g_imguiVisible - "Hide menu" button
 #include "../session/save_sync.h"
 #include "../lockstep/lockstep_net.h"
+#include "../lockstep/presence.h"
 #include "../world_sync/buildings/build_sync.h"
 #include "../world_sync/networks/road_sync.h"
 #include "../world_sync/terrain/terrain_sync.h"
@@ -123,6 +124,37 @@ static void PlayersList(bool host)
     }
 }
 
+// The ping key: the button takes the next key or mouse button pressed (Esc keeps the old one).
+static void PingKey()
+{
+    static bool s_waiting = false;
+    static bool s_down[256];
+    char name[32], label[64];
+    Presence_KeyName(Presence_GetPingKey(), name, sizeof(name));
+    if (s_waiting) strcpy_s(label, "Press a key...##pingKey");
+    else _snprintf_s(label, sizeof(label), _TRUNCATE, "%s##pingKey", name);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Ping key:");
+    ImGui::SameLine();
+    if (ImGui::Button(label, ImVec2(140, 0)) && !s_waiting) {
+        s_waiting = true;
+        for (int vk = 0; vk < 256; vk++) s_down[vk] = (GetAsyncKeyState(vk) & 0x8000) != 0;
+        return;
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Point at a place on the map and press it: every player sees a ping there.\n"
+                          "Click to choose another key or mouse button (Esc keeps this one).");
+    if (!s_waiting) return;
+    for (int vk = 1; vk < 256; vk++) {
+        bool down = (GetAsyncKeyState(vk) & 0x8000) != 0;
+        if (down && !s_down[vk] && (vk == VK_ESCAPE || Presence_SetPingKey(vk))) {
+            s_waiting = false;
+            break;
+        }
+        s_down[vk] = down;
+    }
+}
+
 // Lockstep in the game: the simulation, the players, how the ticks flow and the comparison.
 static void LockstepPanel(bool host)
 {
@@ -137,6 +169,9 @@ static void LockstepPanel(bool host)
     }
 
     PlayersList(host);
+    bool cursors = Presence_GetShowCursors();
+    if (ImGui::Checkbox("Show the players' cursors", &cursors)) Presence_SetShowCursors(cursors);
+    PingKey();
 
     LockstepFlow f = LockstepNet_Flow();
     if (host) {
@@ -380,6 +415,7 @@ static void SessionButtons(std::string& hostIp)
         ImGui::InputTextWithHint("##nick", "Player", s_nick, sizeof(s_nick));
         if (ImGui::IsItemDeactivatedAfterEdit()) Profile_SetNick(s_nick);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("What the other players see. Two players may use the same name.");
+        PingKey();
 
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted("Host IP:");

@@ -40,9 +40,12 @@
 
 #define JOIN_STEPS 7
 
+static void LoadSettings();
+
 void SaveSync_Bind(const TsmHost* host)
 {
     TsmBind(host);
+    LoadSettings();
 }
 
 // ---------------------------------------------------------------------------
@@ -1542,7 +1545,8 @@ static void RunClientSession()
         }
 
         SetState(SESSION_CLIENT_IN_GAME);
-        SaveStatus("[CLIENT] in the game of %s - live sync running, paused until a player resumes", g_peerIp);
+        SaveStatus("[CLIENT] in the game of %s - %s running, paused until a player resumes", g_peerIp,
+                   g_lockstep ? "lockstep" : "live sync");
         const char* why = MonitorLiveSession(true);
         ResetChannels();
         if (why == kResyncReason) {
@@ -1731,7 +1735,13 @@ void SaveSync_Tick()
 
 SessionState SaveSync_GetState() { return g_state; }
 void SaveSync_SetLockstep(bool on) { g_lockstepChosen = on; }
-void SaveSync_SetDlcCheck(bool on) { g_dlcCheck = on; }
+static void LoadSettings() { g_dlcCheck = Profile_GetInt("profile", "dlc_check", 1) != 0; }
+
+void SaveSync_SetDlcCheck(bool on)
+{
+    g_dlcCheck = on;
+    Profile_SetInt("profile", "dlc_check", on ? 1 : 0);
+}
 bool SaveSync_GetDlcCheck() { return g_dlcCheck; }
 bool SaveSync_GetLockstep() { return g_lockstepChosen; }
 bool SaveSync_IsLockstepSession() { return g_lockstep && g_state != SESSION_IDLE; }

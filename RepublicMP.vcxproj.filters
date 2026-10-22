@@ -267,6 +267,9 @@
     <ClCompile Include="lockstep\office_selection.cpp">
       <Filter>lockstep</Filter>
     </ClCompile>
+    <ClCompile Include="lockstep\presence.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
     <ClCompile Include="lockstep\rename.cpp">
       <Filter>lockstep</Filter>
     </ClCompile>
@@ -492,6 +495,9 @@
       <Filter>lockstep</Filter>
     </ClInclude>
     <ClInclude Include="lockstep\office_selection.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\presence.h">
       <Filter>lockstep</Filter>
     </ClInclude>
     <ClInclude Include="lockstep\rename.h">

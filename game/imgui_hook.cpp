@@ -4,6 +4,7 @@
 #include "../ui/main_menu.h"
 #include "../ui/debug_window.h"
 #include "../ui/sync_block.h"
+#include "../lockstep/presence.h"
 
 #include "imgui.h"
 #include "imgui_impl_win32.h"
@@ -145,7 +146,9 @@ void ImGuiHook_NewFrameAndRender()
     ImGuiIO& io = ImGui::GetIO();
     io.MouseDrawCursor = syncBlocking || (g_imguiVisible && io.WantCaptureMouse);
 
-    if (!g_imguiVisible && !syncBlocking)
+    // The other players' cursors and pings show while the overlay is hidden too.
+    bool presence = Presence_Active();
+    if (!g_imguiVisible && !syncBlocking && !presence)
         return;
 
     ImGui_ImplDX11_NewFrame();
@@ -156,6 +159,7 @@ void ImGuiHook_NewFrameAndRender()
         g_mainMenu.Draw();
         g_debug_window.Draw();
     }
+    if (presence) Presence_Frame(); // under the windows (background draw list)
     SyncBlock_Draw(); // drawn last (on top), independent of g_imguiVisible
 
     ImGui::Render();
