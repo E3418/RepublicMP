@@ -1429,6 +1429,12 @@ static void CheckStillInWorld()
 void SaveSync_Tick()
 {
     CheckStillInWorld();
+    // A friend's Steam "Join Game" or an accepted invite: join that host.
+    char host[64];
+    if (NetworkTakeJoinRequest(host, sizeof(host))) {
+        if (g_state == SESSION_IDLE) SaveSync_StartClient(host);
+        else Logf("republicmp  SESSION: Steam join request for %s ignored - already in a session", host);
+    }
 }
 
 SessionState SaveSync_GetState() { return g_state; }

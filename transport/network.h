@@ -1,18 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Minimal blocking TCP transport shared by the sync modules: accept
-// clients, connect to a host, exchange fixed-size structs or whole files
-// (8-byte little-endian size, then the bytes). Only ever called from worker
-// threads or for small sends with a send timeout.
+// Minimal blocking transport shared by the sync modules: accept clients,
+// connect to a host, exchange fixed-size structs or whole files (8-byte
+// little-endian size, then the bytes). Only ever called from worker threads
+// or for small sends with a send timeout.
 //
 // Callers hold links, not sockets: a link is a connection or a listener the
-// transport hands out, so another transport can sit behind the same calls.
+// transport hands out. A link is TCP, or Steam P2P through Valve's relay
+// (steam_net.h) when the host is given as a SteamID64; a listener takes both.
 #pragma once
 
 #include "tesmio_plugin.h"
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
-// A connection or a listener; NET_NO_LINK for none. Today a TCP socket.
+// A connection or a listener; NET_NO_LINK for none.
 typedef UINT_PTR NetLink;
 #define NET_NO_LINK ((NetLink)INVALID_SOCKET)
 
@@ -31,9 +32,10 @@ void NetworkSetTimeouts(NetLink sock, DWORD timeoutMs);
 // The remote address of a connection, "" when unknown.
 void NetworkPeerAddress(NetLink sock, char* out, size_t outSize);
 
-// Connects to hostIp:port. connectTimeoutMs bounds the wait, ioTimeoutMs is
-// the send/recv timeout of the connection (0 = none); the wait returns
-// NET_NO_LINK early when *cancelFlag becomes true.
+// Connects to hostIp:port, or over Steam when hostIp is a SteamID64 ("7656..."
+// or "steam:7656..."; port picks the Steam virtual port). connectTimeoutMs
+// bounds the wait, ioTimeoutMs is the send/recv timeout of the connection
+// (0 = none); the wait returns NET_NO_LINK early when *cancelFlag becomes true.
 NetLink NetworkConnect(const char* hostIp, unsigned short port,
                        DWORD connectTimeoutMs = 15000,
                        DWORD ioTimeoutMs = 30000,
@@ -62,3 +64,10 @@ bool NetworkWaitReadable(NetLink sock, DWORD waitMs, volatile bool* cancelFlag);
 // receive on it returns; NetworkClose frees it afterwards.
 void NetworkShutdown(NetLink sock);
 void NetworkClose(NetLink sock);
+
+// Our SteamID64, for players to connect to; 0 without Steam.
+unsigned long long NetworkSteamId();
+// A friend's Steam "Join Game" or accepted invite while we are idle: the host
+// to connect to ("steam:<id>"), once; false when there is none. Friends see
+// Join Game while we listen.
+bool NetworkTakeJoinRequest(char* host, size_t hostSize);

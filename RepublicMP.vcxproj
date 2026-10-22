@@ -223,6 +223,7 @@
     <ClCompile Include="world\networks.cpp" />
     <ClCompile Include="save\save_zip.cpp" />
     <ClCompile Include="transport\network.cpp" />
+    <ClCompile Include="transport\steam_net.cpp" />
     <ClCompile Include="session\save_sync.cpp" />
     <ClCompile Include="ui\main_menu.cpp" />
     <ClCompile Include="ui\debug_window.cpp" />
@@ -300,6 +301,7 @@
     <ClInclude Include="core\host_config.h" />
     <ClInclude Include="save\save_zip.h" />
     <ClInclude Include="transport\network.h" />
+    <ClInclude Include="transport\steam_net.h" />
     <ClInclude Include="session\save_sync.h" />
     <ClInclude Include="ui\main_menu.h" />
     <ClInclude Include="ui\debug_window.h" />

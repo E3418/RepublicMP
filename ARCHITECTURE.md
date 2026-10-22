@@ -28,7 +28,7 @@ world/         actions on the game world made from data (buildings, networks,
 determinism/   making the simulation identical on every PC: fixed ticks, RNG,
                math, timers, patches; state hashes; the determinism probe
 game/          the game itself: world fields, camera, save/load, input, Present
-transport/     blocking TCP
+transport/     links: blocking TCP, or Steam P2P through Valve's relay (steam_net)
 save/          zip of a save folder
 core/          plugin entry points, version, the player's profile (ini)
 api/           republicmp_api.h - what a mode may use (one include)

@@ -11,6 +11,7 @@
 #include "../modes/mode.h"
 #include "../determinism/determinism.h"
 #include "../core/profile.h"
+#include "../transport/network.h" // NetworkSteamId
 
 #include "imgui.h"
 #include <misc/cpp/imgui_stdlib.h> // ImGui::InputText(const char*, std::string*)
@@ -318,10 +319,22 @@ static void SessionButtons(std::string& hostIp)
         PingKey();
 
         ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Host IP:");
+        ImGui::TextUnformatted("Host:");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(-1);
-        ImGui::InputText("##hostIp", &hostIp);
+        ImGui::InputTextWithHint("##hostIp", "IP or SteamID64", &hostIp);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("An IP connects over TCP (LAN or VPN, port 5556 and 5560 open on the host).\n"
+                              "A SteamID64 connects through Steam: no IP and no open port.\n"
+                              "Steam friends can also use Join Game or an invite while you host.");
+        if (unsigned long long id = NetworkSteamId()) {
+            char idText[32];
+            snprintf(idText, sizeof(idText), "%llu", id);
+            ImGui::AlignTextToFramePadding();
+            ImGui::Text("Your SteamID64: %s", idText);
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Copy")) ImGui::SetClipboardText(idText);
+        }
         if (!world) Wrapped(kGrey, "Host is available once a city is loaded.");
         return;
     }

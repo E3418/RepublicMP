@@ -111,6 +111,9 @@
     <ClCompile Include="transport\network.cpp">
       <Filter>transport</Filter>
     </ClCompile>
+    <ClCompile Include="transport\steam_net.cpp">
+      <Filter>transport</Filter>
+    </ClCompile>
     <ClCompile Include="session\save_sync.cpp">
       <Filter>session</Filter>
     </ClCompile>
@@ -333,6 +336,9 @@
       <Filter>save</Filter>
     </ClInclude>
     <ClInclude Include="transport\network.h">
+      <Filter>transport</Filter>
+    </ClInclude>
+    <ClInclude Include="transport\steam_net.h">
       <Filter>transport</Filter>
     </ClInclude>
     <ClInclude Include="session\save_sync.h">
