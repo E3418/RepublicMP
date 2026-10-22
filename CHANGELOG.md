@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.1
+
+Early Start fix and building together. Protocol 40 - every player needs
+this build (0.6.0 and 0.6.1 do not join each other).
+
+- **Early Start cities** - a fresh city in an early era (Early Start DLC)
+  no longer gets the era's start again at the session's load on one PC:
+  that PC had a third of the money and of every price, so purchases (the
+  vehicles that showed up on one PC only) and everything paid split the
+  games from the first minute.
+- **Building together** - a road, rail or pipe you are drawing is no longer
+  dropped when another player builds or demolishes something: it pauses for
+  their command and goes on from its start while you still hold the button.
+
 ## 0.6.0
 
 Up to four players in lockstep. Protocol 40 - every player needs this build.
