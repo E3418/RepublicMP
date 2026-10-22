@@ -1,18 +1,10 @@
 # Changelog
 
-## 0.6.1
+## 0.6.2
 
-Early Start fix, building together, construction offices, cursors and pings. Protocol 43 -
-every player needs this build (0.6.0 and 0.6.1 do not join each other).
+Construction offices, copy tools, cursors and pings. Protocol 43 - every
+player needs this build (0.6.1 and 0.6.2 do not join each other).
 
-- **Early Start cities** - a fresh city in an early era (Early Start DLC)
-  no longer gets the era's start again at the session's load on one PC:
-  that PC had a third of the money and of every price, so purchases (the
-  vehicles that showed up on one PC only) and everything paid split the
-  games from the first minute.
-- **Building together** - a road, rail or pipe you are drawing is no longer
-  dropped when another player builds or demolishes something: it pauses for
-  their command and goes on from its start while you still hold the button.
 - **Construction offices** - the office pick tools work in a session again:
   adding construction or demolition to an office, copying one office's
   constructions to another (offices sharing their sites work as one
@@ -36,6 +28,20 @@ every player needs this build (0.6.0 and 0.6.1 do not join each other).
 - **Settings remembered** - besides the name and the session's size,
   RepublicMP.profile.ini keeps the DLC check, the cursors and ping key and
   the Debug window's logs (money trace, field diff, terrain log).
+
+## 0.6.1
+
+Early Start fix and building together. Protocol 40 - every player needs
+this build (0.6.0 and 0.6.1 do not join each other).
+
+- **Early Start cities** - a fresh city in an early era (Early Start DLC)
+  no longer gets the era's start again at the session's load on one PC:
+  that PC had a third of the money and of every price, so purchases (the
+  vehicles that showed up on one PC only) and everything paid split the
+  games from the first minute.
+- **Building together** - a road, rail or pipe you are drawing is no longer
+  dropped when another player builds or demolishes something: it pauses for
+  their command and goes on from its start while you still hold the button.
 
 ## 0.6.0
 
