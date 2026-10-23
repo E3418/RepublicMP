@@ -26,6 +26,7 @@
 #define STEAM_SEND_BUFFER (4 * 1024 * 1024)    // queued, not yet sent, per connection
 #define STEAM_FRIENDS_VERSION "SteamFriends017" // the version the game itself asks for
 #define STEAM_JOIN_REQUESTED_CALLBACK 337      // GameRichPresenceJoinRequested_t (k_iSteamFriendsCallbacks + 37)
+#define STEAM_LOBBY_JOIN_REQUESTED_CALLBACK 333 // GameLobbyJoinRequested_t (k_iSteamFriendsCallbacks + 33)
 #define STEAM_CONNECT_PREFIX "+republicmp steam:" // our rich-presence "connect" string
 
 typedef int (*Fn_GetHSteamUser)();
@@ -81,6 +82,9 @@ static std::unordered_map<int, Port> g_ports; // by virtual port
 static char g_joinRequest[64];
 static ISteamNetworkingSockets* g_sockets;
 static ISteamNetworkingUtils* g_utils;
+static HMODULE g_api;
+static Fn_FindInterface g_find;
+static int g_user;
 static void* g_friends;
 static Fn_SetRichPresence p_SetRichPresence;
 static unsigned long long g_localId;
@@ -137,6 +141,27 @@ public:
     int GetCallbackSizeBytes() override { return sizeof(JoinRequested); }
 };
 static JoinCallback g_joinCallback;
+
+struct LobbyJoinRequested { // GameLobbyJoinRequested_t
+    uint64 lobby;
+    uint64 friendId;
+};
+
+// "Join Game" on a friend who hosts may come as a request to join the lobby
+// that lists the game (steam_lobby): the friend is the host either way.
+class LobbyJoinCallback : public CallbackBase {
+public:
+    void Run(void* data) override
+    {
+        uint64 host = ((const LobbyJoinRequested*)data)->friendId;
+        if (!host) return;
+        std::lock_guard<std::mutex> l(g_steamLock);
+        snprintf(g_joinRequest, sizeof(g_joinRequest), "steam:%llu", host);
+    }
+    void Run(void* data, bool, uint64) override { Run(data); }
+    int GetCallbackSizeBytes() override { return sizeof(LobbyJoinRequested); }
+};
+static LobbyJoinCallback g_lobbyJoinCallback;
 
 bool SteamNet_TakeJoinRequest(char* out, size_t outSize)
 {
@@ -287,6 +312,8 @@ void SteamNet_Bind(const TsmHost* host)
     if (reg) {
         g_joinCallback.id = STEAM_JOIN_REQUESTED_CALLBACK; // SteamAPI_RegisterCallback sets it too
         reg(&g_joinCallback, STEAM_JOIN_REQUESTED_CALLBACK);
+        g_lobbyJoinCallback.id = STEAM_LOBBY_JOIN_REQUESTED_CALLBACK;
+        reg(&g_lobbyJoinCallback, STEAM_LOBBY_JOIN_REQUESTED_CALLBACK);
     }
     else Logf("republicmp  NETWORK: no steam_api64.dll - Steam Join Game off");
 }
@@ -298,6 +325,9 @@ static bool InitOnce()
     Fn_FindInterface find = api ? (Fn_FindInterface)GetProcAddress(api, "SteamInternal_FindOrCreateUserInterface") : nullptr;
     p_SetRichPresence = api ? (Fn_SetRichPresence)GetProcAddress(api, "SteamAPI_ISteamFriends_SetRichPresence") : nullptr;
     int user = getUser && find ? getUser() : 0;
+    g_api = api;
+    g_find = find;
+    g_user = user;
     if (!user) {
         Logf("republicmp  NETWORK: the game runs without Steam - TCP only");
         return false;
@@ -343,6 +373,33 @@ bool SteamNet_Init()
 unsigned long long SteamNet_LocalId()
 {
     return SteamNet_Init() ? g_localId : 0;
+}
+
+void* SteamNet_Interface(const char* version)
+{
+    return SteamNet_Init() ? g_find(g_user, version) : nullptr;
+}
+
+void* SteamNet_Export(const char* name)
+{
+    return SteamNet_Init() ? (void*)GetProcAddress(g_api, name) : nullptr;
+}
+
+bool SteamNet_PingLocation(char* out, size_t outSize)
+{
+    out[0] = 0;
+    if (!SteamNet_Init()) return false;
+    SteamNetworkPingLocation_t loc;
+    if (g_utils->GetLocalPingLocation(loc) < 0) return false; // not measured yet
+    g_utils->ConvertPingLocationToString(loc, out, (int)outSize);
+    return out[0] != 0;
+}
+
+int SteamNet_EstimatePing(const char* location)
+{
+    SteamNetworkPingLocation_t loc;
+    if (!SteamNet_Init() || !location || !location[0] || !g_utils->ParsePingLocationString(location, loc)) return -1;
+    return g_utils->EstimatePingTimeFromLocalHost(loc);
 }
 
 void SteamNet_Listen(NetLink tcpListener, unsigned short port)

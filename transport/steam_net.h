@@ -48,3 +48,12 @@ void SteamNet_Close(NetLink link);
 // The host a friend's "Join Game" or an accepted invite asks for ("steam:<id>"),
 // once; false when there is none.
 bool SteamNet_TakeJoinRequest(char* out, size_t outSize);
+
+// For the lobby (steam_lobby): an interface of the Steam client by version
+// string, and an export of the game's steam_api64.dll; null without Steam.
+void* SteamNet_Interface(const char* version);
+void* SteamNet_Export(const char* name);
+// Our place on Valve's relay network as text, to publish with a game we host,
+// and the ping estimated to a place published that way (-1: unknown).
+bool SteamNet_PingLocation(char* out, size_t outSize);
+int SteamNet_EstimatePing(const char* location);

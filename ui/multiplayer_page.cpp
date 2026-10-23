@@ -12,6 +12,8 @@
 #include "../modes/mode.h"
 #include "../session/save_sync.h"
 #include "../transport/network.h" // NetworkSteamId
+#include "../transport/steam_lobby.h"
+#include "../lockstep/lockstep_net.h" // LockstepNet_PeerCount
 #include "imgui.h"
 #include <misc/cpp/imgui_stdlib.h>
 #include <cstdio>
@@ -35,12 +37,16 @@ static ULONGLONG s_loadedSince = 0;  // the world has been loaded since (0: not 
 static std::string s_target;
 static bool s_targetInit = false;
 static int s_mode = -1; // 0 co-op, 1 republics (remembered in the profile); -1 not read yet
+static int s_public = -1; // a hosted game is listed for everyone (1) or for friends (0)
+static int s_tab = 0;     // 0 host, 1 join
+static int s_selected = -1;
 
 void MultiplayerPage_Open()
 {
     s_open = true;
     s_menuOn = true; // its builder just ran: the click came from it
     MainMenuHook_SetHidden(true);
+    if (s_tab == 1) SteamLobby_Refresh();
 }
 
 bool MultiplayerPage_IsOpen() { return s_open; }
@@ -60,7 +66,7 @@ static void HostThrough(MainMenuItem item)
     s_hostAfterLoad = true;
     s_leftMenu = false;
     s_armedFrames = 0;
-    s_sawUnloaded = !SaveSync_IsWorldLoaded();
+    s_sawUnloaded = !World_IsReady();
     s_loadedSince = 0;
 }
 
@@ -73,6 +79,18 @@ void MultiplayerPage_Tick()
     framesWithout = build != lastBuild ? 0 : framesWithout + 1;
     lastBuild = build;
     s_menuOn = framesWithout < 30;
+
+    // A hosted session is listed in the game list (Steam lobby) while it runs,
+    // whether it was started here or from the RepublicMP window.
+    if (s_mode < 0) s_mode = Profile_GetInt("profile", "game_mode", 0) == 1 ? 1 : 0;
+    if (s_public < 0) s_public = Profile_GetInt("profile", "game_public", 0) == 1 ? 1 : 0;
+    SessionState st = SaveSync_GetState();
+    if (SaveSync_IsHostRole() && (st == SESSION_HOST_LISTENING || st == SESSION_HOST_JOINING || st == SESSION_HOST_IN_GAME))
+        SteamLobby_Advertise(s_public == 1, Profile_GetNick(), "Co-op", 1 + LockstepNet_PeerCount(),
+                             Profile_GetMaxPlayers());
+    else
+        SteamLobby_StopAdvertising();
+    SteamLobby_Tick();
 
     if (!s_hostAfterLoad) return;
     // Only a city loaded after the request, the menu gone and the world there
@@ -142,6 +160,144 @@ static bool Choice(const char* id, const char* label, float cx, float y, float s
     return clicked;
 }
 
+static void InkInput(const char* id, const char* hint, std::string* text, float width, float s, bool* enter)
+{
+    ImGui::PushFont(nullptr, 24 * s);
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(0xE2, 0xD3, 0xBA, 0xFF));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, IM_COL32(0xEA, 0xDD, 0xC6, 0xFF));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, IM_COL32(0xF2, 0xE8, 0xD6, 0xFF));
+    ImGui::PushStyleColor(ImGuiCol_Text, kInk);
+    ImGui::PushStyleColor(ImGuiCol_Border, kRowRed);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0f);
+    ImGui::SetNextItemWidth(width);
+    *enter = ImGui::InputTextWithHint(id, hint, text, ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(5);
+    ImGui::PopFont();
+}
+
+static void SetChoice(int* value, int chosen, const char* key)
+{
+    if (*value == chosen) return;
+    *value = chosen;
+    Profile_SetInt("profile", key, chosen);
+}
+
+// HOST: the game mode and who sees the game on the left, the ways to start
+// hosting and our SteamID64 on the right.
+static void HostTab(float cx, float left, float right, float s)
+{
+    Label(GAME_FONT_ARIAL, 24 * s, ImVec2(left - 225 * s, 540 * s), kInk, "Game mode:");
+    if (Choice("##coop", "CO-OP", left - 110 * s, 570 * s, s, s_mode == 0)) SetChoice(&s_mode, 0, "game_mode");
+    if (Choice("##republics", "REPUBLICS", left + 110 * s, 570 * s, s, s_mode == 1)) SetChoice(&s_mode, 1, "game_mode");
+    Label(GAME_FONT_ARIAL, 24 * s, ImVec2(left - 225 * s, 640 * s), kInk, "Listed for:");
+    if (Choice("##friends", "FRIENDS", left - 110 * s, 670 * s, s, s_public == 0)) SetChoice(&s_public, 0, "game_public");
+    if (Choice("##public", "EVERYONE", left + 110 * s, 670 * s, s, s_public == 1)) SetChoice(&s_public, 1, "game_public");
+    Label(GAME_FONT_ARIAL, 20 * s, ImVec2(left - 225 * s, 720 * s), kInk,
+          s_public == 1 ? "Every player with this version sees your game." : "Only your Steam friends see your game.");
+
+    bool idle = SaveSync_GetState() == SESSION_IDLE;
+    if (s_mode == 0) {
+        float rowX = right + 225 * s;
+        if (Row("##hostNew", "HOST NEW GAME", rowX, 560 * s, s, idle)) HostThrough(MAIN_MENU_CUSTOM_GAME);
+        if (Row("##hostSave", "HOST SAVED GAME", rowX, 600 * s, s, idle)) HostThrough(MAIN_MENU_LOAD_GAME);
+        Label(GAME_FONT_ARIAL, 20 * s, ImVec2(right, 655 * s), kInk, "Hosting starts once the city is loaded.");
+    } else {
+        // Only co-op plays for now; Republics shows what it will be (modes/republics).
+        const RmpMode* republics = Modes_Republics();
+        float y = 545 * s;
+        if (republics && republics->line1) {
+            Label(GAME_FONT_ARIAL, 22 * s, ImVec2(right, y), kInk, republics->line1);
+            y += 30 * s;
+        }
+        if (republics && republics->line2) {
+            Label(GAME_FONT_ARIAL, 22 * s, ImVec2(right, y), kInk, republics->line2);
+            y += 30 * s;
+        }
+        Label(GAME_FONT_ARIAL, 22 * s, ImVec2(right, y + 10 * s), kRowRed, "In development - not playable yet.");
+    }
+    if (unsigned long long id = NetworkSteamId()) {
+        char idText[32];
+        snprintf(idText, sizeof(idText), "%llu", id);
+        Label(GAME_FONT_ARIAL, 22 * s, ImVec2(right, 740 * s), kInk, "Your SteamID64 (for a join by hand):");
+        Label(GAME_FONT_ARIAL, 28 * s, ImVec2(right, 770 * s), kInk, idText);
+        if (Row("##copy", "COPY", right + 360 * s, 768 * s, s)) ImGui::SetClipboardText(idText);
+    }
+}
+
+// JOIN: the game list (friends' games and public ones of this version), and a
+// join by SteamID64 or IP.
+static void JoinTab(float cx, float listMin, float listMax, float s)
+{
+    bool idle = SaveSync_GetState() == SESSION_IDLE;
+    bool playable = s_mode == 0;
+    LobbyGame games[16];
+    int n = SteamLobby_Games(games, 16);
+    if (s_selected >= n) s_selected = -1;
+
+    float colMode = listMin + 470 * s, colPlayers = listMin + 650 * s, colPing = listMin + 800 * s;
+    float y = 540 * s, rowH = 34 * s;
+    Label(GAME_FONT_ARIAL, 22 * s, ImVec2(listMin + 10 * s, y), kInk, "GAME");
+    Label(GAME_FONT_ARIAL, 22 * s, ImVec2(colMode, y), kInk, "MODE");
+    Label(GAME_FONT_ARIAL, 22 * s, ImVec2(colPlayers, y), kInk, "PLAYERS");
+    Label(GAME_FONT_ARIAL, 22 * s, ImVec2(colPing, y), kInk, "PING");
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddLine(ImVec2(listMin, y + 28 * s), ImVec2(listMax, y + 28 * s), kRowRed);
+    y += 36 * s;
+    for (int i = 0; i < n && i < 7; ++i, y += rowH) {
+        const LobbyGame& g = games[i];
+        ImGui::SetCursorScreenPos(ImVec2(listMin, y));
+        char id[24];
+        snprintf(id, sizeof(id), "##game%d", i);
+        if (ImGui::InvisibleButton(id, ImVec2(listMax - listMin, rowH))) s_selected = i;
+        bool hot = ImGui::IsItemHovered();
+        bool join = hot && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+        if (i == s_selected || hot)
+            dl->AddRectFilled(ImVec2(listMin, y), ImVec2(listMax, y + rowH),
+                              i == s_selected ? IM_COL32(0xAB, 0x03, 0x1D, 0x40) : IM_COL32(0xAB, 0x03, 0x1D, 0x18));
+        char text[96];
+        snprintf(text, sizeof(text), "%s%s", g.friendGame ? "* " : "", g.name);
+        Label(GAME_FONT_ARIAL, 24 * s, ImVec2(listMin + 10 * s, y + 4 * s), kInk, text);
+        Label(GAME_FONT_ARIAL, 24 * s, ImVec2(colMode, y + 4 * s), kInk, g.mode);
+        snprintf(text, sizeof(text), "%d/%d", g.players, g.maxPlayers);
+        Label(GAME_FONT_ARIAL, 24 * s, ImVec2(colPlayers, y + 4 * s), kInk, text);
+        if (g.pingMs >= 0) snprintf(text, sizeof(text), "%d ms", g.pingMs);
+        else snprintf(text, sizeof(text), "-");
+        Label(GAME_FONT_ARIAL, 24 * s, ImVec2(colPing, y + 4 * s), kInk, text);
+        if (join && idle && playable) {
+            snprintf(text, sizeof(text), "steam:%llu", g.host);
+            SaveSync_StartClient(text);
+        }
+    }
+    if (n == 0)
+        Label(GAME_FONT_ARIAL, 22 * s, ImVec2(listMin + 10 * s, y + 6 * s), kInk,
+              SteamLobby_Refreshing() ? "Looking for games..."
+                                      : "No games found: your friends' games and public ones of this version show here.");
+
+    float mid = (listMin + listMax) * 0.5f;
+    if (Row("##refresh", SteamLobby_Refreshing() ? "LOOKING..." : "REFRESH", mid - 250 * s, 820 * s, s,
+            !SteamLobby_Refreshing()))
+        SteamLobby_Refresh();
+    bool canJoinListed = idle && playable && s_selected >= 0;
+    if (Row("##joinListed", "JOIN", mid + 250 * s, 820 * s, s, canJoinListed) && canJoinListed) {
+        char host[32];
+        snprintf(host, sizeof(host), "steam:%llu", games[s_selected].host);
+        SaveSync_StartClient(host);
+    }
+
+    Label(GAME_FONT_ARIAL, 22 * s, ImVec2(listMin + 10 * s, 880 * s), kInk, "Or by SteamID64 or IP:");
+    ImGui::SetCursorScreenPos(ImVec2(listMin + 260 * s, 876 * s));
+    bool enter = false;
+    InkInput("##target", "76561198... or 192.168...", &s_target, 400 * s, s, &enter);
+    bool canJoin = idle && playable && !s_target.empty();
+    if ((Row("##connect", "CONNECT", listMax - 140 * s, 872 * s, s, canJoin) || enter) && canJoin)
+        SaveSync_StartClient(s_target.c_str());
+    if (!playable)
+        Label(GAME_FONT_ARIAL, 20 * s, ImVec2(listMin + 10 * s, 915 * s), kRowRed,
+              "Republics is in development: pick Co-op on the HOST tab to join.");
+}
+
 void MultiplayerPage_Draw()
 {
     if (!s_open) return;
@@ -154,7 +310,6 @@ void MultiplayerPage_Draw()
         s_target = SaveSync_GetTargetIp();
         s_targetInit = true;
     }
-    if (s_mode < 0) s_mode = Profile_GetInt("profile", "game_mode", 0) == 1 ? 1 : 0;
 
     float s = MainMenuHook_UiScale();
     ImVec2 display = ImGui::GetIO().DisplaySize;
@@ -183,72 +338,22 @@ void MultiplayerPage_Draw()
     Label(GAME_FONT_SQUARE, titleH, ImVec2(cx - titleSize.x * 0.5f, pMin.y + 42 * 0.87f * s - titleH * 0.5f), kWhite,
           title);
 
-    // Left: the game mode, then hosting in the menu's own rows.
+    // The tabs under the bar; JOIN asks for the list the first time it shows.
+    int tab = s_tab;
+    if (Choice("##tabHost", "HOST", cx - 150 * s, 478 * s, s, tab == 0)) tab = 0;
+    if (Choice("##tabJoin", "JOIN", cx + 150 * s, 478 * s, s, tab == 1)) tab = 1;
+    if (tab == 1 && s_tab != 1) SteamLobby_Refresh();
+    s_tab = tab;
+    ImGui::GetWindowDrawList()->AddLine(ImVec2(pMin.x + 40 * s, 520 * s), ImVec2(pMax.x - 40 * s, 520 * s), kRowRed);
+
     float left = cx - half.x * 0.5f;
-    Label(GAME_FONT_ARIAL, 24 * s, ImVec2(left - 225 * s, 478 * s), kInk, "Game mode:");
-    int mode = s_mode;
-    if (Choice("##coop", "CO-OP", left - 110 * s, 505 * s, s, mode == 0)) mode = 0;
-    if (Choice("##republics", "REPUBLICS", left + 110 * s, 505 * s, s, mode == 1)) mode = 1;
-    if (mode != s_mode) {
-        s_mode = mode;
-        Profile_SetInt("profile", "game_mode", mode);
-    }
-    // Only co-op plays for now; Republics shows what it will be (modes/republics).
-    const RmpMode* republics = Modes_Republics();
-    bool playable = s_mode == 0;
-    bool idle = SaveSync_GetState() == SESSION_IDLE;
-    if (playable) {
-        if (Row("##hostNew", "HOST NEW GAME", left, 575 * s, s, idle)) HostThrough(MAIN_MENU_CUSTOM_GAME);
-        if (Row("##hostSave", "HOST SAVED GAME", left, 615 * s, s, idle)) HostThrough(MAIN_MENU_LOAD_GAME);
-        Label(GAME_FONT_ARIAL, 22 * s, ImVec2(left - 225 * s, 670 * s), kInk, "Starts hosting once the city is loaded.");
-    } else {
-        float y = 575 * s;
-        if (republics && republics->line1) {
-            Label(GAME_FONT_ARIAL, 24 * s, ImVec2(left - 225 * s, y), kInk, republics->line1);
-            y += 32 * s;
-        }
-        if (republics && republics->line2) {
-            Label(GAME_FONT_ARIAL, 24 * s, ImVec2(left - 225 * s, y), kInk, republics->line2);
-            y += 32 * s;
-        }
-        Label(GAME_FONT_ARIAL, 24 * s, ImVec2(left - 225 * s, y + 10 * s), kRowRed, "In development - not playable yet.");
-    }
-
-    // Right: joining, and our own SteamID64 to give out.
     float right = cx + 20 * s;
-    float width = half.x - 60 * s;
-    Label(GAME_FONT_ARIAL, 26 * s, ImVec2(right, 495 * s), kInk, "Host's SteamID64 or IP:");
-    ImGui::SetCursorScreenPos(ImVec2(right, 530 * s));
-    ImGui::PushFont(nullptr, 26 * s);
-    ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(0xE2, 0xD3, 0xBA, 0xFF));
-    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, IM_COL32(0xEA, 0xDD, 0xC6, 0xFF));
-    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, IM_COL32(0xF2, 0xE8, 0xD6, 0xFF));
-    ImGui::PushStyleColor(ImGuiCol_Text, kInk);
-    ImGui::PushStyleColor(ImGuiCol_Border, kRowRed);
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0f);
-    ImGui::SetNextItemWidth(width);
-    bool enter = ImGui::InputTextWithHint("##target", "76561198... or 192.168...", &s_target,
-                                          ImGuiInputTextFlags_EnterReturnsTrue);
-    ImGui::PopStyleVar(2);
-    ImGui::PopStyleColor(5);
-    ImGui::PopFont();
-    bool canJoin = playable && idle && !s_target.empty();
-    if ((Row("##connect", "CONNECT", right + width * 0.5f, 580 * s, s, canJoin) || enter) && canJoin)
-        SaveSync_StartClient(s_target.c_str());
+    if (s_tab == 0) HostTab(cx, left, right, s);
+    else JoinTab(cx, pMin.x + 50 * s, pMax.x - 50 * s, s);
 
-    if (unsigned long long id = NetworkSteamId()) {
-        char idText[32];
-        snprintf(idText, sizeof(idText), "%llu", id);
-        Label(GAME_FONT_ARIAL, 26 * s, ImVec2(right, 660 * s), kInk, "Your SteamID64:");
-        Label(GAME_FONT_ARIAL, 30 * s, ImVec2(right, 692 * s), kInk, idText);
-        if (Row("##copy", "COPY", right + width * 0.5f, 730 * s, s)) ImGui::SetClipboardText(idText);
-    } else {
-        Label(GAME_FONT_ARIAL, 22 * s, ImVec2(right, 660 * s), kInk, "Steam is not running: join by IP only.");
-    }
-
+    bool idle = SaveSync_GetState() == SESSION_IDLE;
     const char* status = !idle ? "Connecting..." : SaveSync_GetLastError();
-    if (status && status[0]) Label(GAME_FONT_ARIAL, 22 * s, ImVec2(right, 800 * s), kRowRed, status);
+    if (status && status[0]) Label(GAME_FONT_ARIAL, 22 * s, ImVec2(right, pMax.y - 60 * s), kRowRed, status);
 
     // Escape in the text field only reverts the text (WantTextInput is last
     // frame's: the field lets go of Escape within this one).
