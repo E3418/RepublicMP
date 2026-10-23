@@ -2,6 +2,7 @@
 // See main_menu_hook.h. Root-menu layout from WRMP's RE (by Sohn), confirmed
 // by disassembly of SOVIET64.exe 1.1.1.9 on 2026-10-22.
 #include "main_menu_hook.h"
+#include <cstring>
 #include <cwchar>
 
 // The root page's builder, called every frame while god+0x5044 == 1 (page
@@ -37,21 +38,31 @@ static volatile LONG g_openRequest = -1; // a MainMenuItem to open, or -1
 static volatile bool g_hidden = false;
 static volatile LONG g_buildCount = 0;
 static int g_ourRow = -1; // the row our item had last frame (game's main thread only)
+// MULTIPLAYER goes right after "Load game", away from "Quit" at the end. The
+// game knows its items by the order it built them in, so the rows below ours
+// show one lower than the game counts them: a click there is mapped back.
 
 // Inside the game's frame: no allocation, logging or I/O.
 static void HookedBuildRoot(unsigned char* god)
 {
     // The click was made on last frame's rows: take ours before the game's
     // items look at it, since the count can change between frames ("Continue").
+    bool continueRow = false; // read when the builder reads it (0x28AFA8), before it acts
     __try {
+        continueRow = *(god + MENU_CONTINUE_OFFSET) != 0;
         int* click = (int*)(god + MENU_CLICK_OFFSET);
-        if (g_ourRow >= 0 && *click == 1 && *(int*)(god + MENU_CLICK_INDEX_OFFSET) == g_ourRow) {
-            *click = 0;
-            InterlockedExchange(&g_clicked, 1);
+        int* index = (int*)(god + MENU_CLICK_INDEX_OFFSET);
+        if (g_ourRow >= 0 && *click == 1) {
+            if (*index == g_ourRow) {
+                *click = 0;
+                InterlockedExchange(&g_clicked, 1);
+            } else if (*index > g_ourRow) {
+                --*index; // a game item shown below ours
+            }
         }
         LONG open = InterlockedExchange(&g_openRequest, -1);
         if (open >= 0) { // a click the builder below acts on, like the drawer's
-            int first = *(god + MENU_CONTINUE_OFFSET) ? 1 : 0;
+            int first = continueRow ? 1 : 0;
             *click = 1;
             *(int*)(god + MENU_CLICK_INDEX_OFFSET) =
                 first + (open == MAIN_MENU_CUSTOM_GAME ? MENU_ROW_CUSTOM_GAME : MENU_ROW_LOAD_GAME);
@@ -71,11 +82,14 @@ static void HookedBuildRoot(unsigned char* god)
         }
         int n = *count;
         if (n < 0 || n >= MENU_ITEM_SLOTS) return;
-        unsigned char* slot = god + MENU_ITEM_TEXT_OFFSET + n * MENU_ITEM_STRIDE;
+        int row = (continueRow ? 1 : 0) + MENU_ROW_LOAD_GAME + 1;
+        if (row > n) row = n;
+        unsigned char* slot = god + MENU_ITEM_TEXT_OFFSET + row * MENU_ITEM_STRIDE;
+        memmove(slot + MENU_ITEM_STRIDE, slot, (size_t)(n - row) * MENU_ITEM_STRIDE); // the rows below, one down
         wcscpy_s((wchar_t*)slot, 256, L"MULTIPLAYER");
         *(int*)(slot + 0x200) = 0; // the slot's icon/lock int, unused on the root page
         *count = n + 1;
-        g_ourRow = n;
+        g_ourRow = row;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
 }
