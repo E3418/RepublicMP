@@ -2,6 +2,7 @@
 // See network.h.
 #include "network.h"
 #include "steam_net.h"
+#include "steam_lobby.h"
 #include <cstdio>
 #include <mstcpip.h> // SIO_KEEPALIVE_VALS
 #include <algorithm> // std::min - NOMINMAX is defined project-wide, so windows.h's min/max macros are gone
@@ -12,6 +13,7 @@ void Network_Bind(const TsmHost* host)
 {
     TsmBind(host);
     SteamNet_Bind(host);
+    SteamLobby_Bind(host);
 }
 
 bool NetworkInit()

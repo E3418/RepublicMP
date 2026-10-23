@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Game list** - the MULTIPLAYER page has HOST and JOIN tabs. A hosted
+  session is listed through a Steam lobby, for Steam friends (the default)
+  or for everyone; JOIN lists the friends' games and the public ones of the
+  same protocol, with mode, players and an estimated ping, and joins one with
+  a double click or JOIN. Players connect to the host over Steam as before;
+  nobody joins the lobby itself.
 - **MULTIPLAYER in the main menu** - the game's own main menu gets a
   MULTIPLAYER item, drawn like the others. It opens a page in the game's own
   panel, fonts and colours: pick the game mode, **Host new game** or **Host
