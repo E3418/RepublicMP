@@ -1,0 +1,543 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// See ui_text.h. A translation is one table below, named after the game's
+// language file; a missing entry stays English. Keep the rows' words short:
+// the page has the width of the game's menu panel. Write them as the game's
+// own table does (sentence case): "Square" draws lower case as capitals, but
+// "Buran" (the Cyrillic menus) has real lower case.
+#include "ui_text.h"
+#include <windows.h>
+#include <cstdio>
+#include <cstring>
+#include <string>
+
+struct Entry {
+    const char* english;
+    const char* text;
+};
+
+static const Entry kPortugueseBrazil[] = {
+    { ":: MULTIPLAYER ::", ":: MULTIJOGADOR ::" },
+    { "MULTIPLAYER", "MULTIJOGADOR" },
+    { "HOST", "HOSPEDAR" },
+    { "JOIN", "ENTRAR" },
+    { "Game mode:", "Modo de jogo:" },
+    { "REPUBLICS", "REPÚBLICAS" },
+    { "Listed for:", "Visível para:" },
+    { "FRIENDS", "AMIGOS" },
+    { "EVERYONE", "TODOS" },
+    { "Every player with this version sees your game.", "Todos os jogadores desta versão veem seu jogo." },
+    { "Only your Steam friends see your game.", "Só seus amigos da Steam veem seu jogo." },
+    { "Players, you included:", "Jogadores, contando você:" },
+    { "HOST NEW GAME", "HOSPEDAR NOVO JOGO" },
+    { "HOST SAVED GAME", "HOSPEDAR JOGO SALVO" },
+    { "Hosting starts once the city is loaded.", "A hospedagem começa quando a cidade carregar." },
+    { "In development - not playable yet.", "Em desenvolvimento - ainda não jogável." },
+    { "Your SteamID64:", "Seu SteamID64:" },
+    { "COPY", "COPIAR" },
+    { "GAME", "JOGO" },
+    { "MODE", "MODO" },
+    { "PLAYERS", "JOGADORES" },
+    { "Looking for games...", "Procurando jogos..." },
+    { "No games found: your friends' games and public ones of this version show here.",
+      "Nenhum jogo encontrado: os jogos dos seus amigos e os públicos desta versão aparecem aqui." },
+    { "LOOKING...", "PROCURANDO..." },
+    { "REFRESH", "ATUALIZAR" },
+    { "CONNECT", "CONECTAR" },
+    { "Or by SteamID64 or IP:", "Ou por SteamID64 ou IP:" },
+    { "Republics is in development: pick Co-op on the HOST tab to join.",
+      "Repúblicas está em desenvolvimento: escolha CO-OP na aba HOSPEDAR para entrar." },
+    { "BACK", "VOLTAR" },
+    { "Each player their own republic, 2 players", "Cada jogador com sua república, 2 jogadores" },
+    { "One map split in two - in development", "Um mapa dividido em dois - em desenvolvimento" },
+    { "SESSION", "SESSÃO" },
+    { "HOST THIS CITY", "HOSPEDAR ESTA CIDADE" },
+    { "The players who join get this city.", "Quem entrar recebe esta cidade." },
+    { "Hosting - waiting for players", "Hospedando - esperando jogadores" },
+    { "Re-syncing - waiting for the player to come back", "Ressincronizando - esperando o jogador voltar" },
+    { "A player is joining...", "Um jogador está entrando..." },
+    { "Re-syncing - sending the world", "Ressincronizando - enviando o mundo" },
+    { "Hosting - in the game", "Hospedando - em jogo" },
+    { "Joining...", "Entrando..." },
+    { "Re-syncing with the host", "Ressincronizando com o anfitrião" },
+    { "In the host's game", "No jogo do anfitrião" },
+    { "Players:", "Jogadores:" },
+    { " (host)", " (anfitrião)" },
+    { " - you", " - você" },
+    { "Players' cursors:", "Cursores dos jogadores:" },
+    { "SHOW", "MOSTRAR" },
+    { "HIDE", "ESCONDER" },
+    { "STOP HOSTING", "PARAR DE HOSPEDAR" },
+    { "DISCONNECT", "DESCONECTAR" },
+    { "Multiplayer", "Multijogador" },
+};
+
+static const Entry kSpanish[] = {
+    { ":: MULTIPLAYER ::", ":: MULTIJUGADOR ::" },
+    { "MULTIPLAYER", "MULTIJUGADOR" },
+    { "HOST", "CREAR" },
+    { "JOIN", "UNIRSE" },
+    { "Game mode:", "Modo de juego:" },
+    { "REPUBLICS", "REPÚBLICAS" },
+    { "Listed for:", "Visible para:" },
+    { "FRIENDS", "AMIGOS" },
+    { "EVERYONE", "TODOS" },
+    { "Every player with this version sees your game.", "La ven todos los jugadores de esta versión." },
+    { "Only your Steam friends see your game.", "Solo tus amigos de Steam ven tu partida." },
+    { "Players, you included:", "Jugadores (contigo incluido):" },
+    { "HOST NEW GAME", "NUEVA PARTIDA" },
+    { "HOST SAVED GAME", "PARTIDA GUARDADA" },
+    { "Hosting starts once the city is loaded.", "La partida se abre al cargar la ciudad." },
+    { "In development - not playable yet.", "En desarrollo - aún no jugable." },
+    { "Your SteamID64:", "Tu SteamID64:" },
+    { "COPY", "COPIAR" },
+    { "GAME", "PARTIDA" },
+    { "MODE", "MODO" },
+    { "PLAYERS", "JUGADORES" },
+    { "Looking for games...", "Buscando partidas..." },
+    { "No games found: your friends' games and public ones of this version show here.",
+      "No hay partidas: aquí aparecen las de tus amigos y las públicas de esta versión." },
+    { "LOOKING...", "BUSCANDO..." },
+    { "REFRESH", "ACTUALIZAR" },
+    { "CONNECT", "CONECTAR" },
+    { "Or by SteamID64 or IP:", "O por SteamID64 o IP:" },
+    { "Republics is in development: pick Co-op on the HOST tab to join.",
+      "Repúblicas está en desarrollo: elige CO-OP en la pestaña CREAR para unirte." },
+    { "BACK", "VOLVER" },
+    { "Each player their own republic, 2 players", "Cada jugador con su república, 2 jugadores" },
+    { "One map split in two - in development", "Un mapa dividido en dos - en desarrollo" },
+    { "SESSION", "SESIÓN" },
+    { "HOST THIS CITY", "ABRIR ESTA CIUDAD" },
+    { "The players who join get this city.", "Quien se una recibe esta ciudad." },
+    { "Hosting - waiting for players", "Partida abierta - esperando jugadores" },
+    { "Re-syncing - waiting for the player to come back", "Resincronizando - esperando a que vuelva el jugador" },
+    { "A player is joining...", "Un jugador se está uniendo..." },
+    { "Re-syncing - sending the world", "Resincronizando - enviando el mundo" },
+    { "Hosting - in the game", "Partida abierta - en juego" },
+    { "Joining...", "Uniéndose..." },
+    { "Re-syncing with the host", "Resincronizando con el anfitrión" },
+    { "In the host's game", "En la partida del anfitrión" },
+    { "Players:", "Jugadores:" },
+    { " (host)", " (anfitrión)" },
+    { " - you", " - tú" },
+    { "Players' cursors:", "Cursores de los jugadores:" },
+    { "SHOW", "MOSTRAR" },
+    { "HIDE", "OCULTAR" },
+    { "STOP HOSTING", "DEJAR DE ALOJAR" },
+    { "DISCONNECT", "DESCONECTAR" },
+    { "Multiplayer", "Multijugador" },
+};
+
+static const Entry kFrench[] = {
+    { ":: MULTIPLAYER ::", ":: MULTIJOUEUR ::" },
+    { "MULTIPLAYER", "MULTIJOUEUR" },
+    { "HOST", "HÉBERGER" },
+    { "JOIN", "REJOINDRE" },
+    { "Game mode:", "Mode de jeu :" },
+    { "REPUBLICS", "RÉPUBLIQUES" },
+    { "Listed for:", "Visible pour :" },
+    { "FRIENDS", "AMIS" },
+    { "EVERYONE", "TOUS" },
+    { "Every player with this version sees your game.", "Visible par tous les joueurs de cette version." },
+    { "Only your Steam friends see your game.", "Seuls vos amis Steam voient votre partie." },
+    { "Players, you included:", "Joueurs, vous compris :" },
+    { "HOST NEW GAME", "NOUVELLE PARTIE" },
+    { "HOST SAVED GAME", "PARTIE SAUVEGARDÉE" },
+    { "Hosting starts once the city is loaded.", "L'hébergement démarre une fois la ville chargée." },
+    { "In development - not playable yet.", "En développement - pas encore jouable." },
+    { "Your SteamID64:", "Votre SteamID64 :" },
+    { "COPY", "COPIER" },
+    { "GAME", "PARTIE" },
+    { "PLAYERS", "JOUEURS" },
+    { "Looking for games...", "Recherche de parties..." },
+    { "No games found: your friends' games and public ones of this version show here.",
+      "Aucune partie : celles de vos amis et les parties publiques de cette version s'affichent ici." },
+    { "LOOKING...", "RECHERCHE..." },
+    { "REFRESH", "ACTUALISER" },
+    { "CONNECT", "CONNEXION" },
+    { "Or by SteamID64 or IP:", "Ou par SteamID64 ou IP :" },
+    { "Republics is in development: pick Co-op on the HOST tab to join.",
+      "Républiques est en développement : choisissez CO-OP dans l'onglet HÉBERGER pour rejoindre." },
+    { "BACK", "RETOUR" },
+    { "Each player their own republic, 2 players", "Chaque joueur a sa république, 2 joueurs" },
+    { "One map split in two - in development", "Une carte coupée en deux - en développement" },
+    { "SESSION", "SESSION" },
+    { "HOST THIS CITY", "HÉBERGER CETTE VILLE" },
+    { "The players who join get this city.", "Les joueurs qui vous rejoignent reçoivent cette ville." },
+    { "Hosting - waiting for players", "Hébergement - en attente de joueurs" },
+    { "Re-syncing - waiting for the player to come back", "Resynchronisation - en attente du retour du joueur" },
+    { "A player is joining...", "Un joueur rejoint la partie..." },
+    { "Re-syncing - sending the world", "Resynchronisation - envoi du monde" },
+    { "Hosting - in the game", "Hébergement - en jeu" },
+    { "Joining...", "Connexion..." },
+    { "Re-syncing with the host", "Resynchronisation avec l'hôte" },
+    { "In the host's game", "Dans la partie de l'hôte" },
+    { "Players:", "Joueurs :" },
+    { " (host)", " (hôte)" },
+    { " - you", " - vous" },
+    { "Players' cursors:", "Curseurs des joueurs :" },
+    { "SHOW", "AFFICHER" },
+    { "HIDE", "MASQUER" },
+    { "STOP HOSTING", "ARRÊTER L'HÉBERGEMENT" },
+    { "DISCONNECT", "DÉCONNEXION" },
+    { "Multiplayer", "Multijoueur" },
+};
+
+static const Entry kGerman[] = {
+    { ":: MULTIPLAYER ::", ":: MEHRSPIELER ::" },
+    { "MULTIPLAYER", "MEHRSPIELER" },
+    { "HOST", "HOSTEN" },
+    { "JOIN", "BEITRETEN" },
+    { "Game mode:", "Spielmodus:" },
+    { "CO-OP", "KOOP" },
+    { "REPUBLICS", "REPUBLIKEN" },
+    { "Listed for:", "Sichtbar für:" },
+    { "FRIENDS", "FREUNDE" },
+    { "EVERYONE", "ALLE" },
+    { "Every player with this version sees your game.", "Alle Spieler dieser Version sehen dein Spiel." },
+    { "Only your Steam friends see your game.", "Nur deine Steam-Freunde sehen dein Spiel." },
+    { "Players, you included:", "Spieler, du eingeschlossen:" },
+    { "HOST NEW GAME", "NEUES SPIEL HOSTEN" },
+    { "HOST SAVED GAME", "SPIELSTAND HOSTEN" },
+    { "Hosting starts once the city is loaded.", "Das Hosten beginnt, sobald die Stadt geladen ist." },
+    { "In development - not playable yet.", "In Entwicklung - noch nicht spielbar." },
+    { "Your SteamID64:", "Deine SteamID64:" },
+    { "COPY", "KOPIEREN" },
+    { "GAME", "SPIEL" },
+    { "MODE", "MODUS" },
+    { "PLAYERS", "SPIELER" },
+    { "Looking for games...", "Suche nach Spielen..." },
+    { "No games found: your friends' games and public ones of this version show here.",
+      "Keine Spiele: Hier erscheinen die Spiele deiner Freunde und die öffentlichen dieser Version." },
+    { "LOOKING...", "SUCHE..." },
+    { "REFRESH", "AKTUALISIEREN" },
+    { "CONNECT", "VERBINDEN" },
+    { "Or by SteamID64 or IP:", "Oder per SteamID64 oder IP:" },
+    { "Republics is in development: pick Co-op on the HOST tab to join.",
+      "Republiken ist in Entwicklung: Wähle KOOP im Tab HOSTEN, um beizutreten." },
+    { "BACK", "ZURÜCK" },
+    { "Co-op", "Koop" },
+    { "Each player their own republic, 2 players", "Jeder Spieler mit eigener Republik, 2 Spieler" },
+    { "One map split in two - in development", "Eine Karte, zweigeteilt - in Entwicklung" },
+    { "SESSION", "SITZUNG" },
+    { "HOST THIS CITY", "DIESE STADT HOSTEN" },
+    { "The players who join get this city.", "Wer beitritt, bekommt diese Stadt." },
+    { "Hosting - waiting for players", "Hosten - warte auf Spieler" },
+    { "Re-syncing - waiting for the player to come back", "Neusynchronisierung - warte auf den Spieler" },
+    { "A player is joining...", "Ein Spieler tritt bei..." },
+    { "Re-syncing - sending the world", "Neusynchronisierung - sende die Welt" },
+    { "Hosting - in the game", "Hosten - im Spiel" },
+    { "Joining...", "Beitreten..." },
+    { "Re-syncing with the host", "Neusynchronisierung mit dem Host" },
+    { "In the host's game", "Im Spiel des Hosts" },
+    { "Players:", "Spieler:" },
+    { " (host)", " (Host)" },
+    { " - you", " - du" },
+    { "Players' cursors:", "Mauszeiger der Spieler:" },
+    { "SHOW", "ZEIGEN" },
+    { "HIDE", "AUSBLENDEN" },
+    { "STOP HOSTING", "HOSTEN BEENDEN" },
+    { "DISCONNECT", "TRENNEN" },
+    { "Multiplayer", "Mehrspieler" },
+};
+
+static const Entry kItalian[] = {
+    { ":: MULTIPLAYER ::", ":: MULTIGIOCATORE ::" },
+    { "MULTIPLAYER", "MULTIGIOCATORE" },
+    { "HOST", "OSPITA" },
+    { "JOIN", "UNISCITI" },
+    { "Game mode:", "Modalità di gioco:" },
+    { "REPUBLICS", "REPUBBLICHE" },
+    { "Listed for:", "Visibile a:" },
+    { "FRIENDS", "AMICI" },
+    { "EVERYONE", "TUTTI" },
+    { "Every player with this version sees your game.", "Tutti i giocatori di questa versione vedono la tua partita." },
+    { "Only your Steam friends see your game.", "Solo i tuoi amici di Steam vedono la tua partita." },
+    { "Players, you included:", "Giocatori, te compreso:" },
+    { "HOST NEW GAME", "NUOVA PARTITA" },
+    { "HOST SAVED GAME", "PARTITA SALVATA" },
+    { "Hosting starts once the city is loaded.", "La partita si apre quando la città è caricata." },
+    { "In development - not playable yet.", "In sviluppo - non ancora giocabile." },
+    { "Your SteamID64:", "Il tuo SteamID64:" },
+    { "COPY", "COPIA" },
+    { "GAME", "PARTITA" },
+    { "MODE", "MODALITÀ" },
+    { "PLAYERS", "GIOCATORI" },
+    { "Looking for games...", "Ricerca partite..." },
+    { "No games found: your friends' games and public ones of this version show here.",
+      "Nessuna partita: qui compaiono quelle dei tuoi amici e quelle pubbliche di questa versione." },
+    { "LOOKING...", "RICERCA..." },
+    { "REFRESH", "AGGIORNA" },
+    { "CONNECT", "CONNETTI" },
+    { "Or by SteamID64 or IP:", "Oppure con SteamID64 o IP:" },
+    { "Republics is in development: pick Co-op on the HOST tab to join.",
+      "Repubbliche è in sviluppo: scegli CO-OP nella scheda OSPITA per unirti." },
+    { "BACK", "INDIETRO" },
+    { "Each player their own republic, 2 players", "Ogni giocatore con la sua repubblica, 2 giocatori" },
+    { "One map split in two - in development", "Una mappa divisa in due - in sviluppo" },
+    { "SESSION", "SESSIONE" },
+    { "HOST THIS CITY", "OSPITA QUESTA CITTÀ" },
+    { "The players who join get this city.", "Chi si unisce riceve questa città." },
+    { "Hosting - waiting for players", "Partita aperta - in attesa di giocatori" },
+    { "Re-syncing - waiting for the player to come back", "Risincronizzazione - in attesa che il giocatore torni" },
+    { "A player is joining...", "Un giocatore si sta unendo..." },
+    { "Re-syncing - sending the world", "Risincronizzazione - invio del mondo" },
+    { "Hosting - in the game", "Partita aperta - in gioco" },
+    { "Joining...", "Connessione..." },
+    { "Re-syncing with the host", "Risincronizzazione con l'host" },
+    { "In the host's game", "Nella partita dell'host" },
+    { "Players:", "Giocatori:" },
+    { " (host)", " (host)" },
+    { " - you", " - tu" },
+    { "Players' cursors:", "Cursori dei giocatori:" },
+    { "SHOW", "MOSTRA" },
+    { "HIDE", "NASCONDI" },
+    { "STOP HOSTING", "SMETTI DI OSPITARE" },
+    { "DISCONNECT", "DISCONNETTI" },
+    { "Multiplayer", "Multigiocatore" },
+};
+
+static const Entry kPolish[] = {
+    { ":: MULTIPLAYER ::", ":: GRA WIELOOSOBOWA ::" },
+    { "MULTIPLAYER", "GRA WIELOOSOBOWA" },
+    { "HOST", "HOSTUJ" },
+    { "JOIN", "DOŁĄCZ" },
+    { "Game mode:", "Tryb gry:" },
+    { "REPUBLICS", "REPUBLIKI" },
+    { "Listed for:", "Widoczna dla:" },
+    { "FRIENDS", "ZNAJOMYCH" },
+    { "EVERYONE", "WSZYSTKICH" },
+    { "Every player with this version sees your game.", "Wszyscy gracze z tą wersją widzą twoją grę." },
+    { "Only your Steam friends see your game.", "Tylko twoi znajomi ze Steama widzą twoją grę." },
+    { "Players, you included:", "Gracze, łącznie z tobą:" },
+    { "HOST NEW GAME", "HOSTUJ NOWĄ GRĘ" },
+    { "HOST SAVED GAME", "HOSTUJ ZAPISANĄ GRĘ" },
+    { "Hosting starts once the city is loaded.", "Hostowanie zacznie się po wczytaniu miasta." },
+    { "In development - not playable yet.", "W przygotowaniu - jeszcze nie do gry." },
+    { "Your SteamID64:", "Twój SteamID64:" },
+    { "COPY", "KOPIUJ" },
+    { "GAME", "GRA" },
+    { "MODE", "TRYB" },
+    { "PLAYERS", "GRACZE" },
+    { "Looking for games...", "Szukanie gier..." },
+    { "No games found: your friends' games and public ones of this version show here.",
+      "Brak gier: tu pojawiają się gry znajomych i publiczne gry tej wersji." },
+    { "LOOKING...", "SZUKANIE..." },
+    { "REFRESH", "ODŚWIEŻ" },
+    { "CONNECT", "POŁĄCZ" },
+    { "Or by SteamID64 or IP:", "Lub przez SteamID64 albo IP:" },
+    { "Republics is in development: pick Co-op on the HOST tab to join.",
+      "Republiki są w przygotowaniu: wybierz CO-OP w zakładce HOSTUJ, aby dołączyć." },
+    { "BACK", "WSTECZ" },
+    { "Each player their own republic, 2 players", "Każdy gracz z własną republiką, 2 graczy" },
+    { "One map split in two - in development", "Jedna mapa podzielona na dwie - w przygotowaniu" },
+    { "SESSION", "SESJA" },
+    { "HOST THIS CITY", "HOSTUJ TO MIASTO" },
+    { "The players who join get this city.", "Dołączający gracze dostaną to miasto." },
+    { "Hosting - waiting for players", "Hostowanie - czekanie na graczy" },
+    { "Re-syncing - waiting for the player to come back", "Ponowna synchronizacja - czekanie na powrót gracza" },
+    { "A player is joining...", "Gracz dołącza..." },
+    { "Re-syncing - sending the world", "Ponowna synchronizacja - wysyłanie świata" },
+    { "Hosting - in the game", "Hostowanie - w grze" },
+    { "Joining...", "Dołączanie..." },
+    { "Re-syncing with the host", "Ponowna synchronizacja z hostem" },
+    { "In the host's game", "W grze hosta" },
+    { "Players:", "Gracze:" },
+    { " (host)", " (host)" },
+    { " - you", " - ty" },
+    { "Players' cursors:", "Kursory graczy:" },
+    { "SHOW", "POKAŻ" },
+    { "HIDE", "UKRYJ" },
+    { "STOP HOSTING", "ZAKOŃCZ HOSTOWANIE" },
+    { "DISCONNECT", "ROZŁĄCZ" },
+    { "Multiplayer", "Gra wieloosobowa" },
+};
+
+static const Entry kCzech[] = {
+    { ":: MULTIPLAYER ::", ":: HRA VÍCE HRÁČŮ ::" },
+    { "MULTIPLAYER", "HRA VÍCE HRÁČŮ" },
+    { "HOST", "HOSTOVAT" },
+    { "JOIN", "PŘIPOJIT SE" },
+    { "Game mode:", "Herní režim:" },
+    { "REPUBLICS", "REPUBLIKY" },
+    { "Listed for:", "Viditelná pro:" },
+    { "FRIENDS", "PŘÁTELE" },
+    { "EVERYONE", "VŠECHNY" },
+    { "Every player with this version sees your game.", "Všichni hráči s touto verzí vidí vaši hru." },
+    { "Only your Steam friends see your game.", "Vaši hru vidí jen vaši přátelé na Steamu." },
+    { "Players, you included:", "Hráči včetně vás:" },
+    { "HOST NEW GAME", "NOVÁ HRA" },
+    { "HOST SAVED GAME", "ULOŽENÁ HRA" },
+    { "Hosting starts once the city is loaded.", "Hostování začne po načtení města." },
+    { "In development - not playable yet.", "Ve vývoji - zatím nehratelné." },
+    { "Your SteamID64:", "Vaše SteamID64:" },
+    { "COPY", "KOPÍROVAT" },
+    { "GAME", "HRA" },
+    { "MODE", "REŽIM" },
+    { "PLAYERS", "HRÁČI" },
+    { "Looking for games...", "Hledání her..." },
+    { "No games found: your friends' games and public ones of this version show here.",
+      "Žádné hry: zde se zobrazí hry přátel a veřejné hry této verze." },
+    { "LOOKING...", "HLEDÁNÍ..." },
+    { "REFRESH", "OBNOVIT" },
+    { "CONNECT", "PŘIPOJIT" },
+    { "Or by SteamID64 or IP:", "Nebo pomocí SteamID64 či IP:" },
+    { "Republics is in development: pick Co-op on the HOST tab to join.",
+      "Republiky jsou ve vývoji: pro připojení zvolte CO-OP na kartě HOSTOVAT." },
+    { "BACK", "ZPĚT" },
+    { "Each player their own republic, 2 players", "Každý hráč s vlastní republikou, 2 hráči" },
+    { "One map split in two - in development", "Jedna mapa rozdělená na dvě - ve vývoji" },
+    { "SESSION", "RELACE" },
+    { "HOST THIS CITY", "HOSTOVAT TOTO MĚSTO" },
+    { "The players who join get this city.", "Připojení hráči dostanou toto město." },
+    { "Hosting - waiting for players", "Hostování - čekání na hráče" },
+    { "Re-syncing - waiting for the player to come back", "Nová synchronizace - čekání na návrat hráče" },
+    { "A player is joining...", "Hráč se připojuje..." },
+    { "Re-syncing - sending the world", "Nová synchronizace - odesílání světa" },
+    { "Hosting - in the game", "Hostování - ve hře" },
+    { "Joining...", "Připojování..." },
+    { "Re-syncing with the host", "Nová synchronizace s hostitelem" },
+    { "In the host's game", "Ve hře hostitele" },
+    { "Players:", "Hráči:" },
+    { " (host)", " (hostitel)" },
+    { " - you", " - vy" },
+    { "Players' cursors:", "Kurzory hráčů:" },
+    { "SHOW", "ZOBRAZIT" },
+    { "HIDE", "SKRÝT" },
+    { "STOP HOSTING", "UKONČIT HOSTOVÁNÍ" },
+    { "DISCONNECT", "ODPOJIT" },
+    { "Multiplayer", "Hra více hráčů" },
+};
+
+static const Entry kRussian[] = {
+    { ":: MULTIPLAYER ::", ":: Мультиплеер ::" },
+    { "MULTIPLAYER", "Мультиплеер" },
+    { "HOST", "Создать" },
+    { "JOIN", "Войти" },
+    { "Game mode:", "Режим игры:" },
+    { "CO-OP", "Кооп" },
+    { "REPUBLICS", "Республики" },
+    { "Listed for:", "Видна для:" },
+    { "FRIENDS", "Друзей" },
+    { "EVERYONE", "Всех" },
+    { "Every player with this version sees your game.", "Вашу игру видят все игроки с этой версией." },
+    { "Only your Steam friends see your game.", "Вашу игру видят только друзья в Steam." },
+    { "Players, you included:", "Игроков, включая вас:" },
+    { "HOST NEW GAME", "Новая игра" },
+    { "HOST SAVED GAME", "Сохранённая игра" },
+    { "Hosting starts once the city is loaded.", "Игра откроется, когда город загрузится." },
+    { "In development - not playable yet.", "В разработке - пока недоступно." },
+    { "Your SteamID64:", "Ваш SteamID64:" },
+    { "COPY", "Копировать" },
+    { "GAME", "ИГРА" },
+    { "MODE", "РЕЖИМ" },
+    { "PLAYERS", "ИГРОКИ" },
+    { "PING", "ПИНГ" },
+    { "Looking for games...", "Поиск игр..." },
+    { "No games found: your friends' games and public ones of this version show here.",
+      "Игр не найдено: здесь появятся игры друзей и открытые игры этой версии." },
+    { "LOOKING...", "Поиск..." },
+    { "REFRESH", "Обновить" },
+    { "CONNECT", "Подключиться" },
+    { "Or by SteamID64 or IP:", "Или по SteamID64 или IP:" },
+    { "Republics is in development: pick Co-op on the HOST tab to join.",
+      "Режим «Республики» в разработке: выберите КООП на вкладке СОЗДАТЬ, чтобы войти." },
+    { "BACK", "Назад" },
+    { "Co-op", "Кооп" },
+    { "Each player their own republic, 2 players", "У каждого игрока своя республика, 2 игрока" },
+    { "One map split in two - in development", "Одна карта, разделённая на две - в разработке" },
+    { "SESSION", "Сессия" },
+    { "HOST THIS CITY", "Открыть этот город" },
+    { "The players who join get this city.", "Вошедшие игроки получат этот город." },
+    { "Hosting - waiting for players", "Игра открыта - ожидание игроков" },
+    { "Re-syncing - waiting for the player to come back", "Пересинхронизация - ожидание возвращения игрока" },
+    { "A player is joining...", "Игрок входит..." },
+    { "Re-syncing - sending the world", "Пересинхронизация - отправка мира" },
+    { "Hosting - in the game", "Игра открыта - в игре" },
+    { "Joining...", "Вход..." },
+    { "Re-syncing with the host", "Пересинхронизация с хостом" },
+    { "In the host's game", "В игре хоста" },
+    { "Players:", "Игроки:" },
+    { " (host)", " (хост)" },
+    { " - you", " - вы" },
+    { "Players' cursors:", "Курсоры игроков:" },
+    { "SHOW", "Показать" },
+    { "HIDE", "Скрыть" },
+    { "STOP HOSTING", "Завершить сессию" },
+    { "DISCONNECT", "Отключиться" },
+    { "Multiplayer", "Мультиплеер" },
+};
+
+struct Language {
+    const char* file; // the game's language file in config.ini
+    const Entry* entries;
+    size_t count;
+    bool cyrillic;
+};
+
+#define LANGUAGE(file, table, cyrillic) { file, table, sizeof(table) / sizeof(table[0]), cyrillic }
+static const Language kLanguages[] = {
+    LANGUAGE("sovietPortugueseBrazil.btf", kPortugueseBrazil, false),
+    LANGUAGE("sovietSpanish.btf", kSpanish, false),
+    LANGUAGE("sovietFrench.btf", kFrench, false),
+    LANGUAGE("sovietGerman.btf", kGerman, false),
+    LANGUAGE("sovietItalian.btf", kItalian, false),
+    LANGUAGE("sovietPolish.btf", kPolish, false),
+    LANGUAGE("sovietCzech.btf", kCzech, false),
+    LANGUAGE("sovietRussian.btf", kRussian, true),
+};
+
+// The game's language file, from its config.ini; "" when it cannot be read.
+static std::string ReadGameLanguage()
+{
+    wchar_t exe[MAX_PATH];
+    DWORD n = GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    std::wstring path(exe, n);
+    path = path.substr(0, path.find_last_of(L"\\/") + 1) + L"media_soviet\\config.ini";
+    FILE* f = nullptr;
+    if (_wfopen_s(&f, path.c_str(), L"rb") || !f) return "";
+    char line[512], name[256];
+    std::string found;
+    while (fgets(line, sizeof(line), f)) {
+        const char* l = strncmp(line, "\xEF\xBB\xBF", 3) == 0 ? line + 3 : line; // a UTF-8 BOM on the first line
+        if (sscanf_s(l, " $TEXT LANGUAGE2 %255s", name, (unsigned)sizeof(name)) == 1) found = name;
+    }
+    fclose(f);
+    return found;
+}
+
+static const Language* GameLanguage()
+{
+    static bool read = false; // render thread only
+    static const Language* language = nullptr;
+    if (!read) {
+        read = true;
+        std::string file = ReadGameLanguage();
+        for (const Language& l : kLanguages)
+            if (_stricmp(l.file, file.c_str()) == 0) language = &l;
+    }
+    return language;
+}
+
+const char* T(const char* english)
+{
+    const Language* l = GameLanguage();
+    if (!l || !english) return english;
+    for (size_t i = 0; i < l->count; ++i)
+        if (strcmp(l->entries[i].english, english) == 0) return l->entries[i].text;
+    return english;
+}
+
+bool UiText_IsCyrillic()
+{
+    const Language* l = GameLanguage();
+    if (l) return l->cyrillic;
+    // A language with no table yet may still be Cyrillic: its rows need Buran.
+    static const char* const kCyrillic[] = { "sovietUkrainian.btf", "sovietBulgarian.btf" };
+    static int cyrillic = -1;
+    if (cyrillic < 0) {
+        std::string file = ReadGameLanguage();
+        cyrillic = 0;
+        for (const char* c : kCyrillic) cyrillic |= _stricmp(c, file.c_str()) == 0;
+    }
+    return cyrillic == 1;
+}

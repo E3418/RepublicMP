@@ -5,15 +5,18 @@
 // "Square" font 32s high, red with a gold outline, white under the mouse.
 #include "multiplayer_page.h"
 #include "game_assets.h"
-#include "../game/imgui_hook.h" // g_imguiVisible
+#include "ui_text.h"
 #include "../game/main_menu_hook.h"
 #include "../game/world.h"
+#include "../game/system_menu.h"
 #include "../core/profile.h"
 #include "../modes/mode.h"
 #include "../session/save_sync.h"
 #include "../transport/network.h" // NetworkSteamId
 #include "../transport/steam_lobby.h"
-#include "../lockstep/lockstep_net.h" // LockstepNet_PeerCount
+#include "../lockstep/lockstep_net.h" // LockstepNet_PeerCount, LockstepNet_Players
+#include "../lockstep/presence.h"
+#include "sync_block.h"
 #include "imgui.h"
 #include <misc/cpp/imgui_stdlib.h>
 #include <cstdio>
@@ -23,6 +26,8 @@ static const ImU32 kRowRed = IM_COL32(0xAB, 0x03, 0x1D, 0xFF);
 static const ImU32 kRowGold = IM_COL32(0xE3, 0xC5, 0x68, 0xFF);
 static const ImU32 kWhite = IM_COL32(0xFF, 0xFF, 0xFF, 0xFF);
 static const ImU32 kInk = IM_COL32(0x4A, 0x32, 0x24, 0xFF); // dark brown on the parchment
+static const ImU32 kHot = IM_COL32(0xAB, 0x03, 0x1D, 0xC0);  // under a row in the mouse, as the game's menu
+static const ImU32 kSection = IM_COL32(0x8C, 0x80, 0x76, 0xFF); // the grey of the game's panel headings
 // The rows' text height in units of s: the game asks for "Square" at 40f with
 // f = 0.8s (as measured against its own rows on screen).
 static const float kTextHeight = 32.0f;
@@ -44,17 +49,20 @@ static int s_selected = -1;
 void MultiplayerPage_Open()
 {
     s_open = true;
-    s_menuOn = true; // its builder just ran: the click came from it
-    MainMenuHook_SetHidden(true);
-    if (s_tab == 1) SteamLobby_Refresh();
+    MainMenuHook_SetHidden(true); // only matters on the main menu
+    if (s_tab == 1 && SaveSync_GetState() == SESSION_IDLE) SteamLobby_Refresh();
 }
 
-bool MultiplayerPage_IsOpen() { return s_open; }
+// Drawn over the main menu or over a loaded city; between the two (a load,
+// the game's own new-game page) it waits, still open. Under the sync screen it
+// waits too: that screen does not take the mouse, the page would.
+bool MultiplayerPage_IsOpen() { return s_open && (s_menuOn || World_IsReady()) && !SyncBlock_IsActive(); }
 
 static void Close()
 {
     s_open = false;
     MainMenuHook_SetHidden(false);
+    ImGui::SetWindowFocus(nullptr); // no focus left over to take keys while nothing is shown
 }
 
 // Hosting from the menu: the game's own new-game or load page, then Host once
@@ -80,11 +88,24 @@ void MultiplayerPage_Tick()
     lastBuild = build;
     s_menuOn = framesWithout < 30;
 
+    // The game's menu item in the game's language, once.
+    static bool itemText = false;
+    if (!itemText) {
+        itemText = true;
+        wchar_t text[64];
+        if (MultiByteToWideChar(CP_UTF8, 0, T("MULTIPLAYER"), -1, text, 64) > 0) MainMenuHook_SetItemText(text);
+    }
+
     // A hosted session is listed in the game list (Steam lobby) while it runs,
     // whether it was started here or from the RepublicMP window.
     if (s_mode < 0) s_mode = Profile_GetInt("profile", "game_mode", 0) == 1 ? 1 : 0;
     if (s_public < 0) s_public = Profile_GetInt("profile", "game_public", 0) == 1 ? 1 : 0;
     SessionState st = SaveSync_GetState();
+    // A session that starts, however it was started (here, Steam's Join Game,
+    // the RepublicMP window), brings the page up on its SESSION view.
+    static SessionState lastState = SESSION_IDLE;
+    if (lastState == SESSION_IDLE && st != SESSION_IDLE) MultiplayerPage_Open();
+    lastState = st;
     if (SaveSync_IsHostRole() && (st == SESSION_HOST_LISTENING || st == SESSION_HOST_JOINING || st == SESSION_HOST_IN_GAME))
         SteamLobby_Advertise(s_public == 1, Profile_GetNick(), "Co-op", 1 + LockstepNet_PeerCount(),
                              Profile_GetMaxPlayers());
@@ -107,10 +128,7 @@ void MultiplayerPage_Tick()
     }
     if (s_leftMenu && s_sawUnloaded && loaded && !s_menuOn && GetTickCount64() - s_loadedSince > 2000) {
         s_hostAfterLoad = false;
-        if (SaveSync_GetState() == SESSION_IDLE) {
-            SaveSync_StartHost();
-            g_imguiVisible = true; // the session panel: the SteamID64 to give out, the players
-        }
+        if (SaveSync_GetState() == SESSION_IDLE) SaveSync_StartHost(); // the page comes up on its SESSION view
     }
 }
 
@@ -133,6 +151,7 @@ static void RowText(ImDrawList* dl, float height, ImVec2 pos, const char* text, 
 // A clickable row centred on cx, its text top at y (game units times s).
 static bool Row(const char* id, const char* label, float cx, float y, float s, bool enabled = true)
 {
+    label = T(label);
     float h = kTextHeight * s;
     ImVec2 size = GameText_Size(GAME_FONT_SQUARE, h, label);
     // The click area is the text's, like the choices' (the game's own row box
@@ -140,25 +159,30 @@ static bool Row(const char* id, const char* label, float cx, float y, float s, b
     ImGui::SetCursorScreenPos(ImVec2(cx - size.x * 0.5f - 10 * s, y));
     bool clicked = ImGui::InvisibleButton(id, ImVec2(size.x + 20 * s, h)) && enabled;
     bool hot = enabled && ImGui::IsItemHovered();
+    if (hot) ImGui::GetWindowDrawList()->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), kHot);
     RowText(ImGui::GetWindowDrawList(), h, ImVec2(cx - size.x * 0.5f, y), label, hot, enabled ? 1.0f : 0.4f);
     return clicked;
 }
 
+// Every text on the page goes through T (ui_text.h): the game's language.
 static void Label(GameFont font, float height, ImVec2 pos, ImU32 color, const char* text)
 {
-    GameText_Draw(ImGui::GetWindowDrawList(), font, height, pos, color, text);
+    GameText_Draw(ImGui::GetWindowDrawList(), font, height, pos, color, T(text));
 }
 
 // Text broken into lines at spaces to fit width, at most maxLines (the last
 // one cut short with "...").
-static void WrappedLabel(GameFont font, float height, ImVec2 pos, float width, int maxLines, ImU32 color,
-                         const char* text)
+// Returns the number of lines drawn.
+static int WrappedLabel(GameFont font, float height, ImVec2 pos, float width, int maxLines, ImU32 color,
+                        const char* text)
 {
+    text = T(text);
     std::string line, word;
     int lines = 0;
     auto flush = [&](bool last) {
         if (last && lines == maxLines - 1 && *text) line += "...";
-        Label(font, height, ImVec2(pos.x, pos.y + lines * height * 1.15f), color, line.c_str());
+        GameText_Draw(ImGui::GetWindowDrawList(), font, height, ImVec2(pos.x, pos.y + lines * height * 1.15f), color,
+                      line.c_str());
         ++lines;
         line.clear();
     };
@@ -175,17 +199,26 @@ static void WrappedLabel(GameFont font, float height, ImVec2 pos, float width, i
         text = *end ? end + 1 : end;
     }
     if (!line.empty() && lines < maxLines) flush(false);
+    return lines;
+}
+
+// Text drawn as it is: names, ids and numbers are not translated.
+static void Raw(GameFont font, float height, ImVec2 pos, ImU32 color, const char* text)
+{
+    GameText_Draw(ImGui::GetWindowDrawList(), font, height, pos, color, text);
 }
 
 // One choice of a row of choices: the chosen one in the rows' red and gold,
 // the others faded, white under the mouse.
 static bool Choice(const char* id, const char* label, float cx, float y, float s, bool chosen)
 {
+    label = T(label);
     float h = kTextHeight * s;
     ImVec2 size = GameText_Size(GAME_FONT_SQUARE, h, label);
     ImGui::SetCursorScreenPos(ImVec2(cx - size.x * 0.5f - 10 * s, y));
     bool clicked = ImGui::InvisibleButton(id, ImVec2(size.x + 20 * s, h));
     bool hot = ImGui::IsItemHovered();
+    if (hot) ImGui::GetWindowDrawList()->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), kHot);
     RowText(ImGui::GetWindowDrawList(), h, ImVec2(cx - size.x * 0.5f, y), label, hot, chosen || hot ? 1.0f : 0.45f);
     return clicked;
 }
@@ -224,7 +257,7 @@ static void HostTab(float cx, float left, float right, float s)
     Label(GAME_FONT_ARIAL, 24 * s, ImVec2(left - 225 * s, 640 * s), kInk, "Listed for:");
     if (Choice("##friends", "FRIENDS", left - 110 * s, 670 * s, s, s_public == 0)) SetChoice(&s_public, 0, "game_public");
     if (Choice("##public", "EVERYONE", left + 110 * s, 670 * s, s, s_public == 1)) SetChoice(&s_public, 1, "game_public");
-    Label(GAME_FONT_ARIAL, 20 * s, ImVec2(left - 225 * s, 720 * s), kInk,
+    WrappedLabel(GAME_FONT_ARIAL, 20 * s, ImVec2(left - 225 * s, 720 * s), 470 * s, 2, kInk,
           s_public == 1 ? "Every player with this version sees your game." : "Only your Steam friends see your game.");
     // The session's size, the same setting as "Session" in the RepublicMP window.
     Label(GAME_FONT_ARIAL, 24 * s, ImVec2(left - 225 * s, 765 * s), kInk, "Players, you included:");
@@ -237,31 +270,33 @@ static void HostTab(float cx, float left, float right, float s)
     }
 
     bool idle = SaveSync_GetState() == SESSION_IDLE;
-    if (s_mode == 0) {
+    if (s_mode == 0 && !s_menuOn) {
+        // Over a loaded city: that city is the game.
+        if (Row("##hostCity", "HOST THIS CITY", right + 225 * s, 560 * s, s, idle)) SaveSync_StartHost();
+        WrappedLabel(GAME_FONT_ARIAL, 20 * s, ImVec2(right, 615 * s), 460 * s, 2, kInk,
+                     "The players who join get this city.");
+    } else if (s_mode == 0) {
         float rowX = right + 225 * s;
         if (Row("##hostNew", "HOST NEW GAME", rowX, 560 * s, s, idle)) HostThrough(MAIN_MENU_CUSTOM_GAME);
         if (Row("##hostSave", "HOST SAVED GAME", rowX, 600 * s, s, idle)) HostThrough(MAIN_MENU_LOAD_GAME);
-        Label(GAME_FONT_ARIAL, 20 * s, ImVec2(right, 655 * s), kInk, "Hosting starts once the city is loaded.");
+        WrappedLabel(GAME_FONT_ARIAL, 20 * s, ImVec2(right, 655 * s), 460 * s, 2, kInk,
+                     "Hosting starts once the city is loaded.");
     } else {
         // Only co-op plays for now; Republics shows what it will be (modes/republics).
         const RmpMode* republics = Modes_Republics();
         float y = 545 * s;
-        if (republics && republics->line1) {
-            Label(GAME_FONT_ARIAL, 22 * s, ImVec2(right, y), kInk, republics->line1);
-            y += 30 * s;
-        }
-        if (republics && republics->line2) {
-            Label(GAME_FONT_ARIAL, 22 * s, ImVec2(right, y), kInk, republics->line2);
-            y += 30 * s;
-        }
+        if (republics && republics->line1)
+            y += WrappedLabel(GAME_FONT_ARIAL, 22 * s, ImVec2(right, y), 460 * s, 2, kInk, republics->line1) * 26 * s + 4 * s;
+        if (republics && republics->line2)
+            y += WrappedLabel(GAME_FONT_ARIAL, 22 * s, ImVec2(right, y), 460 * s, 2, kInk, republics->line2) * 26 * s + 4 * s;
         Label(GAME_FONT_ARIAL, 22 * s, ImVec2(right, y + 10 * s), kRowRed, "In development - not playable yet.");
     }
     if (unsigned long long id = NetworkSteamId()) {
         char idText[32];
         snprintf(idText, sizeof(idText), "%llu", id);
-        Label(GAME_FONT_ARIAL, 22 * s, ImVec2(right, 740 * s), kInk, "Your SteamID64 (for a join by hand):");
-        Label(GAME_FONT_ARIAL, 28 * s, ImVec2(right, 770 * s), kInk, idText);
-        if (Row("##copy", "COPY", right + 360 * s, 768 * s, s)) ImGui::SetClipboardText(idText);
+        Label(GAME_FONT_ARIAL, 22 * s, ImVec2(right, 740 * s), kInk, "Your SteamID64:");
+        Raw(GAME_FONT_ARIAL, 28 * s, ImVec2(right, 770 * s), kInk, idText);
+        if (Row("##copy", "COPY", right + 380 * s, 768 * s, s)) ImGui::SetClipboardText(idText);
     }
 }
 
@@ -297,7 +332,7 @@ static void JoinTab(float cx, float listMin, float listMax, float s)
                               i == s_selected ? IM_COL32(0xAB, 0x03, 0x1D, 0x40) : IM_COL32(0xAB, 0x03, 0x1D, 0x18));
         char text[96];
         snprintf(text, sizeof(text), "%s%s", g.friendGame ? "* " : "", g.name);
-        Label(GAME_FONT_ARIAL, 24 * s, ImVec2(listMin + 10 * s, y + 4 * s), kInk, text);
+        Raw(GAME_FONT_ARIAL, 24 * s, ImVec2(listMin + 10 * s, y + 4 * s), kInk, text);
         Label(GAME_FONT_ARIAL, 24 * s, ImVec2(colMode, y + 4 * s), kInk, g.mode);
         snprintf(text, sizeof(text), "%d/%d", g.players, g.maxPlayers);
         Label(GAME_FONT_ARIAL, 24 * s, ImVec2(colPlayers, y + 4 * s), kInk, text);
@@ -310,7 +345,7 @@ static void JoinTab(float cx, float listMin, float listMax, float s)
         }
     }
     if (n == 0)
-        Label(GAME_FONT_ARIAL, 22 * s, ImVec2(listMin + 10 * s, y + 6 * s), kInk,
+        WrappedLabel(GAME_FONT_ARIAL, 22 * s, ImVec2(listMin + 10 * s, y + 6 * s), listMax - listMin - 20 * s, 2, kInk,
               SteamLobby_Refreshing() ? "Looking for games..."
                                       : "No games found: your friends' games and public ones of this version show here.");
 
@@ -333,23 +368,130 @@ static void JoinTab(float cx, float listMin, float listMax, float s)
     if ((Row("##connect", "CONNECT", listMax - 140 * s, 872 * s, s, canJoin) || enter) && canJoin)
         SaveSync_StartClient(s_target.c_str());
     if (!playable)
-        Label(GAME_FONT_ARIAL, 20 * s, ImVec2(listMin + 10 * s, 915 * s), kRowRed,
+        WrappedLabel(GAME_FONT_ARIAL, 20 * s, ImVec2(listMin + 10 * s, 915 * s), listMax - listMin - 20 * s, 1, kRowRed,
               "Republics is in development: pick Co-op on the HOST tab to join.");
+}
+
+// SESSION: what the session is doing and who is in it on the left; who sees
+// the game, our SteamID64, the cursors and Stop / Disconnect on the right.
+static void SessionTab(float left, float right, float bottom, float s)
+{
+    SessionState st = SaveSync_GetState();
+    bool host = SaveSync_IsHostRole();
+    bool resync = SaveSync_IsResyncing();
+    const char* state = "";
+    ImU32 stateColor = kInk;
+    switch (st) {
+    case SESSION_HOST_LISTENING:
+        state = resync ? "Re-syncing - waiting for the player to come back" : "Hosting - waiting for players";
+        break;
+    case SESSION_HOST_JOINING:
+        state = resync ? "Re-syncing - sending the world" : "A player is joining...";
+        break;
+    case SESSION_HOST_IN_GAME: state = "Hosting - in the game"; break;
+    case SESSION_CLIENT_JOINING: state = resync ? "Re-syncing with the host" : "Joining..."; break;
+    case SESSION_CLIENT_IN_GAME: state = "In the host's game"; break;
+    default: break;
+    }
+    float x = left - 225 * s, y = 540 * s;
+    y += WrappedLabel(GAME_FONT_ARIAL, 24 * s, ImVec2(x, y), 470 * s, 2, stateColor, state) * 28 * s + 6 * s;
+
+    // The players, the host first, with their ping.
+    y += 10 * s;
+    Label(GAME_FONT_ARIAL, 24 * s, ImVec2(x, y), kInk, "Players:");
+    y += 32 * s;
+    LockstepPlayer players[PROFILE_MAX_PLAYERS];
+    int n = LockstepNet_Players(players, PROFILE_MAX_PLAYERS);
+    if (n == 0 && host) { // waiting for the first player: no lockstep list yet, only us
+        memset(&players[0], 0, sizeof(players[0]));
+        strncpy_s(players[0].nick, Profile_GetNick(), _TRUNCATE);
+        players[0].host = players[0].self = true;
+        n = 1;
+    }
+    for (int i = 0; i < n; ++i, y += 30 * s) {
+        const LockstepPlayer& p = players[i];
+        char name[96];
+        snprintf(name, sizeof(name), "%s%s%s", p.nick, p.host ? T(" (host)") : "", p.self ? T(" - you") : "");
+        Raw(GAME_FONT_ARIAL, 24 * s, ImVec2(x + 10 * s, y), kInk, name);
+        if (!p.self) { // the host's row: a player's ping to the host
+            char ping[16];
+            if (p.rttMs >= 0) snprintf(ping, sizeof(ping), "%d ms", p.rttMs);
+            else snprintf(ping, sizeof(ping), "-");
+            Raw(GAME_FONT_ARIAL, 24 * s, ImVec2(x + 380 * s, y), kInk, ping);
+        }
+    }
+    if (n == 0 && st != SESSION_HOST_LISTENING) Label(GAME_FONT_ARIAL, 22 * s, ImVec2(x + 10 * s, y), kInk, "...");
+
+    // Right: the host chooses who sees the game in the list, and gives out its SteamID64.
+    float c1 = right + 120 * s, c2 = right + 340 * s;
+    float ry = 540 * s;
+    if (host) {
+        Label(GAME_FONT_ARIAL, 24 * s, ImVec2(right, ry), kInk, "Listed for:");
+        if (Choice("##sFriends", "FRIENDS", c1, ry + 30 * s, s, s_public == 0)) SetChoice(&s_public, 0, "game_public");
+        if (Choice("##sPublic", "EVERYONE", c2, ry + 30 * s, s, s_public == 1)) SetChoice(&s_public, 1, "game_public");
+        ry += 100 * s;
+        if (unsigned long long id = NetworkSteamId()) {
+            char idText[32];
+            snprintf(idText, sizeof(idText), "%llu", id);
+            Label(GAME_FONT_ARIAL, 22 * s, ImVec2(right, ry), kInk, "Your SteamID64:");
+            Raw(GAME_FONT_ARIAL, 28 * s, ImVec2(right, ry + 30 * s), kInk, idText);
+            if (Row("##sCopy", "COPY", right + 380 * s, ry + 28 * s, s)) ImGui::SetClipboardText(idText);
+            ry += 90 * s;
+        }
+    }
+    Label(GAME_FONT_ARIAL, 24 * s, ImVec2(right, ry), kInk, "Players' cursors:");
+    bool cursors = Presence_GetShowCursors();
+    if (Choice("##sShow", "SHOW", c1, ry + 30 * s, s, cursors)) Presence_SetShowCursors(true);
+    if (Choice("##sHide", "HIDE", c2, ry + 30 * s, s, !cursors)) Presence_SetShowCursors(false);
+
+    // The game is left (Stop hosting / Disconnect) only after the session's first moments.
+    bool canStop = SaveSync_GetSessionAgeMs() >= SAVE_SYNC_STOP_BUTTON_DELAY_MS;
+    if (Row("##stop", host ? "STOP HOSTING" : "DISCONNECT", right + 230 * s, bottom, s, canStop))
+        SaveSync_RequestDisconnect();
+}
+
+bool MultiplayerPage_MenuButtonShown()
+{
+    return !s_open && World_IsReady() && SystemMenu_IsOpen() && !SyncBlock_IsActive();
+}
+
+// A section of our own in the game's panel, below its last one ("Other"),
+// headed like the game's sections: their headings sit at x = 108s, and the
+// panel's contents end near 460s below its top (measured on screen).
+void MultiplayerPage_DrawMenuButton()
+{
+    float top, s;
+    if (!MultiplayerPage_MenuButtonShown() || !SystemMenu_Panel(&top, &s)) return;
+    float x = 108 * s;
+    GameText_Draw(ImGui::GetBackgroundDrawList(), GAME_FONT_ARIAL, 26 * s, ImVec2(x, top + 505 * s), kSection,
+                  T("Multiplayer"));
+    const char* label = T("MULTIPLAYER");
+    float h = kTextHeight * s;
+    ImVec2 text = GameText_Size(GAME_FONT_SQUARE, h, label);
+    ImVec2 size(text.x + 20 * s, h);
+    ImVec2 pos(x - 10 * s, top + 545 * s);
+
+    ImGui::SetNextWindowPos(pos);
+    ImGui::SetNextWindowSize(size);
+    ImGui::Begin("##multiplayerMenuButton", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollWithMouse |
+                     ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav); // the game's keys stay the game's
+    ImGui::SetCursorScreenPos(pos);
+    bool clicked = ImGui::InvisibleButton("##openPage", size);
+    bool hot = ImGui::IsItemHovered();
+    if (hot) ImGui::GetWindowDrawList()->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), kHot);
+    RowText(ImGui::GetWindowDrawList(), h, ImVec2(x, pos.y), label, hot, 1.0f);
+    ImGui::End();
+    if (clicked) {
+        SystemMenu_Close();
+        MultiplayerPage_Open();
+    }
 }
 
 void MultiplayerPage_Draw()
 {
-    if (!s_open) return;
-    // The game left its menu (a city is loading), or a session began some other
-    // way (Join Game from Steam's overlay, the RepublicMP window): the page goes,
-    // and the sync screen shows the progress.
-    if (!s_menuOn || SaveSync_GetState() != SESSION_IDLE) {
-        // The RepublicMP window's session panel follows the join and keeps
-        // the reason when it fails ("Last session: ...").
-        if (SaveSync_GetState() != SESSION_IDLE) g_imguiVisible = true;
-        Close();
-        return;
-    }
+    if (!MultiplayerPage_IsOpen()) return; // closed, or waiting for the menu or a city
     if (!s_targetInit) {
         s_target = SaveSync_GetTargetIp();
         s_targetInit = true;
@@ -376,27 +518,34 @@ void MultiplayerPage_Draw()
                      ImGuiWindowFlags_NoBringToFrontOnFocus); // under the overlay's windows
 
     // The title, centred on the panel's red bar (42 of the texture's 700 lines).
-    const char* title = ":: MULTIPLAYER ::";
+    const char* title = T(":: MULTIPLAYER ::");
     float titleH = kTextHeight * s;
     ImVec2 titleSize = GameText_Size(GAME_FONT_SQUARE, titleH, title);
     Label(GAME_FONT_SQUARE, titleH, ImVec2(cx - titleSize.x * 0.5f, pMin.y + 42 * 0.87f * s - titleH * 0.5f), kWhite,
           title);
 
-    // The tabs under the bar; JOIN asks for the list the first time it shows.
-    int tab = s_tab;
-    if (Choice("##tabHost", "HOST", cx - 150 * s, 478 * s, s, tab == 0)) tab = 0;
-    if (Choice("##tabJoin", "JOIN", cx + 150 * s, 478 * s, s, tab == 1)) tab = 1;
-    if (tab == 1 && s_tab != 1) SteamLobby_Refresh();
-    s_tab = tab;
-    ImGui::GetWindowDrawList()->AddLine(ImVec2(pMin.x + 40 * s, 520 * s), ImVec2(pMax.x - 40 * s, 520 * s), kRowRed);
-
     float left = cx - half.x * 0.5f;
     float right = cx + 20 * s;
-    if (s_tab == 0) HostTab(cx, left, right, s);
+    bool session = SaveSync_GetState() != SESSION_IDLE;
+    if (session) {
+        // While a session runs the page is the session; HOST and JOIN come back after it.
+        Choice("##tabSession", "SESSION", cx, 478 * s, s, true);
+    } else {
+        // The tabs under the bar; JOIN asks for the list the first time it shows.
+        int tab = s_tab;
+        if (Choice("##tabHost", "HOST", cx - 150 * s, 478 * s, s, tab == 0)) tab = 0;
+        if (Choice("##tabJoin", "JOIN", cx + 150 * s, 478 * s, s, tab == 1)) tab = 1;
+        if (tab == 1 && s_tab != 1) SteamLobby_Refresh();
+        s_tab = tab;
+    }
+    ImGui::GetWindowDrawList()->AddLine(ImVec2(pMin.x + 40 * s, 520 * s), ImVec2(pMax.x - 40 * s, 520 * s), kRowRed);
+
+    if (session) SessionTab(left, right, pMax.y - 70 * s, s);
+    else if (s_tab == 0) HostTab(cx, left, right, s);
     else JoinTab(cx, pMin.x + 50 * s, pMax.x - 50 * s, s);
 
     const char* status = SaveSync_GetLastError(); // why the last session ended or failed
-    if (status && status[0])
+    if (!session && status && status[0])
         WrappedLabel(GAME_FONT_ARIAL, 20 * s, ImVec2(right, pMax.y - 80 * s), pMax.x - 40 * s - right, 3, kRowRed, status);
 
     // Escape in the text field only reverts the text (WantTextInput is last

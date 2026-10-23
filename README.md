@@ -93,33 +93,39 @@ mismatch refuses it.
 
 1. Both players start the game with TesmioLoader and the same
    `RepublicMP.dll` installed.
-2. In the RepublicMP window both pick **Co-op**. The host loads a city, sets
-   the session's size and presses **Host** - or, from the game's main menu,
-   picks **MULTIPLAYER** and **Host new game** / **Host saved game**, and
-   hosting starts once the city has loaded. The HOST tab sets who sees the
-   game in the list: Steam friends or everyone.
+2. The host opens the **MULTIPLAYER** page - in the game's main menu, or in
+   the Multiplayer section of the Escape menu in a city - picks **Co-op**,
+   the session's size and who sees the game in the list (Steam friends or
+   everyone), then **Host new game** / **Host saved game** (hosting starts
+   once the city has loaded) or, in a city, **Host this city**.
 3. The other players pick the game on the JOIN tab of the MULTIPLAYER page,
-   or enter the host's IP (LAN or VPN) or SteamID64 (shown
-   in the host's window, with a Copy button) and press **Connect**. Steam
-   friends can instead use **Join Game** in the friends list, or accept the
-   host's invite, while their game is running.
-   Every game pauses behind the join screen while the city is saved, sent and
-   loaded.
-4. Once all are in, the session runs, paused until a player resumes. **Disconnect** (client) or
-   **Stop hosting** (host) ends it.
+   or enter the host's IP (LAN or VPN) or SteamID64 (shown on the host's
+   page, with a Copy button) and press **Connect**. Steam friends can
+   instead use **Join Game** in the friends list, or accept the host's
+   invite, while their game is running. Every game pauses behind the join
+   screen while the city is saved, sent and loaded.
+4. Once all are in, the session runs, paused until a player resumes. The
+   page's SESSION view shows the players and ends the session: **Stop
+   hosting** (host) or **Disconnect** (client).
 
-Both games need the same DLCs: with **Check DLCs** ticked on both PCs (the
+Both games need the same DLCs: with **Check DLCs** (in the RepublicMP
+window, Insert) ticked on both PCs (the
 default) a join with different DLCs is refused and names the difference;
 either player can untick it to play a map that needs no DLC content.
 
 A connection by IP needs TCP ports 5556 and 5560 open on the host; a
 connection by SteamID64 goes through Valve's relay and needs no open port.
 
+The MULTIPLAYER page and its menu item follow the game's language when a
+translation exists (`ui/ui_text.cpp`: Portuguese (Brazil), Spanish, French,
+German, Italian, Polish, Czech, Russian); a table for another language is
+welcome as a pull request.
+
 ### Controls
 
 | Key | Action |
 | --- | --- |
-| **Insert** | Show / hide the RepublicMP overlay (also **MULTIPLAYER** in the game's main menu) |
+| **Insert** | Show / hide the RepublicMP window (debug: lockstep state, logs, probes) |
 | **~** | Ping the place under the mouse for every player (another key can be set in the window) |
 
 The **Debug** button in the main window opens the lockstep state, the

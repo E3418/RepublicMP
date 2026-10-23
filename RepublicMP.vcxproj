@@ -216,7 +216,9 @@
     <ClCompile Include="game\imgui_hook.cpp" />
     <ClCompile Include="ui\game_assets.cpp" />
     <ClCompile Include="ui\multiplayer_page.cpp" />
+    <ClCompile Include="ui\ui_text.cpp" />
     <ClCompile Include="game\main_menu_hook.cpp" />
+    <ClCompile Include="game\system_menu.cpp" />
     <ClCompile Include="world\terrain_hook.cpp" />
     <ClCompile Include="world\demolish_hook.cpp" />
     <ClCompile Include="world\placement_collision.cpp" />
@@ -294,7 +296,9 @@
     <ClInclude Include="game\imgui_hook.h" />
     <ClInclude Include="ui\game_assets.h" />
     <ClInclude Include="ui\multiplayer_page.h" />
+    <ClInclude Include="ui\ui_text.h" />
     <ClInclude Include="game\main_menu_hook.h" />
+    <ClInclude Include="game\system_menu.h" />
     <ClInclude Include="world\terrain_hook.h" />
     <ClInclude Include="world\demolish_hook.h" />
     <ClInclude Include="world\placement_collision.h" />

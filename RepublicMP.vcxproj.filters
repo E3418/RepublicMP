@@ -150,10 +150,16 @@
     <ClCompile Include="game\main_menu_hook.cpp">
       <Filter>game</Filter>
     </ClCompile>
+    <ClCompile Include="game\system_menu.cpp">
+      <Filter>game</Filter>
+    </ClCompile>
     <ClCompile Include="ui\game_assets.cpp">
       <Filter>ui</Filter>
     </ClCompile>
     <ClCompile Include="ui\multiplayer_page.cpp">
+      <Filter>ui</Filter>
+    </ClCompile>
+    <ClCompile Include="ui\ui_text.cpp">
       <Filter>ui</Filter>
     </ClCompile>
     <ClCompile Include="world\terrain_hook.cpp">
@@ -404,10 +410,16 @@
     <ClInclude Include="game\main_menu_hook.h">
       <Filter>game</Filter>
     </ClInclude>
+    <ClInclude Include="game\system_menu.h">
+      <Filter>game</Filter>
+    </ClInclude>
     <ClInclude Include="ui\game_assets.h">
       <Filter>ui</Filter>
     </ClInclude>
     <ClInclude Include="ui\multiplayer_page.h">
+      <Filter>ui</Filter>
+    </ClInclude>
+    <ClInclude Include="ui\ui_text.h">
       <Filter>ui</Filter>
     </ClInclude>
     <ClInclude Include="ui\main_menu.h">
