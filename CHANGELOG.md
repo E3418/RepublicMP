@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **The MULTIPLAYER page in the game's language** - the page and the menu
+  item follow the language set in the game (Portuguese (Brazil), Spanish,
+  French, German, Italian, Polish, Czech, Russian; the others stay English).
+  Russian draws the rows in the game's own Cyrillic menu font, and a letter
+  a font lacks comes from the game's Arial. The session's messages are
+  still English.
 - **MULTIPLAYER page** - the item sits after Load game in the main menu,
   away from Quit; the HOST tab sets the session's size (2-4 players, the
   same setting as the RepublicMP window's); every row reacts only over its

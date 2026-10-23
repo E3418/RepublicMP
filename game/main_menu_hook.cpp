@@ -38,6 +38,8 @@ static volatile LONG g_openRequest = -1; // a MainMenuItem to open, or -1
 static volatile bool g_hidden = false;
 static volatile LONG g_buildCount = 0;
 static int g_ourRow = -1; // the row our item had last frame (game's main thread only)
+static wchar_t g_itemTextBuffer[64];
+static const wchar_t* volatile g_itemText = L"MULTIPLAYER"; // swapped whole, read by the main thread
 // MULTIPLAYER goes right after "Load game", away from "Quit" at the end. The
 // game knows its items by the order it built them in, so the rows below ours
 // show one lower than the game counts them: a click there is mapped back.
@@ -86,7 +88,7 @@ static void HookedBuildRoot(unsigned char* god)
         if (row > n) row = n;
         unsigned char* slot = god + MENU_ITEM_TEXT_OFFSET + row * MENU_ITEM_STRIDE;
         memmove(slot + MENU_ITEM_STRIDE, slot, (size_t)(n - row) * MENU_ITEM_STRIDE); // the rows below, one down
-        wcscpy_s((wchar_t*)slot, 256, L"MULTIPLAYER");
+        wcscpy_s((wchar_t*)slot, 256, g_itemText);
         *(int*)(slot + 0x200) = 0; // the slot's icon/lock int, unused on the root page
         *count = n + 1;
         g_ourRow = row;
@@ -107,6 +109,13 @@ void MainMenuHook_Bind(const TsmHost* host)
 bool MainMenuHook_TakeClick()
 {
     return InterlockedExchange(&g_clicked, 0) != 0;
+}
+
+void MainMenuHook_SetItemText(const wchar_t* text)
+{
+    if (g_itemText == g_itemTextBuffer || !text || !text[0]) return; // once: the hook may be reading it
+    wcsncpy_s(g_itemTextBuffer, text, _TRUNCATE);
+    InterlockedExchangePointer((void* volatile*)&g_itemText, g_itemTextBuffer);
 }
 
 unsigned MainMenuHook_BuildCount()

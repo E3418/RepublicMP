@@ -115,6 +115,11 @@ either player can untick it to play a map that needs no DLC content.
 A connection by IP needs TCP ports 5556 and 5560 open on the host; a
 connection by SteamID64 goes through Valve's relay and needs no open port.
 
+The MULTIPLAYER page and its menu item follow the game's language when a
+translation exists (`ui/ui_text.cpp`: Portuguese (Brazil), Spanish, French,
+German, Italian, Polish, Czech, Russian); a table for another language is
+welcome as a pull request.
+
 ### Controls
 
 | Key | Action |
