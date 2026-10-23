@@ -21,9 +21,11 @@
 
 // Argument kinds: x ignored (0), W the world, M the pointer world+worldPointer
 // holds, V a vehicle, B a building, L a line, O a vehicle, building or line,
-// o the same or null, b a byte, I a 32-bit integer, F a float (the fourth
-// argument only: it travels in xmm3), A the world address world+worldPointer
-// or null, R a building's address plus worldPointer (a list inside it).
+// o the same or null, b a byte, I a 32-bit integer, F a float (the third or
+// the fourth argument only: it travels in xmm2 or xmm3), A the world address
+// world+worldPointer or null, R a building's address plus worldPointer (a list
+// inside it), D one of a building's citizens' destinations lists (the
+// building plus +f18, +f30, +f48 or +f60).
 struct GameCallSite {
     unsigned site, target;
     const char* name;
@@ -200,10 +202,28 @@ static const GameCallSite kSites[] = {
     { 0x1DB7A5, 0x1D4330, "distribution office tool: add to list +f48", "WBR", 0xF48, 0, false },
     { 0x1DB7BA, 0x1D4330, "distribution office tool: add to list +f30", "WBR", 0xF30, 0, false },
     { 0x1DB7D3, 0x1D4330, "distribution office tool: add to list +f60", "WBR", 0xF60, 0, false },
+    // The citizens' destinations panel 776d40, drawn by the windows of homes, stops and the
+    // other buildings with the list the window's +260 selects (by SoylentGreed): "any
+    // building" 1d4330(-, 0, list) (a picked building goes through the tool above),
+    // "Remove" 1d4440(-, selected, list), the share buttons 1d4550(-, entry, delta, list).
+    { 0x77746B, 0x1D4330, "destinations panel: add any building", "xxD", 0, 0, false },
+    { 0x77757F, 0x1D4440, "destinations panel: remove the selected entry", "xID", 0, 0, false },
+    { 0x7781D9, 0x1D4550, "destinations panel: share up", "xIFD", 0, 0, false },
+    { 0x77836D, 0x1D4550, "destinations panel: share down", "xIFD", 0, 0, false },
 };
 #define SITE_COUNT (sizeof(kSites) / sizeof(kSites[0]))
 
 enum { OBJ_NONE = 0, OBJ_VEHICLE = 1, OBJ_BUILDING = 2, OBJ_LINE = 3 };
+
+// The citizens' destinations lists of a building: workers, students, passengers, tourists.
+static const unsigned kDestinationLists[] = { 0xF18, 0xF30, 0xF48, 0xF60 };
+
+static bool DestinationList(unsigned offset)
+{
+    for (unsigned o : kDestinationLists)
+        if (o == offset) return true;
+    return false;
+}
 
 #pragma pack(push, 1)
 struct GameCallMsg {
@@ -225,7 +245,14 @@ static BYTE* World() { return g_exeBase + WORLD_RVA; }
 static U64 Q(U64 at) { return *(U64*)at; }
 
 typedef U64 (*CallFn)(U64, U64, U64, U64, U64, U64, U64);
+typedef U64 (*CallF3Fn)(U64, U64, float, U64, U64, U64, U64);
 typedef U64 (*CallF4Fn)(U64, U64, U64, float, U64, U64, U64);
+
+// A site whose third argument is a float (kept as its bits in a[2]).
+static bool Float3(const GameCallSite& s)
+{
+    return s.schema[0] && s.schema[1] && s.schema[2] == 'F';
+}
 
 // A site whose fourth argument is a float (kept as its bits in a[3]).
 static bool Float4(const GameCallSite& s)
@@ -243,6 +270,8 @@ static float AsFloat(U64 bits)
 
 static U64 CallSite(const GameCallSite& s, const U64* a)
 {
+    if (Float3(s))
+        return ((CallF3Fn)(g_exeBase + s.target))(a[0], a[1], AsFloat(a[2]), a[3], a[4], a[5], a[6]);
     if (Float4(s))
         return ((CallF4Fn)(g_exeBase + s.target))(a[0], a[1], a[2], AsFloat(a[3]), a[4], a[5], a[6]);
     return ((CallFn)(g_exeBase + s.target))(a[0], a[1], a[2], a[3], a[4], a[5], a[6]);
@@ -309,6 +338,15 @@ static const char* Capture(unsigned index, const U64* a, GameCallMsg& m)
             if (!a[j] || !Ref_Building(a[j] - s.worldPointer, m.refs[j])) return "a list's building is not in the world's list";
             m.kinds[j] = OBJ_BUILDING;
             break;
+        case 'D':
+            for (unsigned o : kDestinationLists)
+                if (a[j] > o && Ref_Building(a[j] - o, m.refs[j])) {
+                    m.values[j] = o;
+                    break;
+                }
+            if (!m.values[j]) return "a destinations list's building is not in the world's list";
+            m.kinds[j] = OBJ_BUILDING;
+            break;
         default: return "unknown argument kind";
         }
     }
@@ -337,6 +375,11 @@ static const char* Rebuild(const GameCallMsg& m, U64* a)
         case 'R':
             if (m.kinds[j] != OBJ_BUILDING || !(a[j] = Ref_BuildingAt(m.refs[j]))) return "a list's building is gone";
             a[j] += s.worldPointer;
+            break;
+        case 'D':
+            if (m.kinds[j] != OBJ_BUILDING || !DestinationList(m.values[j])) return "not a destinations list";
+            if (!(a[j] = Ref_BuildingAt(m.refs[j]))) return "a destinations list's building is gone";
+            a[j] += m.values[j];
             break;
         }
     }
@@ -438,6 +481,16 @@ static U64 Thunk(U64 a1, U64 a2, U64 a3, U64 a4, U64 a5, U64 a6, U64 a7)
     return Run(I, a);
 }
 
+// The same for a site whose third argument is a float (xmm2): its bits go in a[2].
+template <unsigned I>
+static U64 ThunkF3(U64 a1, U64 a2, float a3, U64 a4, U64 a5, U64 a6, U64 a7)
+{
+    unsigned bits;
+    memcpy(&bits, &a3, 4);
+    U64 a[MAX_ARGS] = { a1, a2, bits, a4, a5, a6, a7 };
+    return Run(I, a);
+}
+
 // The same for a site whose fourth argument is a float (xmm3): its bits go in a[3].
 template <unsigned I>
 static U64 ThunkF4(U64 a1, U64 a2, U64 a3, float a4, U64 a5, U64 a6, U64 a7)
@@ -452,6 +505,12 @@ template <size_t... I>
 static constexpr std::array<void*, sizeof...(I)> MakeThunks(std::index_sequence<I...>)
 {
     return { { (void*)&Thunk<(unsigned)I>... } };
+}
+
+template <size_t... I>
+static constexpr std::array<void*, sizeof...(I)> MakeThunksF3(std::index_sequence<I...>)
+{
+    return { { (void*)&ThunkF3<(unsigned)I>... } };
 }
 
 template <size_t... I>
@@ -509,6 +568,7 @@ bool GameCalls_ApplyCommand(const void* data, size_t size)
 bool GameCalls_Install()
 {
     static const auto thunks = MakeThunks(std::make_index_sequence<SITE_COUNT>());
+    static const auto thunksF3 = MakeThunksF3(std::make_index_sequence<SITE_COUNT>());
     static const auto thunksF4 = MakeThunksF4(std::make_index_sequence<SITE_COUNT>());
     BYTE* relay = AllocNear(g_exeBase, 4096);
     if (!relay) {
@@ -520,7 +580,7 @@ bool GameCalls_Install()
     for (size_t i = 0; i < SITE_COUNT; i++) {
         BYTE* r = relay + i * 16;
         r[0] = 0xff; r[1] = 0x25; r[2] = r[3] = r[4] = r[5] = 0;
-        void* to = Float4(kSites[i]) ? thunksF4[i] : thunks[i];
+        void* to = Float3(kSites[i]) ? thunksF3[i] : Float4(kSites[i]) ? thunksF4[i] : thunks[i];
         memcpy(r + 6, &to, 8);
     }
     VirtualProtect(relay, SITE_COUNT * 16, PAGE_EXECUTE_READ, &old);
