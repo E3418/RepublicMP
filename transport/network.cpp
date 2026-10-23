@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // See network.h.
 #include "network.h"
+#include "steam_net.h"
 #include <cstdio>
 #include <mstcpip.h> // SIO_KEEPALIVE_VALS
 #include <algorithm> // std::min - NOMINMAX is defined project-wide, so windows.h's min/max macros are gone
@@ -10,6 +11,7 @@
 void Network_Bind(const TsmHost* host)
 {
     TsmBind(host);
+    SteamNet_Bind(host);
 }
 
 bool NetworkInit()
@@ -22,6 +24,7 @@ bool NetworkInit()
     }
     Logf("republicmp  NETWORK: WinSock initialized (%d.%d)",
          LOBYTE(wsaData.wVersion), HIBYTE(wsaData.wVersion));
+    SteamNet_Init(); // optional: without Steam, links are TCP only
     return true;
 }
 
@@ -58,97 +61,7 @@ static void NetworkEnableKeepalive(SOCKET sock)
         Logf("republicmp  NETWORK: SIO_KEEPALIVE_VALS failed, WSAGetLastError=%d", WSAGetLastError());
 }
 
-SOCKET NetworkHostAcceptOne(unsigned short port, DWORD acceptTimeoutMs, DWORD ioTimeoutMs, volatile bool* cancelFlag)
-{
-    SOCKET listenSock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (listenSock == INVALID_SOCKET) {
-        Logf("republicmp  NETWORK: socket() failed, WSAGetLastError=%d", WSAGetLastError());
-        return INVALID_SOCKET;
-    }
-
-    BOOL reuse = TRUE;
-    setsockopt(listenSock, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof(reuse));
-
-    sockaddr_in addr = {};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
-    addr.sin_addr.s_addr = INADDR_ANY;
-    if (bind(listenSock, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
-        Logf("republicmp  NETWORK: bind(:%u) failed, WSAGetLastError=%d", port, WSAGetLastError());
-        closesocket(listenSock);
-        return INVALID_SOCKET;
-    }
-    if (listen(listenSock, 1) == SOCKET_ERROR) {
-        Logf("republicmp  NETWORK: listen(:%u) failed, WSAGetLastError=%d", port, WSAGetLastError());
-        closesocket(listenSock);
-        return INVALID_SOCKET;
-    }
-
-    if (acceptTimeoutMs == 0)
-        Logf("republicmp  NETWORK: listening on :%u, waiting for a client (no timeout)...", port);
-    else
-        Logf("republicmp  NETWORK: listening on :%u, waiting for a client (timeout %u ms)...", port, acceptTimeoutMs);
-
-    // accept() ignores SO_RCVTIMEO: wait with select() in short steps so the
-    // cancel flag is checked between them. acceptTimeoutMs == 0 = no limit.
-    const DWORD pollStepMs = 200;
-    DWORD waited = 0;
-    for (;;) {
-        if (cancelFlag && *cancelFlag) {
-            Logf("republicmp  NETWORK: accept on :%u cancelled (no client yet)", port);
-            closesocket(listenSock);
-            return INVALID_SOCKET;
-        }
-
-        fd_set readSet;
-        FD_ZERO(&readSet);
-        FD_SET(listenSock, &readSet);
-        timeval stepTimeout;
-        stepTimeout.tv_sec = pollStepMs / 1000;
-        stepTimeout.tv_usec = (pollStepMs % 1000) * 1000;
-
-        int selectResult = select(0, &readSet, nullptr, nullptr, &stepTimeout);
-        if (selectResult == SOCKET_ERROR) {
-            Logf("republicmp  NETWORK: select() failed, WSAGetLastError=%d", WSAGetLastError());
-            closesocket(listenSock);
-            return INVALID_SOCKET;
-        }
-        if (selectResult > 0) {
-            break; // a client is waiting - fall through to accept() below
-        }
-
-        // selectResult == 0: nobody yet this step, keep polling.
-        if (acceptTimeoutMs != 0) {
-            waited += pollStepMs;
-            if (waited >= acceptTimeoutMs) {
-                Logf("republicmp  NETWORK: TIMEOUT - no client after %u ms", acceptTimeoutMs);
-                closesocket(listenSock);
-                return INVALID_SOCKET;
-            }
-        }
-    }
-
-    sockaddr_in clientAddr = {};
-    int clientAddrLen = sizeof(clientAddr);
-    SOCKET clientSock = accept(listenSock, (sockaddr*)&clientAddr, &clientAddrLen);
-
-    closesocket(listenSock);
-
-    if (clientSock == INVALID_SOCKET) {
-        Logf("republicmp  NETWORK: accept() failed, WSAGetLastError=%d", WSAGetLastError());
-        return INVALID_SOCKET;
-    }
-
-    char clientIp[INET_ADDRSTRLEN] = {};
-    inet_ntop(AF_INET, &clientAddr.sin_addr, clientIp, sizeof(clientIp));
-    Logf("republicmp  NETWORK: client connected, %s:%u", clientIp, ntohs(clientAddr.sin_port));
-
-    NetworkSetSocketTimeouts(clientSock, ioTimeoutMs);
-    NetworkEnableKeepalive(clientSock);
-    return clientSock;
-}
-
-SOCKET NetworkListen(unsigned short port, int backlog)
+NetLink NetworkListen(unsigned short port, int backlog)
 {
     SOCKET listenSock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (listenSock == INVALID_SOCKET) {
@@ -167,19 +80,27 @@ SOCKET NetworkListen(unsigned short port, int backlog)
         return INVALID_SOCKET;
     }
     Logf("republicmp  NETWORK: listening on :%u", port);
+    SteamNet_Listen(listenSock, port);
     return listenSock;
 }
 
-SOCKET NetworkAcceptReady(SOCKET listenSock, DWORD waitMs, DWORD ioTimeoutMs)
+NetLink NetworkAcceptReady(NetLink listenSock, DWORD waitMs, DWORD ioTimeoutMs)
 {
     if (listenSock == INVALID_SOCKET) return INVALID_SOCKET;
-    fd_set readSet;
-    FD_ZERO(&readSet);
-    FD_SET(listenSock, &readSet);
-    timeval wait;
-    wait.tv_sec = waitMs / 1000;
-    wait.tv_usec = (waitMs % 1000) * 1000;
-    if (select(0, &readSet, nullptr, nullptr, &wait) <= 0) return INVALID_SOCKET;
+    // Steam players queue beside the TCP ones: look at both in short steps.
+    const DWORD pollStepMs = 50;
+    for (DWORD waited = 0;; waited += pollStepMs) {
+        NetLink steam = SteamNet_Accept(listenSock, ioTimeoutMs);
+        if (steam != NET_NO_LINK) return steam;
+        fd_set readSet;
+        FD_ZERO(&readSet);
+        FD_SET(listenSock, &readSet);
+        DWORD stepMs = std::min(pollStepMs, waitMs - std::min(waited, waitMs));
+        timeval wait = { 0, (long)stepMs * 1000 };
+        int r = select(0, &readSet, nullptr, nullptr, &wait);
+        if (r > 0) break;
+        if (r == SOCKET_ERROR || waited >= waitMs) return INVALID_SOCKET;
+    }
     sockaddr_in clientAddr = {};
     int clientAddrLen = sizeof(clientAddr);
     SOCKET clientSock = accept(listenSock, (sockaddr*)&clientAddr, &clientAddrLen);
@@ -195,13 +116,15 @@ SOCKET NetworkAcceptReady(SOCKET listenSock, DWORD waitMs, DWORD ioTimeoutMs)
     return clientSock;
 }
 
-void NetworkSetTimeouts(SOCKET sock, DWORD timeoutMs)
+void NetworkSetTimeouts(NetLink sock, DWORD timeoutMs)
 {
+    if (SteamNet_IsLink(sock)) return SteamNet_SetTimeouts(sock, timeoutMs);
     NetworkSetSocketTimeouts(sock, timeoutMs);
 }
 
-void NetworkPeerAddress(SOCKET sock, char* out, size_t outSize)
+void NetworkPeerAddress(NetLink sock, char* out, size_t outSize)
 {
+    if (SteamNet_IsLink(sock)) return SteamNet_PeerAddress(sock, out, outSize);
     sockaddr_in addr = {};
     int len = sizeof(addr);
     out[0] = 0;
@@ -209,8 +132,11 @@ void NetworkPeerAddress(SOCKET sock, char* out, size_t outSize)
         inet_ntop(AF_INET, &addr.sin_addr, out, outSize);
 }
 
-SOCKET NetworkConnect(const char* hostIp, unsigned short port, DWORD connectTimeoutMs, DWORD ioTimeoutMs, volatile bool* cancelFlag)
+NetLink NetworkConnect(const char* hostIp, unsigned short port, DWORD connectTimeoutMs, DWORD ioTimeoutMs, volatile bool* cancelFlag)
 {
+    unsigned long long steamId;
+    if (SteamNet_ParseId(hostIp, &steamId))
+        return SteamNet_Connect(steamId, port, connectTimeoutMs, ioTimeoutMs, cancelFlag);
     SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (sock == INVALID_SOCKET) {
         Logf("republicmp  NETWORK: socket() failed, WSAGetLastError=%d", WSAGetLastError());
@@ -312,8 +238,9 @@ SOCKET NetworkConnect(const char* hostIp, unsigned short port, DWORD connectTime
     return sock;
 }
 
-bool NetworkSendExact(SOCKET sock, const void* data, size_t size)
+bool NetworkSendExact(NetLink sock, const void* data, size_t size)
 {
+    if (SteamNet_IsLink(sock)) return SteamNet_Send(sock, data, size);
     const char* bytes = (const char*)data;
     size_t sent = 0;
     while (sent < size) {
@@ -336,8 +263,9 @@ bool NetworkSendExact(SOCKET sock, const void* data, size_t size)
     return true;
 }
 
-bool NetworkRecvExact(SOCKET sock, void* data, size_t size)
+bool NetworkRecvExact(NetLink sock, void* data, size_t size)
 {
+    if (SteamNet_IsLink(sock)) return SteamNet_Recv(sock, data, size);
     char* bytes = (char*)data;
     size_t received = 0;
     while (received < size) {
@@ -360,7 +288,7 @@ bool NetworkRecvExact(SOCKET sock, void* data, size_t size)
     return true;
 }
 
-bool NetworkSendFile(SOCKET sock, const char* filePath, NetworkProgressFn onProgress, void* userData)
+bool NetworkSendFile(NetLink sock, const char* filePath, NetworkProgressFn onProgress, void* userData)
 {
     FILE* f = fopen(filePath, "rb");
     if (!f) {
@@ -402,7 +330,7 @@ bool NetworkSendFile(SOCKET sock, const char* filePath, NetworkProgressFn onProg
     return true;
 }
 
-bool NetworkReceiveFile(SOCKET sock, const char* outFilePath, NetworkProgressFn onProgress, void* userData)
+bool NetworkReceiveFile(NetLink sock, const char* outFilePath, NetworkProgressFn onProgress, void* userData)
 {
     unsigned long long fileSize = 0;
     if (!NetworkRecvExact(sock, (char*)&fileSize, sizeof(fileSize))) {
@@ -439,8 +367,9 @@ bool NetworkReceiveFile(SOCKET sock, const char* outFilePath, NetworkProgressFn 
     return true;
 }
 
-bool NetworkPeerGone(SOCKET sock)
+bool NetworkPeerGone(NetLink sock)
 {
+    if (SteamNet_IsLink(sock)) return SteamNet_PeerGone(sock);
     if (sock == INVALID_SOCKET) return true;
     fd_set readSet;
     FD_ZERO(&readSet);
@@ -459,8 +388,9 @@ bool NetworkPeerGone(SOCKET sock)
     return true;
 }
 
-bool NetworkWaitReadable(SOCKET sock, DWORD waitMs, volatile bool* cancelFlag)
+bool NetworkWaitReadable(NetLink sock, DWORD waitMs, volatile bool* cancelFlag)
 {
+    if (SteamNet_IsLink(sock)) return SteamNet_WaitReadable(sock, waitMs, cancelFlag);
     if (sock == INVALID_SOCKET) return false;
     const DWORD pollStepMs = 200;
     for (DWORD waited = 0; waited < waitMs; waited += pollStepMs) {
@@ -476,9 +406,29 @@ bool NetworkWaitReadable(SOCKET sock, DWORD waitMs, volatile bool* cancelFlag)
     return false;
 }
 
-void NetworkCloseSocket(SOCKET sock)
+void NetworkClose(NetLink sock)
 {
+    if (SteamNet_IsLink(sock)) return SteamNet_Close(sock);
     if (sock != INVALID_SOCKET) {
+        SteamNet_StopListen(sock); // a listener's Steam side; nothing for a connection
         closesocket(sock);
     }
+}
+
+void NetworkShutdown(NetLink sock)
+{
+    if (SteamNet_IsLink(sock)) return SteamNet_Shutdown(sock);
+    if (sock != INVALID_SOCKET) {
+        shutdown(sock, SD_BOTH);
+    }
+}
+
+unsigned long long NetworkSteamId()
+{
+    return SteamNet_LocalId();
+}
+
+bool NetworkTakeJoinRequest(char* host, size_t hostSize)
+{
+    return SteamNet_TakeJoinRequest(host, hostSize);
 }

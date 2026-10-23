@@ -393,10 +393,50 @@ not done):
 - That DLL exports the old P2P API (`ISteamNetworking_SendP2PPacket`...) and
   lobbies (`ISteamMatchmaking_CreateLobby`, `InviteUserToLobby`), not
   `ISteamNetworkingMessages` / `ISteamNetworkingSockets`.
-- The installed Steam client serves `SteamNetworkingMessages002` and
-  `SteamNetworkingSockets` up to `010`. **Hypothesis:** a plugin gets the
-  modern interface by name through `SteamInternal_FindOrCreateUserInterface`
-  even with the old DLL.
+- The game's DLL is version 4.95.20.30 (`TimeDateStamp 0x5C6B2CF7`, Feb
+  2019), 941 exports, no `SteamAPI_ManualDispatch_*`; it asks for
+  `SteamUser020` and `SteamUtils009` (**observed**, 2026-10-22).
+- The installed Steam client (2026-10-21) serves `SteamNetworkingMessages002`,
+  `SteamNetworkingSockets002..013` and `SteamNetworkingUtils001..004`
+  (**observed**, interface strings in `steamclient64.dll`).
+- `SteamInternal_FindOrCreateUserInterface` (DLL `0x9DB0`) forwards any
+  version string unfiltered to `ISteamClient::GetISteamGenericInterface(hUser,
+  hPipe, version)` (slot `+0x60`); the client decides. So a plugin can get the
+  modern interfaces through the old DLL (inferred from disassembly, WRMP).
+  `SteamAPI_GetHSteamUser` / `GetHSteamPipe` are exported.
+- `SteamAPI_RegisterCallback` (`0x9190`) takes any callback id: it sets
+  `cb+0x08 |= 1`, `cb+0x0C = id` and inserts it in a map. Dispatch calls
+  `vtable[+0x08](cb, data)`, the classic MSVC `CCallbackBase` layout (slot 0
+  `Run(void*, bool, SteamAPICall_t)`, slot 1 `Run(void*)`, slot 2
+  `GetCallbackSizeBytes`) - the same as current SDK headers (inferred, WRMP).
+- The game calls `SteamAPI_RunCallbacks` at the start of every frame of
+  `0x105A90` (main thread, menu included): networking callbacks (e.g.
+  `SteamNetConnectionStatusChangedCallback_t`) arrive there **if** the client
+  queues them on the game's pipe - only a test confirms it.
+- `InitRelayNetworkAccess` is a method of `ISteamNetworkingUtils`, not an
+  export: get the interface by name and call it through the vtable.
+- **Observed** in a two-PC spike (2026-10-22, issue #36; two Steam accounts,
+  ~220 ms apart): through the game's DLL, `SteamNetworkingSockets012` P2P
+  (`CreateListenSocketP2P` / `ConnectP2P` on virtual port 0, relay network
+  ready ~6 s after `InitRelayNetworkAccess`) connects in ~1 s;
+  `SteamNetConnectionStatusChangedCallback_t` (1221) and
+  `SteamRelayNetworkStatus_t` (1281) arrive through
+  `SteamAPI_RegisterCallback` + `SteamAPI_RunCallbacks`; a worker thread
+  receives while the main thread pumps; 8 MiB of reliable 256 KiB messages
+  arrived intact at 256 KiB/s and at 1 MiB/s (quality 0.91-1.00). With
+  `SendRateMin = SendRateMax = 8 MiB/s` the connection timed out (end 4001,
+  "remote problem") - not yet known whether the rate or a paused console.
+- **Observed** in the same spike: a status callback set as a function
+  pointer (`k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged`) is
+  never run by the 2019 `SteamAPI_RunCallbacks`, only by
+  `ISteamNetworkingSockets::RunCallbacks()` - which then delivers it on the
+  thread that calls it, independent of the game's frame loop.
+- The default send rate is 256 KB/s and the library does not estimate
+  bandwidth (min = max sets a fixed rate): set it, or a save transfer crawls.
+- Headers: Valve's GameNetworkingSockets (BSD-3) declares
+  `SteamNetworkingSockets012` and `SteamNetworkingMessages002`, the same
+  interfaces the client serves; reliable messages are limited to 512 KiB
+  (`k_cbMaxSteamNetworkingSocketsMessageSizeSend`).
 - Limits: 512 KB per reliable message (modern), 1 MB (old; unreliable 1200
   bytes). Testing needs two machines with two Steam accounts owning the game.
 - `C3DDLL64.dll` also exports a network layer (`C3D_NET_PEER`) the game does

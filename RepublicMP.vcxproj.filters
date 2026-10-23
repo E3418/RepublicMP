@@ -114,6 +114,9 @@
     <ClCompile Include="transport\network.cpp">
       <Filter>transport</Filter>
     </ClCompile>
+    <ClCompile Include="transport\steam_net.cpp">
+      <Filter>transport</Filter>
+    </ClCompile>
     <ClCompile Include="session\save_sync.cpp">
       <Filter>session</Filter>
     </ClCompile>
@@ -140,6 +143,15 @@
     </ClCompile>
     <ClCompile Include="game\imgui_hook.cpp">
       <Filter>game</Filter>
+    </ClCompile>
+    <ClCompile Include="game\main_menu_hook.cpp">
+      <Filter>game</Filter>
+    </ClCompile>
+    <ClCompile Include="ui\game_assets.cpp">
+      <Filter>ui</Filter>
+    </ClCompile>
+    <ClCompile Include="ui\multiplayer_page.cpp">
+      <Filter>ui</Filter>
     </ClCompile>
     <ClCompile Include="world\terrain_hook.cpp">
       <Filter>world</Filter>
@@ -341,6 +353,9 @@
     <ClInclude Include="transport\network.h">
       <Filter>transport</Filter>
     </ClInclude>
+    <ClInclude Include="transport\steam_net.h">
+      <Filter>transport</Filter>
+    </ClInclude>
     <ClInclude Include="session\save_sync.h">
       <Filter>session</Filter>
     </ClInclude>
@@ -379,6 +394,15 @@
     </ClInclude>
     <ClInclude Include="game\imgui_hook.h">
       <Filter>game</Filter>
+    </ClInclude>
+    <ClInclude Include="game\main_menu_hook.h">
+      <Filter>game</Filter>
+    </ClInclude>
+    <ClInclude Include="ui\game_assets.h">
+      <Filter>ui</Filter>
+    </ClInclude>
+    <ClInclude Include="ui\multiplayer_page.h">
+      <Filter>ui</Filter>
     </ClInclude>
     <ClInclude Include="ui\main_menu.h">
       <Filter>ui</Filter>

@@ -94,8 +94,13 @@ mismatch refuses it.
 1. Both players start the game with TesmioLoader and the same
    `RepublicMP.dll` installed.
 2. In the RepublicMP window both pick **Co-op**. The host loads a city, sets
-   the session's size and presses **Host**.
-3. The other players enter the host's IP (LAN or VPN) and press **Connect**.
+   the session's size and presses **Host** - or, from the game's main menu,
+   picks **MULTIPLAYER** and **Host new game** / **Host saved game**, and
+   hosting starts once the city has loaded.
+3. The other players enter the host's IP (LAN or VPN) or SteamID64 (shown
+   in the host's window, with a Copy button) and press **Connect**. Steam
+   friends can instead use **Join Game** in the friends list, or accept the
+   host's invite, while their game is running.
    Every game pauses behind the join screen while the city is saved, sent and
    loaded.
 4. Once all are in, the session runs, paused until a player resumes. **Disconnect** (client) or
@@ -105,13 +110,14 @@ Both games need the same DLCs: with **Check DLCs** ticked on both PCs (the
 default) a join with different DLCs is refused and names the difference;
 either player can untick it to play a map that needs no DLC content.
 
-Firewalls must allow TCP ports 5556 and 5560 on the host.
+A connection by IP needs TCP ports 5556 and 5560 open on the host; a
+connection by SteamID64 goes through Valve's relay and needs no open port.
 
 ### Controls
 
 | Key | Action |
 | --- | --- |
-| **Insert** | Show / hide the RepublicMP overlay |
+| **Insert** | Show / hide the RepublicMP overlay (also **MULTIPLAYER** in the game's main menu) |
 | **~** | Ping the place under the mouse for every player (another key can be set in the window) |
 
 The **Debug** button in the main window opens the lockstep state, the
@@ -134,6 +140,10 @@ changes.
 The lockstep work builds on SoylentGreed's research and code (RepublicLAN);
 parts taken from it are marked "(by SoylentGreed)". Thanks to veryinsanee
 and TucKnock for pull requests and detailed bug reports.
+
+Steam connections use the headers of Valve's
+[GameNetworkingSockets](https://github.com/ValveSoftware/GameNetworkingSockets)
+(BSD-3-Clause, `third_party/gns`).
 
 ## License
 

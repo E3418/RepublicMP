@@ -28,7 +28,7 @@ world/         actions on the game world made from data (buildings, networks,
 determinism/   making the simulation identical on every PC: fixed ticks, RNG,
                math, timers, patches; state hashes; the determinism probe
 game/          the game itself: world fields, camera, save/load, input, Present
-transport/     blocking TCP
+transport/     links: blocking TCP, or Steam P2P through Valve's relay (steam_net)
 save/          zip of a save folder
 core/          plugin entry points, version, the player's profile (ini)
 api/           republicmp_api.h - what a mode may use (one include)
@@ -105,6 +105,7 @@ function.
 | `rand`, `srand`, `C3DRandom_*`, `C3D_TIMER`, `GetKeyDown`, `_beginthread`, `SetEvent`, `malloc`, CRT math | IAT | `determinism/determinism` |
 | `0x30D1A0` Late body, call-site relays, tool stubs | inline / call sites | `determinism/sim_patches` |
 | window button call sites (`kSites`) | call sites | `lockstep/game_calls` |
+| `0x28AF60` root main menu builder | inline | `game/main_menu_hook` |
 | `IDXGISwapChain::Present` | vtable | `game/present_hook` |
 | the game window's `WndProc` | subclass | `game/imgui_hook` |
 

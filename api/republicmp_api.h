@@ -51,10 +51,10 @@
 #include "../save/save_zip.h"
 
 // --- TCP (blocking, one thread per connection): NetworkInit, NetworkListen,
-// NetworkAcceptReady, NetworkHostAcceptOne, NetworkConnect, NetworkSendExact,
-// NetworkRecvExact, NetworkSendFile, NetworkReceiveFile, NetworkWaitReadable,
-// NetworkPeerGone, NetworkCloseSocket. (Steam goes behind the same calls
-// later.)
+// NetworkAcceptReady, NetworkConnect, NetworkSendExact, NetworkRecvExact,
+// NetworkSendFile, NetworkReceiveFile, NetworkWaitReadable, NetworkPeerGone,
+// NetworkShutdown, NetworkClose, all on NetLink handles. (Steam goes behind
+// the same calls later.)
 #include "../transport/network.h"
 
 // --- The player: Profile_GetNick, and settings remembered in

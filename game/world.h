@@ -29,6 +29,9 @@
 #define GAME_TYPE_CATEGORY_OFFSET 0x360
 #define GAME_BUILDING_POS_OFFSET 0x350
 #define GAME_BUILDING_PROGRESS_OFFSET 0x604
+// byte, 1 once a world has finished loading: its only writes are in the load
+// routine 0x105700, =0 at 0x105723 and =1 at 0x1059A9 after the load (WRMP RE).
+#define GAME_WORLD_READY_RVA 0x993C65
 
 void World_Bind(const TsmHost* host);
 
@@ -37,6 +40,8 @@ unsigned char* World_Object();
 
 // A world is loaded (not the main menu, not in the middle of a load).
 bool World_IsLoaded();
+// The game finished loading that world (not half way through a load).
+bool World_IsReady();
 
 // The buildings list; false when there is none.
 bool World_Buildings(unsigned char*** begin, unsigned char*** end);

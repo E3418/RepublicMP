@@ -30,6 +30,15 @@ bool World_IsLoaded()
     }
 }
 
+bool World_IsReady()
+{
+    __try {
+        return World_IsLoaded() && *(g_exeBase + GAME_WORLD_READY_RVA) != 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 bool World_Buildings(unsigned char*** begin, unsigned char*** end)
 {
     __try {

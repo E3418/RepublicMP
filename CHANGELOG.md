@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- **MULTIPLAYER in the main menu** - the game's own main menu gets a
+  MULTIPLAYER item, drawn like the others. It opens a page in the game's own
+  panel, fonts and colours: pick the game mode, **Host new game** or **Host
+  saved game** through the game's own pages (hosting starts by itself once
+  the city has loaded), or join by SteamID64 or IP; the player's SteamID64
+  is shown with a Copy button.
+- **Steam connections** - a player can type the host's SteamID64 instead of
+  an IP and connect through Valve's relay: no IP to share, no port to open.
+  Steam friends can also use **Join Game** or an invite while someone hosts
+  (with the game already started through TesmioLoader). The host shows its
+  SteamID64 with a Copy button and takes TCP and Steam players at once; LAN
+  and VPN by IP work as before.
+- **Send rate** - over Steam the world transfer raises its send rate while
+  the link stays clean and halves it when the ping climbs or packets drop
+  (up to `[steam] max_rate_kib` in `RepublicMP.profile.ini`, 16384 by
+  default); lockstep messages go out without delay.
+
 ## 0.7.0
 
 Co-op only, and the code reorganised for a second game mode. Protocol 44 -
