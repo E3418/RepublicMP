@@ -1,8 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.7.0
 
-Protocol 45 - every player needs this build.
+Co-op only, Steam connections, and the code reorganised for a second game
+mode. Protocol 45 - every player needs this build.
 
 - **Citizens' destinations** - the destinations panel of homes, bus stops and
   the other buildings that send people somewhere (workers, students,
@@ -32,12 +33,6 @@ Protocol 45 - every player needs this build.
   the link stays clean and halves it when the ping climbs or packets drop
   (up to `[steam] max_rate_kib` in `RepublicMP.profile.ini`, 16384 by
   default); lockstep messages go out without delay.
-
-## 0.7.0
-
-Co-op only, and the code reorganised for a second game mode. Protocol 44 -
-every player needs this build.
-
 - **Replay mode removed** - the old mode where each game simulated on its own
   and actions were repeated on the other side (with ports 5557-5559, the
   drift check and the timed re-sync) is gone; co-op runs in lockstep only.
