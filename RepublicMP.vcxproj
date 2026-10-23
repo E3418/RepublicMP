@@ -213,6 +213,8 @@
     <ClCompile Include="determinism\probe_watch.cpp" />
     <ClCompile Include="lockstep\building_settings.cpp" />
     <ClCompile Include="game\imgui_hook.cpp" />
+    <ClCompile Include="ui\game_assets.cpp" />
+    <ClCompile Include="ui\multiplayer_page.cpp" />
     <ClCompile Include="game\main_menu_hook.cpp" />
     <ClCompile Include="world\terrain_hook.cpp" />
     <ClCompile Include="world\demolish_hook.cpp" />
@@ -287,6 +289,8 @@
     <ClInclude Include="game\window_focus.h" />
     <ClInclude Include="game\save_load.h" />
     <ClInclude Include="game\imgui_hook.h" />
+    <ClInclude Include="ui\game_assets.h" />
+    <ClInclude Include="ui\multiplayer_page.h" />
     <ClInclude Include="game\main_menu_hook.h" />
     <ClInclude Include="world\terrain_hook.h" />
     <ClInclude Include="world\demolish_hook.h" />

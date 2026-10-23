@@ -96,7 +96,9 @@ mismatch refuses it.
 1. Both players start the game with TesmioLoader and the same
    `RepublicMP.dll` installed.
 2. In the RepublicMP window both pick **Co-op**. The host loads a city, sets
-   the session's size and presses **Host**.
+   the session's size and presses **Host** - or, from the game's main menu,
+   picks **MULTIPLAYER** and **Host new game** / **Host saved game**, and
+   hosting starts once the city has loaded.
 3. The other players enter the host's IP (LAN or VPN) or SteamID64 (shown
    in the host's window, with a Copy button) and press **Connect**. Steam
    friends can instead use **Join Game** in the friends list, or accept the

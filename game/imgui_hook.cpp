@@ -5,6 +5,7 @@
 #include "../ui/main_menu.h"
 #include "../ui/debug_window.h"
 #include "../ui/sync_block.h"
+#include "../ui/multiplayer_page.h"
 #include "../lockstep/presence.h"
 #include "../modes/mode.h"
 
@@ -58,14 +59,15 @@ static LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
     // The sync-block screen must keep receiving input even while the overlay is
     // hidden with INSERT.
     bool syncBlocking = SyncBlock_IsActive();
-    bool effectiveVisible = g_imguiVisible || syncBlocking;
+    bool page = MultiplayerPage_IsOpen(); // the MULTIPLAYER page over the game's main menu
+    bool effectiveVisible = g_imguiVisible || syncBlocking || page;
 
     ImGuiIO& io = ImGui::GetIO();
 
     // Draw ImGui's own cursor only while the mouse is over an ImGui window, or
     // while the sync-block screen is up (it uses NoInputs and never captures the
     // mouse). Elsewhere the game's own cursor handling runs unmodified.
-    bool showOurCursor = syncBlocking || (g_imguiVisible && io.WantCaptureMouse);
+    bool showOurCursor = syncBlocking || ((g_imguiVisible || page) && io.WantCaptureMouse);
     io.MouseDrawCursor = showOurCursor;
 
     if (effectiveVisible)
@@ -73,8 +75,10 @@ static LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
 
     bool imguiWantsInput = effectiveVisible && (io.WantCaptureMouse || io.WantCaptureKeyboard);
 
-    // During a sync all input is swallowed regardless of ImGui's capture flags.
-    if (imguiWantsInput || syncBlocking)
+    // During a sync all input is swallowed regardless of ImGui's capture flags;
+    // while our page covers the menu, every key is ours (Escape included).
+    bool pageKey = page && (msg == WM_KEYDOWN || msg == WM_KEYUP || msg == WM_CHAR);
+    if (imguiWantsInput || syncBlocking || pageKey)
     {
         // Consumed by ImGui, or dropped during a sync - do not forward to the game.
         switch (msg)
@@ -95,6 +99,11 @@ static LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         return TRUE;
 
     return CallWindowProc(g_originalWndProc, hwnd, msg, wParam, lParam);
+}
+
+ID3D11Device* ImGuiHook_Device()
+{
+    return g_pd3dDevice;
 }
 
 void ImGuiHook_EnsureInit(IDXGISwapChain* swapChain)
@@ -140,27 +149,30 @@ void ImGuiHook_NewFrameAndRender()
     if (insertDown && !g_insertWasDown)
         g_imguiVisible = !g_imguiVisible;
     g_insertWasDown = insertDown;
-    // The MULTIPLAYER item of the game's main menu opens the overlay too.
+    // The MULTIPLAYER item of the game's main menu opens our page over it.
     if (MainMenuHook_TakeClick())
-        g_imguiVisible = true;
+        MultiplayerPage_Open();
+    MultiplayerPage_Tick();
+    bool page = MultiplayerPage_IsOpen();
 
     // The sync-block screen renders even while the overlay is hidden.
     bool syncBlocking = SyncBlock_IsActive();
 
     // Refresh the cursor flag for frames where hover changed without a message.
     ImGuiIO& io = ImGui::GetIO();
-    io.MouseDrawCursor = syncBlocking || (g_imguiVisible && io.WantCaptureMouse);
+    io.MouseDrawCursor = syncBlocking || ((g_imguiVisible || page) && io.WantCaptureMouse);
 
     // The other players' cursors and pings show while the overlay is hidden too.
     bool presence = Presence_Active();
     bool modeOverlay = Modes_WantsOverlay();
-    if (!g_imguiVisible && !syncBlocking && !presence && !modeOverlay)
+    if (!g_imguiVisible && !syncBlocking && !presence && !modeOverlay && !page)
         return;
 
     ImGui_ImplDX11_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
 
+    if (page) MultiplayerPage_Draw(); // under the overlay's windows
     if (g_imguiVisible) {
         g_mainMenu.Draw();
         g_debug_window.Draw();

@@ -3,7 +3,11 @@
 ## Unreleased
 
 - **MULTIPLAYER in the main menu** - the game's own main menu gets a
-  MULTIPLAYER item, drawn like the others, that opens the RepublicMP window.
+  MULTIPLAYER item, drawn like the others. It opens a page in the game's own
+  panel, fonts and colours: pick the game mode, **Host new game** or **Host
+  saved game** through the game's own pages (hosting starts by itself once
+  the city has loaded), or join by SteamID64 or IP; the player's SteamID64
+  is shown with a Copy button.
 - **Steam connections** - a player can type the host's SteamID64 instead of
   an IP and connect through Valve's relay: no IP to share, no port to open.
   Steam friends can also use **Join Game** or an invite while someone hosts
