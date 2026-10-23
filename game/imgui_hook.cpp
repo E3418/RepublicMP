@@ -2,6 +2,7 @@
 #include "imgui_hook.h"
 #include "window_focus.h"
 #include "main_menu_hook.h"
+#include "input_block.h"
 #include "../ui/main_menu.h"
 #include "../ui/debug_window.h"
 #include "../ui/sync_block.h"
@@ -27,7 +28,7 @@ static WNDPROC g_originalWndProc = nullptr;
 static bool g_initialized = false;
 static bool g_insertWasDown = false;
 
-bool g_imguiVisible = true;
+bool g_imguiVisible = false; // a debug tool now: INSERT shows it; the MULTIPLAYER page is the players' UI
 
 void ImGuiHook_Bind(const TsmHost* host)
 {
@@ -59,25 +60,32 @@ static LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
     // The sync-block screen must keep receiving input even while the overlay is
     // hidden with INSERT.
     bool syncBlocking = SyncBlock_IsActive();
-    bool page = MultiplayerPage_IsOpen(); // the MULTIPLAYER page over the game's main menu
-    bool effectiveVisible = g_imguiVisible || syncBlocking || page;
+    bool page = MultiplayerPage_IsOpen(); // the MULTIPLAYER page, over the main menu or a city
+    // ...and its button beside the game's Escape menu takes clicks too.
+    bool menuButton = MultiplayerPage_MenuButtonShown();
+    bool effectiveVisible = g_imguiVisible || syncBlocking || page || menuButton;
 
     ImGuiIO& io = ImGui::GetIO();
 
     // Draw ImGui's own cursor only while the mouse is over an ImGui window, or
     // while the sync-block screen is up (it uses NoInputs and never captures the
     // mouse). Elsewhere the game's own cursor handling runs unmodified.
-    bool showOurCursor = syncBlocking || ((g_imguiVisible || page) && io.WantCaptureMouse);
+    bool showOurCursor = syncBlocking || ((g_imguiVisible || page || menuButton) && io.WantCaptureMouse);
     io.MouseDrawCursor = showOurCursor;
 
-    if (effectiveVisible)
+    // Releases always reach ImGui: what it shows can vanish between a press and
+    // its release (the game closes its menu), and a button it thinks still held
+    // would eat the next press.
+    bool release = msg == WM_LBUTTONUP || msg == WM_RBUTTONUP || msg == WM_MBUTTONUP || msg == WM_KEYUP ||
+                   msg == WM_SYSKEYUP;
+    if (effectiveVisible || release)
         ImGui_ImplWin32_WndProcHandler(hwnd, msg, wParam, lParam);
 
     bool imguiWantsInput = effectiveVisible && (io.WantCaptureMouse || io.WantCaptureKeyboard);
 
     // During a sync all input is swallowed regardless of ImGui's capture flags;
     // while our page covers the menu, every key is ours (Escape included).
-    bool pageKey = page && (msg == WM_KEYDOWN || msg == WM_KEYUP || msg == WM_CHAR);
+    bool pageKey = page && (msg == WM_KEYDOWN || msg == WM_CHAR); // releases go through: no key left held
     if (imguiWantsInput || syncBlocking || pageKey)
     {
         // Consumed by ImGui, or dropped during a sync - do not forward to the game.
@@ -87,9 +95,9 @@ static LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         case WM_RBUTTONDOWN: case WM_RBUTTONUP: case WM_RBUTTONDBLCLK:
         case WM_MBUTTONDOWN: case WM_MBUTTONUP: case WM_MBUTTONDBLCLK:
         case WM_MOUSEWHEEL: case WM_MOUSEHWHEEL: case WM_MOUSEMOVE:
-        case WM_KEYDOWN: case WM_KEYUP:
-        case WM_CHAR: case WM_SYSKEYDOWN: case WM_SYSKEYUP:
-            return TRUE;
+        case WM_KEYDOWN: case WM_CHAR: case WM_SYSKEYDOWN:
+            return TRUE; // key releases go through: the game never keeps a key held
+
         }
     }
 
@@ -160,12 +168,21 @@ void ImGuiHook_NewFrameAndRender()
 
     // Refresh the cursor flag for frames where hover changed without a message.
     ImGuiIO& io = ImGui::GetIO();
-    io.MouseDrawCursor = syncBlocking || ((g_imguiVisible || page) && io.WantCaptureMouse);
+    io.MouseDrawCursor = syncBlocking || ((g_imguiVisible || page || MultiplayerPage_MenuButtonShown()) && io.WantCaptureMouse);
+    // What goes to the mod's windows does not reach the game too (game/input_block).
+    // The page is modal, like the game's own menus: while it is up the game gets
+    // no click and no key. The Escape that closed it stays ours until released,
+    // so it does not open the game's pause menu as well.
+    static bool s_escapeHeld = false;
+    s_escapeHeld = (page || s_escapeHeld) && (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
+    bool menuButton = MultiplayerPage_MenuButtonShown(); // beside the game's Escape menu
+    InputBlock_SetUiCapture(page || ((g_imguiVisible || menuButton) && io.WantCaptureMouse),
+                            page || s_escapeHeld || (g_imguiVisible && io.WantTextInput));
 
     // The other players' cursors and pings show while the overlay is hidden too.
     bool presence = Presence_Active();
     bool modeOverlay = Modes_WantsOverlay();
-    if (!g_imguiVisible && !syncBlocking && !presence && !modeOverlay && !page)
+    if (!g_imguiVisible && !syncBlocking && !presence && !modeOverlay && !page && !menuButton)
         return;
 
     ImGui_ImplDX11_NewFrame();
@@ -173,6 +190,7 @@ void ImGuiHook_NewFrameAndRender()
     ImGui::NewFrame();
 
     if (page) MultiplayerPage_Draw(); // under the overlay's windows
+    if (menuButton) MultiplayerPage_DrawMenuButton();
     if (g_imguiVisible) {
         g_mainMenu.Draw();
         g_debug_window.Draw();

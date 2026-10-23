@@ -150,6 +150,9 @@
     <ClCompile Include="game\main_menu_hook.cpp">
       <Filter>game</Filter>
     </ClCompile>
+    <ClCompile Include="game\system_menu.cpp">
+      <Filter>game</Filter>
+    </ClCompile>
     <ClCompile Include="ui\game_assets.cpp">
       <Filter>ui</Filter>
     </ClCompile>
@@ -405,6 +408,9 @@
       <Filter>game</Filter>
     </ClInclude>
     <ClInclude Include="game\main_menu_hook.h">
+      <Filter>game</Filter>
+    </ClInclude>
+    <ClInclude Include="game\system_menu.h">
       <Filter>game</Filter>
     </ClInclude>
     <ClInclude Include="ui\game_assets.h">
