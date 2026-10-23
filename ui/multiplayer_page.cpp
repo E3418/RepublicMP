@@ -198,6 +198,34 @@ static void Raw(GameFont font, float height, ImVec2 pos, ImU32 color, const char
     GameText_Draw(ImGui::GetWindowDrawList(), font, height, pos, color, text);
 }
 
+// Text broken into lines at spaces to fit width, at most maxLines (the last
+// one cut short with "...").
+static void WrappedLabel(GameFont font, float height, ImVec2 pos, float width, int maxLines, ImU32 color,
+                         const char* text)
+{
+    std::string line, word;
+    int lines = 0;
+    auto flush = [&](bool last) {
+        if (last && lines == maxLines - 1 && *text) line += "...";
+        Label(font, height, ImVec2(pos.x, pos.y + lines * height * 1.15f), color, line.c_str());
+        ++lines;
+        line.clear();
+    };
+    while (*text && lines < maxLines) {
+        const char* end = text;
+        while (*end && *end != ' ') ++end;
+        word.assign(text, end);
+        std::string tryLine = line.empty() ? word : line + " " + word;
+        if (!line.empty() && GameText_Size(font, height, tryLine.c_str()).x > width) {
+            flush(lines == maxLines - 1);
+            continue; // the word starts the next line
+        }
+        line = tryLine;
+        text = *end ? end + 1 : end;
+    }
+    if (!line.empty() && lines < maxLines) flush(false);
+}
+
 // One choice of a row of choices: the chosen one in the rows' red and gold,
 // the others faded, white under the mouse.
 static bool Choice(const char* id, const char* label, float cx, float y, float s, bool chosen)
