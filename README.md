@@ -6,7 +6,7 @@ players share one city (**co-op**): the host's game is transferred to the
 joining players, and from there every game runs the same simulation tick by
 tick (**lockstep**).
 
-**Status:** alpha, tested with up to four players. Current version: **0.7.0**
+**Status:** alpha, tested with up to four players. Current version: **0.7.1**
 ([changelog](CHANGELOG.md)).
 
 ## Support and community

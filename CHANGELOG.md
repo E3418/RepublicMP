@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.7.1
+
+The MULTIPLAYER page becomes the players' UI, in the game's language. Protocol
+45 is unchanged; the DLL checksum differs, so 0.7.0 and 0.7.1 do not join
+each other - every player needs this build.
 
 - **The MULTIPLAYER page is the players' UI** - it now also opens over a
   city, from a Multiplayer section added to the game's Escape menu, and by
