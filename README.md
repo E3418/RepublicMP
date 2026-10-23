@@ -117,7 +117,7 @@ connection by SteamID64 goes through Valve's relay and needs no open port.
 
 | Key | Action |
 | --- | --- |
-| **Insert** | Show / hide the RepublicMP overlay |
+| **Insert** | Show / hide the RepublicMP overlay (also **MULTIPLAYER** in the game's main menu) |
 | **~** | Ping the place under the mouse for every player (another key can be set in the window) |
 
 The **Debug** button in the main window opens the lockstep state, the

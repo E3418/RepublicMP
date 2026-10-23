@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **MULTIPLAYER in the main menu** - the game's own main menu gets a
+  MULTIPLAYER item, drawn like the others, that opens the RepublicMP window.
 - **Steam connections** - a player can type the host's SteamID64 instead of
   an IP and connect through Valve's relay: no IP to share, no port to open.
   Steam friends can also use **Join Game** or an invite while someone hosts

@@ -6,6 +6,7 @@
 #include "../session/game_speed.h"
 #include "../game/save_load.h"
 #include "../game/imgui_hook.h"
+#include "../game/main_menu_hook.h"
 #include "../world/terrain_hook.h"
 #include "../world/demolish_hook.h"
 #include "../world/placement_collision.h"
@@ -52,6 +53,7 @@ extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPlugi
     Buildings_Bind(host);
     Networks_Bind(host);
     ImGuiHook_Bind(host);
+    MainMenuHook_Bind(host);
     TerrainHook_Bind(host);
     DemolishHook_Bind(host);
     PlacementCollision_Bind(host);

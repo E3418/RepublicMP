@@ -141,6 +141,9 @@
     <ClCompile Include="game\imgui_hook.cpp">
       <Filter>game</Filter>
     </ClCompile>
+    <ClCompile Include="game\main_menu_hook.cpp">
+      <Filter>game</Filter>
+    </ClCompile>
     <ClCompile Include="world\terrain_hook.cpp">
       <Filter>world</Filter>
     </ClCompile>
@@ -378,6 +381,9 @@
       <Filter>core</Filter>
     </ClInclude>
     <ClInclude Include="game\imgui_hook.h">
+      <Filter>game</Filter>
+    </ClInclude>
+    <ClInclude Include="game\main_menu_hook.h">
       <Filter>game</Filter>
     </ClInclude>
     <ClInclude Include="ui\main_menu.h">

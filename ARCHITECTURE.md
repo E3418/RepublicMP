@@ -105,6 +105,7 @@ function.
 | `rand`, `srand`, `C3DRandom_*`, `C3D_TIMER`, `GetKeyDown`, `_beginthread`, `SetEvent`, `malloc`, CRT math | IAT | `determinism/determinism` |
 | `0x30D1A0` Late body, call-site relays, tool stubs | inline / call sites | `determinism/sim_patches` |
 | window button call sites (`kSites`) | call sites | `lockstep/game_calls` |
+| `0x28AF60` root main menu builder | inline | `game/main_menu_hook` |
 | `IDXGISwapChain::Present` | vtable | `game/present_hook` |
 | the game window's `WndProc` | subclass | `game/imgui_hook` |
 

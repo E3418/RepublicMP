@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "imgui_hook.h"
 #include "window_focus.h"
+#include "main_menu_hook.h"
 #include "../ui/main_menu.h"
 #include "../ui/debug_window.h"
 #include "../ui/sync_block.h"
@@ -139,6 +140,9 @@ void ImGuiHook_NewFrameAndRender()
     if (insertDown && !g_insertWasDown)
         g_imguiVisible = !g_imguiVisible;
     g_insertWasDown = insertDown;
+    // The MULTIPLAYER item of the game's main menu opens the overlay too.
+    if (MainMenuHook_TakeClick())
+        g_imguiVisible = true;
 
     // The sync-block screen renders even while the overlay is hidden.
     bool syncBlocking = SyncBlock_IsActive();
