@@ -7,6 +7,7 @@
 #include "../world/terrain_hook.h"
 #include "../session/save_sync.h"
 #include "../determinism/determinism.h"
+#include "../determinism/construction_view.h"
 #include "../lockstep/building_settings.h"
 #include "debug_log.h"
 #include "../lockstep/lockstep_net.h"
@@ -98,6 +99,15 @@ void DebugWindow::Draw()
         if (ImGui::Checkbox("Money trace (lockstep desyncs)", &moneyTrace)) Determinism_SetMoneyTrace(moneyTrace);
         ImGui::TextWrapped("On by default: on a desync each log gets the balances and construction sites "
                            "of the ticks before it, and every command that changed the money.");
+        ImGui::Spacing();
+
+        // --- Construction sites (determinism/construction_view) ---
+        bool siteDraw = ConstructionView_GetDraw();
+        if (ImGui::Checkbox("Draw construction stages in a session", &siteDraw)) ConstructionView_SetDraw(siteDraw);
+        bool siteLog = ConstructionView_GetLog();
+        if (ImGui::Checkbox("Log construction sites (every 2 s)", &siteLog)) ConstructionView_SetLog(siteLog);
+        ImGui::TextWrapped("The stages are drawn with this PC's view; the log shows the sites the drawer sees, "
+                           "with the simulation's and this PC's camera fields.");
         ImGui::Spacing();
 
         // --- Field diff (lockstep/building_settings) ---

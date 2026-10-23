@@ -56,10 +56,8 @@ Carried as commands:
 Not carried yet (tools are put away when selected, or the action acts on one
 PC only): removing decoration paths, worker relocation, buoys, Christmas
 lights, merge tools, "Go there", goods purchases in shops, the office
-window's order popup. Saving in a session saves on every PC at once. The construction animation
-(scaffolding, ground, workers on a building site) is not drawn; the building
-still finishes on time. While the game is paused, what comes into view
-appears only after the pause.
+window's order popup. Saving in a session saves on every PC at once. While
+the game is paused, what comes into view appears only after the pause.
 
 ## How it works
 

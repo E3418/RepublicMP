@@ -28,6 +28,11 @@ every player needs this build.
   and actions were repeated on the other side (with ports 5557-5559, the
   drift check and the timed re-sync) is gone; co-op runs in lockstep only.
   Only TCP ports 5556 and 5560 are used.
+- **Construction sites** - a building site shows its construction stages in
+  a session again (cut model pieces, scaffolding, dirt and gravel piles). The
+  site drawer skipped every building the simulation keeps off the camera; it
+  now draws with this PC's own view, which the simulation never sees. The
+  Debug window can turn it off and log the sites it draws.
 - **Start page** - the RepublicMP window opens on a choice of game: Co-op,
   or Republics (each player their own republic on one map - in development).
 - **Code layout** - `world/` holds the actions made from data (buildings,

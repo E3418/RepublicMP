@@ -99,6 +99,9 @@
     <ClCompile Include="determinism\sim_patches.cpp">
       <Filter>determinism</Filter>
     </ClCompile>
+    <ClCompile Include="determinism\construction_view.cpp">
+      <Filter>determinism</Filter>
+    </ClCompile>
     <ClCompile Include="determinism\probe_trace.cpp">
       <Filter>determinism</Filter>
     </ClCompile>
@@ -327,6 +330,9 @@
       <Filter>determinism</Filter>
     </ClInclude>
     <ClInclude Include="determinism\sim_patches.h">
+      <Filter>determinism</Filter>
+    </ClInclude>
+    <ClInclude Include="determinism\construction_view.h">
       <Filter>determinism</Filter>
     </ClInclude>
     <ClInclude Include="determinism\probe_trace.h">

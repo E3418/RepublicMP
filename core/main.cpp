@@ -16,6 +16,7 @@
 #include "../determinism/state_hash.h"
 #include "../determinism/determinism.h"
 #include "../determinism/sim_patches.h"
+#include "../determinism/construction_view.h"
 #include "../determinism/probe_trace.h"
 #include "../determinism/probe_watch.h"
 #include "../save/save_zip.h"
@@ -63,6 +64,7 @@ extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPlugi
     StateHash_Bind(host);
     Determinism_Bind(host);
     SimPatches_Bind(host);
+    ConstructionView_Bind(host);
     ProbeTrace_Bind(host);
     ProbeWatch_Bind(host);
     BuildingSettings_Bind(host);
