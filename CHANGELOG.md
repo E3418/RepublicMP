@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **The MULTIPLAYER page is the players' UI** - it now also opens over a
+  city, from a Multiplayer section added to the game's Escape menu, and by
+  itself when a session starts. While a session runs it shows it: the
+  state, the players with their ping, who sees the game, the SteamID64, the
+  players' cursors and Stop hosting / Disconnect. Over a city with no
+  session it offers Host this city. The page is modal: the game gets no
+  click or key while it is up. The RepublicMP window is now a debug tool,
+  hidden until Insert.
+- **Fix** - the session's player list no longer crashes the game when it is
+  asked for before the first player has connected.
 - **The MULTIPLAYER page in the game's language** - the page and the menu
   item follow the language set in the game (Portuguese (Brazil), Spanish,
   French, German, Italian, Polish, Czech, Russian; the others stay English).

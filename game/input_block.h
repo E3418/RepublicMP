@@ -28,6 +28,11 @@ bool InstallInputBlockHooks();
 void InputBlock_BeginNeutral();
 void InputBlock_EndNeutral();
 
+// The mod's own windows (render thread, every frame): the mouse is over one,
+// so the game sees no button, wheel or camera drag; keys go to one (a text
+// field, the MULTIPLAYER page), so the game sees no key. The cursor moves on.
+void InputBlock_SetUiCapture(bool mouse, bool keys);
+
 // Per-frame (game thread, Present hook): clears the left-button bytes while
 // blocked and tracks the start/end of a block.
 void InputBlock_Tick();

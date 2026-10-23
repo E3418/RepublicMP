@@ -658,6 +658,9 @@ int LockstepNet_Players(LockstepPlayer* out, int max)
         }
         return n;
     }
+    // Before any lockstep connection the list lock is not made yet (Locks):
+    // a host still waiting for its first player has no list to show.
+    if (!g_locksReady) return n;
     LsPlayers l;
     EnterCriticalSection(&g_listLock);
     l = g_list;

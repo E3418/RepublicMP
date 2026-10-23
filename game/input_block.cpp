@@ -16,6 +16,16 @@ static bool Blocked()
     return SyncBlock_IsActive();
 }
 
+static volatile bool g_uiMouse = false;
+static volatile bool g_uiKeys = false;
+void InputBlock_SetUiCapture(bool mouse, bool keys)
+{
+    g_uiMouse = mouse;
+    g_uiKeys = keys;
+}
+static bool MouseTaken() { return Blocked() || g_uiMouse; }
+static bool KeysTaken() { return Blocked() || g_uiKeys; }
+
 static volatile LONG g_neutral = 0;
 void InputBlock_BeginNeutral() { InterlockedIncrement(&g_neutral); }
 void InputBlock_EndNeutral() { InterlockedDecrement(&g_neutral); }
@@ -49,31 +59,32 @@ static AxisValueFn o_AxisValue;
 static VecFn o_MouseRelative, o_MouseSolid, o_MouseSolidInvZoom;
 
 #define BOOL_NOARG_HOOK(name, orig) \
-    static bool name(void* self) { bool r = orig(self); return Blocked() || Neutral() ? false : r; }
+    static bool name(void* self) { bool r = orig(self); return MouseTaken() || Neutral() ? false : r; }
 
-static bool H_LeftPress(void* self) { bool r = o_LeftPress(self); return Neutral() ? PressedByte() : Blocked() ? false : r; }
-static bool H_LeftPressAOff(void* self) { bool r = o_LeftPressAOff(self); return Neutral() ? PressedByte() : Blocked() ? false : r; }
-static bool H_LeftDown(void* self) { bool r = o_LeftDown(self); return Neutral() ? HeldByte() : Blocked() ? false : r; }
+static bool H_LeftPress(void* self) { bool r = o_LeftPress(self); return Neutral() ? PressedByte() : MouseTaken() ? false : r; }
+static bool H_LeftPressAOff(void* self) { bool r = o_LeftPressAOff(self); return Neutral() ? PressedByte() : MouseTaken() ? false : r; }
+static bool H_LeftDown(void* self) { bool r = o_LeftDown(self); return Neutral() ? HeldByte() : MouseTaken() ? false : r; }
 BOOL_NOARG_HOOK(H_RightPress, o_RightPress)
 BOOL_NOARG_HOOK(H_RightPressAOff, o_RightPressAOff)
 BOOL_NOARG_HOOK(H_RightDown, o_RightDown)
 BOOL_NOARG_HOOK(H_MiddleDown, o_MiddleDown)
 
-static bool H_KeyDown(void* self, int key)       { bool r = o_KeyDown(self, key); return Blocked() || Neutral() ? false : r; }
-static bool H_KeyPress(void* self, int key)      { bool r = o_KeyPress(self, key); return Blocked() || Neutral() ? false : r; }
-static bool H_ButtonDown(void* self, char* fn)   { bool r = o_ButtonDown(self, fn); return Blocked() || Neutral() ? false : r; }
-static bool H_ButtonPress(void* self, char* fn)  { bool r = o_ButtonPress(self, fn); return Blocked() || Neutral() ? false : r; }
+static bool H_KeyDown(void* self, int key)       { bool r = o_KeyDown(self, key); return KeysTaken() || Neutral() ? false : r; }
+static bool H_KeyPress(void* self, int key)      { bool r = o_KeyPress(self, key); return KeysTaken() || Neutral() ? false : r; }
+// Bindings and axes can be keys or mouse (camera, zoom): either capture takes them.
+static bool H_ButtonDown(void* self, char* fn)   { bool r = o_ButtonDown(self, fn); return KeysTaken() || MouseTaken() || Neutral() ? false : r; }
+static bool H_ButtonPress(void* self, char* fn)  { bool r = o_ButtonPress(self, fn); return KeysTaken() || MouseTaken() || Neutral() ? false : r; }
 
 static float H_AxisValue(void* self, char* fn, int* out, float a, float b)
 {
     float r = o_AxisValue(self, fn, out, a, b);
-    return Blocked() || Neutral() ? 0.0f : r;
+    return KeysTaken() || MouseTaken() || Neutral() ? 0.0f : r;
 }
 
 static float* H_MouseRelative(void* self, float* out)
 {
     float* r = o_MouseRelative(self, out);
-    if (Blocked() || Neutral()) out[0] = out[1] = out[2] = 0.0f;
+    if (MouseTaken() || Neutral()) out[0] = out[1] = out[2] = 0.0f;
     return r;
 }
 
@@ -147,7 +158,9 @@ void InputBlock_Tick()
         Logf("republicmp  INPUT_BLOCK: game input %s", blocked ? "BLOCKED" : "released");
         s_wasBlocked = blocked;
     }
-    if (!blocked) return;
+    // The game's own windows read these bytes too; a lockstep command being
+    // made (Neutral) reads them as the clicking PC's, so they are left alone then.
+    if (!blocked && (!g_uiMouse || Neutral())) return;
 
     __try {
         *(unsigned char*)(g_exeBase + LMB_HELD_RVA) = 0;
