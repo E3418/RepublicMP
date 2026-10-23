@@ -2,16 +2,33 @@
 
 ## Unreleased
 
+Protocol 47 - every player needs this build.
+
 - **Republics, first part** - the HOST tab now hosts Republics (2 players);
   a player who joins gets the host's mode. The map is cut along one of its
   diagonals, moved so both halves get the same playable area whatever the
-  map's border, and drawn as a red line on the map and the minimap: each player builds, lays and demolishes
-  buildings and networks on their own half only, and a click on the other
-  half is refused on both PCs with a notice - the host's too while it waits
-  alone for the player. A 50 m band along the line is
-  open to both, so roads and rails can join the halves. Money is still
-  shared, and terrain tools and windows are not limited yet.
-  Protocol 46: a command now carries the player who made it.
+  map's border, and drawn as a red line on the map and the minimap. Each
+  player builds, lays and demolishes buildings and networks on their own
+  half only; a click on the other half is refused on both PCs with a notice,
+  the host's too while it waits alone for the player. A 50 m band along the
+  line is open to both, so roads and rails can join the halves. Money is
+  still shared, and terrain tools and windows are not limited yet. A command
+  now carries the player who made it.
+
+## 0.7.2
+
+Protocol 46 - every player needs this build.
+
+- **City tool** - making a new city with the city tool works in a session:
+  the city is made with the clicking player's name for it on every PC, and
+  the buildings around it join it. Before, the tool did nothing in a session.
+
+## 0.7.1
+
+The MULTIPLAYER page becomes the players' UI, in the game's language. Protocol
+45 is unchanged; the DLL checksum differs, so 0.7.0 and 0.7.1 do not join
+each other - every player needs this build.
+
 - **The MULTIPLAYER page is the players' UI** - it now also opens over a
   city, from a Multiplayer section added to the game's Escape menu, and by
   itself when a session starts. While a session runs it shows it: the

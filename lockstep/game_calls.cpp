@@ -7,6 +7,7 @@
 #include "line_accept.h"
 #include "junction_accept.h"
 #include "rename.h"
+#include "new_city.h"
 #include <array>
 #include <limits.h>
 #include <string.h>
@@ -61,6 +62,10 @@ enum {
     // A window that makes the call on every frame it is open: the same call again within
     // REPEAT_MS is the same request, taken here but sent again only REFRESH_MS after the last.
     CALL_REPEATING,
+    // The city tool's new city (32f450): the position and the name go to new_city.cpp.
+    CALL_NEW_CITY,
+    // The city tool's 32ff40 right after it: made by that command.
+    CALL_NEW_CITY_ASSIGN,
 };
 #define REPEAT_MS 1500
 #define REFRESH_MS 20000
@@ -211,6 +216,8 @@ static const GameCallSite kSites[] = {
     { 0x77757F, 0x1D4440, "destinations panel: remove the selected entry", "xID", 0, 0, false },
     { 0x7781D9, 0x1D4550, "destinations panel: share up", "xIFD", 0, 0, false },
     { 0x77836D, 0x1D4550, "destinations panel: share down", "xIFD", 0, 0, false },
+    { 0x32F3E3, 0x32F450, "city tool: make the city", "xxx", 0, 0, false, CALL_NEW_CITY },
+    { 0x32F403, 0x32FF40, "city tool: give the city its buildings", "xx", 0, 0, false, CALL_NEW_CITY_ASSIGN },
 };
 #define SITE_COUNT (sizeof(kSites) / sizeof(kSites[0]))
 
@@ -438,6 +445,10 @@ static U64 Run(unsigned index, const U64* a)
     case CALL_RENAME:
         // Other names (buildings, vehicles, line copies) are written here and carried as they were.
         return Rename_Capture(a[0], a[1], a[2]) ? 0 : CallSite(s, a);
+    case CALL_NEW_CITY:
+        return NewCity_Capture(a[1], a[2]) ? 0 : CallSite(s, a);
+    case CALL_NEW_CITY_ASSIGN:
+        return NewCity_TakeAssign() ? 0 : CallSite(s, a);
     case CALL_ACCEPT_MEASURES:
         LineAccept_RestoreMeasures();
         return s.result;

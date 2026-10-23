@@ -10,7 +10,7 @@ A second mode, **Republics** (in development), gives two players a republic
 each on one map cut in two halves of equal playable area; so far each builds on their own half
 only, and money is still shared.
 
-**Status:** alpha, tested with up to four players. Current version: **0.7.0**
+**Status:** alpha, tested with up to four players. Current version: **0.7.2**
 ([changelog](CHANGELOG.md)).
 
 ## Support and community

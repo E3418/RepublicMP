@@ -28,6 +28,7 @@
 #include "research.h"
 #include "link_tools.h"
 #include "office_selection.h"
+#include "new_city.h"
 #include "presence.h"
 #include <vector>
 #include <string.h>
@@ -53,6 +54,7 @@ void Commands_Bind(const TsmHost* host)
     Research_Bind(host);
     LinkTools_Bind(host);
     OfficeSelection_Bind(host);
+    NewCity_Bind(host);
     Presence_Bind(host);
 }
 
@@ -147,6 +149,7 @@ static const char* KindName(int kind)
     case LS_CMD_RESEARCH: return "research";
     case LS_CMD_LINK: return "link";
     case LS_CMD_OFFICE_SELECTION: return "office selection";
+    case LS_CMD_NEW_CITY: return "new city";
     }
     return "?";
 }
@@ -372,6 +375,9 @@ static void Apply(const Command& c)
         break;
     case LS_CMD_OFFICE_SELECTION:
         ok = OfficeSelection_ApplyCommand(p, n);
+        break;
+    case LS_CMD_NEW_CITY:
+        ok = NewCity_ApplyCommand(p, n);
         break;
     }
     InputBlock_EndNeutral();
