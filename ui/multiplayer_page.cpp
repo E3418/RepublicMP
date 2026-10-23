@@ -135,8 +135,10 @@ static bool Row(const char* id, const char* label, float cx, float y, float s, b
 {
     float h = kTextHeight * s;
     ImVec2 size = GameText_Size(GAME_FONT_SQUARE, h, label);
-    ImGui::SetCursorScreenPos(ImVec2(cx - 237.5f * s, y));
-    bool clicked = ImGui::InvisibleButton(id, ImVec2(475 * s, h)) && enabled;
+    // The click area is the text's, like the choices' (the game's own row box
+    // is 475s wide, far wider than a short label such as BACK).
+    ImGui::SetCursorScreenPos(ImVec2(cx - size.x * 0.5f - 10 * s, y));
+    bool clicked = ImGui::InvisibleButton(id, ImVec2(size.x + 20 * s, h)) && enabled;
     bool hot = enabled && ImGui::IsItemHovered();
     RowText(ImGui::GetWindowDrawList(), h, ImVec2(cx - size.x * 0.5f, y), label, hot, enabled ? 1.0f : 0.4f);
     return clicked;
@@ -145,6 +147,34 @@ static bool Row(const char* id, const char* label, float cx, float y, float s, b
 static void Label(GameFont font, float height, ImVec2 pos, ImU32 color, const char* text)
 {
     GameText_Draw(ImGui::GetWindowDrawList(), font, height, pos, color, text);
+}
+
+// Text broken into lines at spaces to fit width, at most maxLines (the last
+// one cut short with "...").
+static void WrappedLabel(GameFont font, float height, ImVec2 pos, float width, int maxLines, ImU32 color,
+                         const char* text)
+{
+    std::string line, word;
+    int lines = 0;
+    auto flush = [&](bool last) {
+        if (last && lines == maxLines - 1 && *text) line += "...";
+        Label(font, height, ImVec2(pos.x, pos.y + lines * height * 1.15f), color, line.c_str());
+        ++lines;
+        line.clear();
+    };
+    while (*text && lines < maxLines) {
+        const char* end = text;
+        while (*end && *end != ' ') ++end;
+        word.assign(text, end);
+        std::string tryLine = line.empty() ? word : line + " " + word;
+        if (!line.empty() && GameText_Size(font, height, tryLine.c_str()).x > width) {
+            flush(lines == maxLines - 1);
+            continue; // the word starts the next line
+        }
+        line = tryLine;
+        text = *end ? end + 1 : end;
+    }
+    if (!line.empty() && lines < maxLines) flush(false);
 }
 
 // One choice of a row of choices: the chosen one in the rows' red and gold,
@@ -196,6 +226,15 @@ static void HostTab(float cx, float left, float right, float s)
     if (Choice("##public", "EVERYONE", left + 110 * s, 670 * s, s, s_public == 1)) SetChoice(&s_public, 1, "game_public");
     Label(GAME_FONT_ARIAL, 20 * s, ImVec2(left - 225 * s, 720 * s), kInk,
           s_public == 1 ? "Every player with this version sees your game." : "Only your Steam friends see your game.");
+    // The session's size, the same setting as "Session" in the RepublicMP window.
+    Label(GAME_FONT_ARIAL, 24 * s, ImVec2(left - 225 * s, 765 * s), kInk, "Players, you included:");
+    int players = Profile_GetMaxPlayers();
+    for (int n = PROFILE_MIN_PLAYERS; n <= PROFILE_MAX_PLAYERS; ++n) {
+        char id[16], label[4];
+        snprintf(id, sizeof(id), "##players%d", n);
+        snprintf(label, sizeof(label), "%d", n);
+        if (Choice(id, label, left + (n - 3) * 110 * s, 795 * s, s, players == n)) Profile_SetMaxPlayers(n);
+    }
 
     bool idle = SaveSync_GetState() == SESSION_IDLE;
     if (s_mode == 0) {
@@ -301,8 +340,13 @@ static void JoinTab(float cx, float listMin, float listMax, float s)
 void MultiplayerPage_Draw()
 {
     if (!s_open) return;
-    // The game left its menu (a city is loading, a join began): the page goes too.
-    if (!s_menuOn) {
+    // The game left its menu (a city is loading), or a session began some other
+    // way (Join Game from Steam's overlay, the RepublicMP window): the page goes,
+    // and the sync screen shows the progress.
+    if (!s_menuOn || SaveSync_GetState() != SESSION_IDLE) {
+        // The RepublicMP window's session panel follows the join and keeps
+        // the reason when it fails ("Last session: ...").
+        if (SaveSync_GetState() != SESSION_IDLE) g_imguiVisible = true;
         Close();
         return;
     }
@@ -351,9 +395,9 @@ void MultiplayerPage_Draw()
     if (s_tab == 0) HostTab(cx, left, right, s);
     else JoinTab(cx, pMin.x + 50 * s, pMax.x - 50 * s, s);
 
-    bool idle = SaveSync_GetState() == SESSION_IDLE;
-    const char* status = !idle ? "Connecting..." : SaveSync_GetLastError();
-    if (status && status[0]) Label(GAME_FONT_ARIAL, 22 * s, ImVec2(right, pMax.y - 60 * s), kRowRed, status);
+    const char* status = SaveSync_GetLastError(); // why the last session ended or failed
+    if (status && status[0])
+        WrappedLabel(GAME_FONT_ARIAL, 20 * s, ImVec2(right, pMax.y - 80 * s), pMax.x - 40 * s - right, 3, kRowRed, status);
 
     // Escape in the text field only reverts the text (WantTextInput is last
     // frame's: the field lets go of Escape within this one).

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **MULTIPLAYER page** - the item sits after Load game in the main menu,
+  away from Quit; the HOST tab sets the session's size (2-4 players, the
+  same setting as the RepublicMP window's); every row reacts only over its
+  text. When a session starts another way (Steam's Join Game, the RepublicMP
+  window) the page closes and the RepublicMP window shows the join, and why
+  it failed; long errors wrap inside the panel.
+
 ## 0.7.0
 
 Co-op only, Steam connections, and the code reorganised for a second game
