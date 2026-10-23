@@ -3,6 +3,7 @@
 #include "building_settings.h"
 #include "commands.h"
 #include "../core/profile.h"
+#include <algorithm>
 #include <unordered_map>
 #include <vector>
 #include <math.h>
@@ -179,24 +180,35 @@ static bool ReadIdentity(BYTE* b, int* category, float pos[3])
 }
 
 // The local building at pos with this category (0.5 m in x/z, 1 m in y), nearest first.
-static BYTE* FindBuilding(const float pos[3], int category)
+// An entry that cannot be read is skipped, not the whole search. Without one,
+// *nearest gets the nearest of that category at any distance (for the log).
+static BYTE* FindBuilding(const float pos[3], int category, float nearest[3] = nullptr)
 {
     BYTE* found = nullptr;
-    float best = 1e30f;
+    float best = 1e30f, bestAny = 1e30f;
+    BYTE** it = nullptr;
+    BYTE** end = nullptr;
     __try {
-        BYTE** it = *(BYTE***)(g_exeBase + VEC_BUILDINGS_BEGIN_RVA);
-        BYTE** end = *(BYTE***)(g_exeBase + VEC_BUILDINGS_END_RVA);
-        for (; it && it < end; ++it) {
+        it = *(BYTE***)(g_exeBase + VEC_BUILDINGS_BEGIN_RVA);
+        end = *(BYTE***)(g_exeBase + VEC_BUILDINGS_END_RVA);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+    for (; it && it < end; ++it) {
+        __try {
             BYTE* b = *it;
             if (!b || CategoryOf(b) != category) continue;
             const float* p = (const float*)(b + BLD_POS_OFFSET);
             float dx = p[0] - pos[0], dz = p[2] - pos[2];
-            if (fabsf(dx) >= 0.5f || fabsf(dz) >= 0.5f || fabsf(p[1] - pos[1]) >= 1.0f) continue;
             float d = dx * dx + dz * dz;
+            if (nearest && d < bestAny) {
+                bestAny = d;
+                memcpy(nearest, p, 12);
+            }
+            if (fabsf(dx) >= 0.5f || fabsf(dz) >= 0.5f || fabsf(p[1] - pos[1]) >= 1.0f) continue;
             if (d < best) { best = d; found = b; }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return nullptr;
     }
     return found;
 }
@@ -388,10 +400,17 @@ static void RawWrite(BYTE* p, const void* v, int size)
     }
 }
 
+// The buildings listed now, sorted: a baseline entry whose building is gone
+// (demolished since) is not read - its memory may be freed or reused.
+static std::vector<BYTE*> g_lsLive;
+
 void BuildingSettings_LockstepDetect()
 {
+    g_lsLive.resize(200000);
+    int live = CopyBuildings(g_lsLive.data(), (int)g_lsLive.size());
+    std::sort(g_lsLive.begin(), g_lsLive.begin() + live);
     for (const LsBuilding& old : g_lsBuildings) {
-        if (!old.b) continue;
+        if (!old.b || !std::binary_search(g_lsLive.begin(), g_lsLive.begin() + live, old.b)) continue;
         BYTE* b = old.b;
         int category;
         float pos[3];
@@ -461,10 +480,16 @@ static bool Apply(const BuildingSettingMsg& w);
 bool BuildingSettings_ApplyCommand(const BuildingSettingMsg& w)
 {
     if (w.field == SETTINGS_FIELD_PAY || w.field == SETTINGS_FIELD_STOP) {
-        BYTE* b = FindBuilding(w.pos, w.category);
+        float nearest[3] = { 0, 0, 0 };
+        BYTE* b = FindBuilding(w.pos, w.category, nearest);
         bool ok = b && ApplyConstruction(b, w.field, w.value);
         Logf("republicmp  SETTINGS: %s = %llu at (%.1f,%.1f) %s", w.field == SETTINGS_FIELD_PAY ? "pay rubles/dollars" : "stopped",
              w.value, w.pos[0], w.pos[2], ok ? "applied" : "NOT applied");
+        if (!b && (nearest[0] || nearest[1] || nearest[2]))
+            Logf("republicmp  SETTINGS:   no building of category 0x%X at (%.2f,%.2f,%.2f) - the nearest is at (%.2f,%.2f,%.2f)",
+                 w.category, w.pos[0], w.pos[1], w.pos[2], nearest[0], nearest[1], nearest[2]);
+        else if (!b)
+            Logf("republicmp  SETTINGS:   no building of category 0x%X at all", w.category);
         return ok;
     }
     return Apply(w);

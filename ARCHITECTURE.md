@@ -152,7 +152,8 @@ different build.
   What is known about the game beyond the code, with its evidence, is in
   `docs/findings.md`.
 - Diagnostics are off by default (the Debug window turns them on; the money
-  trace is the exception).
+  trace and the per-object desync records are the exceptions: a desync in a
+  player's session has to be explained from their logs).
 - Files are CRLF. Code, comments and the changelog are in English; no
   internal tags. Work taken from another project is credited in the code,
   e.g. "(by SoylentGreed)".

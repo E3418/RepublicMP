@@ -14,6 +14,18 @@ Protocol 47 - every player needs this build.
   line is open to both, so roads and rails can join the halves. Money is
   still shared, and terrain tools and windows are not limited yet. A command
   now carries the player who made it.
+- **Desync reports name the objects** (#55) - at a desync each PC writes to
+  its log one `DESYNC_RECORD` line per object of the lists that differ
+  (buildings, vehicles or citizens) at the tick that differed, so the two
+  logs show which object split. Kept for the last hashed ticks in every
+  session, as the money trace is.
+  After a desync the host goes on comparing and logs when the games match
+  again, which tells a difference of one moment from games that split.
+- **Fix: building settings and freed buildings** (#55) - the window settings
+  capture read, and wrote back into, buildings demolished since its last
+  record; it now only reads buildings still listed. A setting command whose
+  building is not found no longer gives up on one unreadable entry, and logs
+  the nearest building of that kind.
 
 ## 0.7.2
 

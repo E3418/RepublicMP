@@ -9,6 +9,7 @@
 #include <vector>
 #include <string.h>
 #include <stdio.h>
+#include <stdarg.h>
 
 void LockstepNet_Bind(const TsmHost* host)
 {
@@ -71,6 +72,7 @@ struct Peer {
     LsHash early[LS_HASH_KEEP];   // host: summaries that came before the host's own
     int earlyCount;
     unsigned long long lastMatched;
+    bool differsAfterDesync;      // host, after a desync: the last comparison still differed
     CRITICAL_SECTION sendLock;
 };
 
@@ -88,6 +90,111 @@ static LsState g_sentState = { 1, 1 }; // repeated with every ping: a player tha
 static bool g_stateSent = false;
 struct OwnHash { unsigned long long tick; StateSummary s; bool valid; };
 static OwnHash g_ownHashes[LS_HASH_KEEP];
+
+// The per-object records of the last hashed ticks (StateHash_*Records): at a
+// desync each PC writes those of the tick that differed to its log, so the two
+// logs name the objects that differ. Main thread writes; the player's receive
+// thread reads when the host reports a desync.
+#define LS_RECORD_KEEP 8
+struct OwnRecords {
+    unsigned long long tick = 0;
+    bool valid = false;
+    std::vector<BuildingRecord> buildings;
+    std::vector<VehicleRecord> vehicles;
+    std::vector<CitizenRecord> citizens;
+};
+static OwnRecords g_records[LS_RECORD_KEEP];
+static SRWLOCK g_recordsLock = SRWLOCK_INIT;
+
+static void KeepRecords(unsigned long long tick)
+{
+    OwnRecords& r = g_records[(tick / LOCKSTEP_HASH_TICKS) % LS_RECORD_KEEP];
+    AcquireSRWLockExclusive(&g_recordsLock);
+    r.tick = tick;
+    r.valid = StateHash_BuildingRecords(r.buildings) && StateHash_VehicleRecords(r.vehicles) &&
+              StateHash_CitizenRecords(r.citizens);
+    ReleaseSRWLockExclusive(&g_recordsLock);
+}
+
+// Lines gathered and written ~30 at a time: the loader writes each Logf
+// through to the file.
+struct RecordLines {
+    char text[4000];
+    size_t used = 0;
+    int lines = 0;
+    void Add(const char* fmt, ...)
+    {
+        va_list args;
+        va_start(args, fmt);
+        int n = vsnprintf(text + used, sizeof(text) - used, fmt, args);
+        va_end(args);
+        if (n < 0 || used + n + 2 >= sizeof(text)) {
+            text[used] = 0;
+            Flush();
+            va_start(args, fmt);
+            n = vsnprintf(text, sizeof(text) - 2, fmt, args);
+            va_end(args);
+            if (n < 0) return;
+            used = (size_t)n < sizeof(text) - 2 ? (size_t)n : sizeof(text) - 3;
+        } else {
+            used += n;
+        }
+        text[used++] = '\r';
+        text[used++] = '\n';
+        text[used] = 0;
+        if (++lines >= 30) Flush();
+    }
+    void Flush()
+    {
+        if (used) Logf("republicmp  DESYNC_RECORD:\r\n%s", text);
+        used = 0;
+        lines = 0;
+    }
+};
+
+// One line per object of the subsystems named in `what` (the desync text up
+// to its player's name: "buildings vehicles citizens"), in list order; floats
+// with every digit (%.9g), as the hash takes their bits. The tick's records
+// leave the ring first, so nothing waits for the log.
+static void DumpRecords(unsigned long long tick, const char* what)
+{
+    char subsystems[160];
+    strncpy_s(subsystems, what, _TRUNCATE);
+    if (char* name = strchr(subsystems, '(')) *name = 0;
+    OwnRecords r;
+    AcquireSRWLockExclusive(&g_recordsLock);
+    for (OwnRecords& k : g_records)
+        if (k.valid && k.tick == tick) {
+            r = std::move(k);
+            k.valid = false;
+        }
+    ReleaseSRWLockExclusive(&g_recordsLock);
+    if (!r.valid) {
+        Logf("republicmp  DESYNC_RECORD: none kept for tick %llu", tick);
+        return;
+    }
+    RecordLines out;
+    if (strstr(subsystems, "buildings")) {
+        out.Add("tick %llu, %d buildings (index category x y z progress produced workers storage slots)", tick,
+                (int)r.buildings.size());
+        for (const BuildingRecord& b : r.buildings)
+            out.Add("B %d %d %.9g %.9g %.9g %.9g %.9g %d %016llX %d", b.index, b.category, b.pos[0], b.pos[1], b.pos[2],
+                    b.progress, b.produced, b.workers, b.storage, b.slots);
+    }
+    if (strstr(subsystems, "vehicles")) {
+        out.Add("tick %llu, %d vehicles (index x y z cargo)", tick, (int)r.vehicles.size());
+        for (const VehicleRecord& v : r.vehicles)
+            out.Add("V %d %.9g %.9g %.9g %016llX", v.index, v.pos[0], v.pos[1], v.pos[2], v.cargo);
+    }
+    if (strstr(subsystems, "citizens")) {
+        out.Add("tick %llu, %d citizens (n home age x y z)", tick, (int)r.citizens.size());
+        for (size_t i = 0; i < r.citizens.size(); i++) {
+            const CitizenRecord& c = r.citizens[i];
+            out.Add("C %d %d %.9g %.9g %.9g %.9g", (int)i, c.home, c.age, c.pos[0], c.pos[1], c.pos[2]);
+        }
+    }
+    out.Flush();
+}
 static char g_desync[256] = "";
 static unsigned long long g_desyncTick = 0; // the tick of g_desync
 
@@ -173,7 +280,10 @@ static DWORD WINAPI RecvThread(LPVOID param)
             g_desync[n] = 0;
             Logf("republicmp  LOCKSTEP: the host reports - %s", g_desync);
             unsigned long long tick = 0;
-            if (sscanf_s(g_desync, "the games differ after tick %llu", &tick) == 1) Determinism_DumpMoneyTrace(tick);
+            if (sscanf_s(g_desync, "the games differ after tick %llu", &tick) == 1) {
+                Determinism_DumpMoneyTrace(tick);
+                DumpRecords(tick, g_desync);
+            }
             continue;
         }
         if (h.type == LS_PLAYERS) {
@@ -405,7 +515,6 @@ unsigned long long LockstepNet_LastMatchedTick()
 static void Compare(int index, const LsHash& theirs)
 {
     Peer& peer = g_peers[index];
-    if (g_desync[0] && theirs.tick != g_desyncTick) return;
     const OwnHash* mine = nullptr;
     for (const OwnHash& h : g_ownHashes)
         if (h.valid && h.tick == theirs.tick) mine = &h;
@@ -420,6 +529,17 @@ static void Compare(int index, const LsHash& theirs)
     if (a.hashBuildings != b.hashBuildings) strcat_s(what, "buildings ");
     if (a.hashVehicles != b.hashVehicles) strcat_s(what, "vehicles ");
     if (a.hashCitizens != b.hashCitizens) strcat_s(what, "citizens ");
+    if (g_desync[0] && theirs.tick != g_desyncTick) {
+        // Later ticks: the games go on differing, or match again - a
+        // difference of that moment only (something one PC alone listed then).
+        bool differs = what[0] != 0;
+        if (differs != peer.differsAfterDesync) {
+            peer.differsAfterDesync = differs;
+            if (differs) Logf("republicmp  LOCKSTEP:   %s differs again after tick %llu: %s", peer.nick, theirs.tick, what);
+            else Logf("republicmp  LOCKSTEP:   %s matches the host again after tick %llu", peer.nick, theirs.tick);
+        }
+        return;
+    }
     if (g_desync[0]) {
         if (what[0]) Logf("republicmp  LOCKSTEP:   %s differs too after tick %llu: %s(rubles %.4f dollars %.4f)", peer.nick,
                           theirs.tick, what, b.rub, b.usd);
@@ -431,6 +551,7 @@ static void Compare(int index, const LsHash& theirs)
         return;
     }
     g_desyncTick = theirs.tick;
+    peer.differsAfterDesync = true;
     for (int i = 0; i < g_peerSlots; i++)
         if (i != index && g_peers[i].connected && g_peers[i].lastMatched >= theirs.tick)
             Logf("republicmp  LOCKSTEP:   %s matches the host after tick %llu", g_peers[i].nick, theirs.tick);
@@ -441,11 +562,13 @@ static void Compare(int index, const LsHash& theirs)
          a.dayProgress, a.rub, a.usd, peer.nick, b.day, b.dayProgress, b.rub, b.usd);
     Broadcast(LS_DESYNC, g_desync, strlen(g_desync)); // every player shows it too
     Determinism_DumpMoneyTrace(theirs.tick);
+    DumpRecords(theirs.tick, what);
 }
 
 void LockstepNet_StateAfter(unsigned long long tick, const StateSummary& s)
 {
     if (!LockstepNet_IsConnected()) return;
+    KeepRecords(tick);
     if (!g_isHost) {
         LsHash h = { tick, s };
         Send(g_peers[0], LS_HASH, &h, sizeof(h));
