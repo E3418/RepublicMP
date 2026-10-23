@@ -57,6 +57,7 @@ enum LockstepCommandKind {
     LS_CMD_RESEARCH = 28,       // research.cpp: research started or suspended in a research building's window
     LS_CMD_LINK = 29,           // link_tools.cpp: a station or distribution link added with a link pick tool
     LS_CMD_OFFICE_SELECTION = 30, // office_selection.cpp: the construction offices assign tool's selection
+    LS_CMD_NEW_CITY = 31,       // new_city.cpp: a city made with the city tool (position and name)
 };
 
 // Money a local action changed on this PC (an interface purchase, a terrain

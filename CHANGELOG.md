@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.2
+
+Protocol 46 - every player needs this build.
+
+- **City tool** - making a new city with the city tool works in a session:
+  the city is made with the clicking player's name for it on every PC, and
+  the buildings around it join it. Before, the tool did nothing in a session.
+
 ## 0.7.1
 
 The MULTIPLAYER page becomes the players' UI, in the game's language. Protocol

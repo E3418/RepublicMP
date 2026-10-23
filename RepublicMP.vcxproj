@@ -200,6 +200,7 @@
     <ClCompile Include="lockstep\source_slots.cpp" />
     <ClCompile Include="lockstep\link_tools.cpp" />
     <ClCompile Include="lockstep\office_selection.cpp" />
+    <ClCompile Include="lockstep\new_city.cpp" />
     <ClCompile Include="lockstep\presence.cpp" />
     <ClCompile Include="game\world.cpp" />
     <ClCompile Include="game\camera.cpp" />
@@ -277,6 +278,7 @@
     <ClInclude Include="lockstep\source_slots.h" />
     <ClInclude Include="lockstep\link_tools.h" />
     <ClInclude Include="lockstep\office_selection.h" />
+    <ClInclude Include="lockstep\new_city.h" />
     <ClInclude Include="lockstep\presence.h" />
     <ClInclude Include="game\world.h" />
     <ClInclude Include="game\camera.h" />
