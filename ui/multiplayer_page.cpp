@@ -5,6 +5,7 @@
 // "Square" font 32s high, red with a gold outline, white under the mouse.
 #include "multiplayer_page.h"
 #include "game_assets.h"
+#include "ui_text.h"
 #include "../game/imgui_hook.h" // g_imguiVisible
 #include "../game/main_menu_hook.h"
 #include "../game/world.h"
@@ -80,6 +81,14 @@ void MultiplayerPage_Tick()
     lastBuild = build;
     s_menuOn = framesWithout < 30;
 
+    // The game's menu item in the game's language, once.
+    static bool itemText = false;
+    if (!itemText) {
+        itemText = true;
+        wchar_t text[64];
+        if (MultiByteToWideChar(CP_UTF8, 0, T("MULTIPLAYER"), -1, text, 64) > 0) MainMenuHook_SetItemText(text);
+    }
+
     // A hosted session is listed in the game list (Steam lobby) while it runs,
     // whether it was started here or from the RepublicMP window.
     if (s_mode < 0) s_mode = Profile_GetInt("profile", "game_mode", 0) == 1 ? 1 : 0;
@@ -133,6 +142,7 @@ static void RowText(ImDrawList* dl, float height, ImVec2 pos, const char* text, 
 // A clickable row centred on cx, its text top at y (game units times s).
 static bool Row(const char* id, const char* label, float cx, float y, float s, bool enabled = true)
 {
+    label = T(label);
     float h = kTextHeight * s;
     ImVec2 size = GameText_Size(GAME_FONT_SQUARE, h, label);
     // The click area is the text's, like the choices' (the game's own row box
@@ -144,21 +154,25 @@ static bool Row(const char* id, const char* label, float cx, float y, float s, b
     return clicked;
 }
 
+// Every text on the page goes through T (ui_text.h): the game's language.
 static void Label(GameFont font, float height, ImVec2 pos, ImU32 color, const char* text)
 {
-    GameText_Draw(ImGui::GetWindowDrawList(), font, height, pos, color, text);
+    GameText_Draw(ImGui::GetWindowDrawList(), font, height, pos, color, T(text));
 }
 
 // Text broken into lines at spaces to fit width, at most maxLines (the last
 // one cut short with "...").
-static void WrappedLabel(GameFont font, float height, ImVec2 pos, float width, int maxLines, ImU32 color,
-                         const char* text)
+// Returns the number of lines drawn.
+static int WrappedLabel(GameFont font, float height, ImVec2 pos, float width, int maxLines, ImU32 color,
+                        const char* text)
 {
+    text = T(text);
     std::string line, word;
     int lines = 0;
     auto flush = [&](bool last) {
         if (last && lines == maxLines - 1 && *text) line += "...";
-        Label(font, height, ImVec2(pos.x, pos.y + lines * height * 1.15f), color, line.c_str());
+        GameText_Draw(ImGui::GetWindowDrawList(), font, height, ImVec2(pos.x, pos.y + lines * height * 1.15f), color,
+                      line.c_str());
         ++lines;
         line.clear();
     };
@@ -175,12 +189,20 @@ static void WrappedLabel(GameFont font, float height, ImVec2 pos, float width, i
         text = *end ? end + 1 : end;
     }
     if (!line.empty() && lines < maxLines) flush(false);
+    return lines;
+}
+
+// Text drawn as it is: names, ids and numbers are not translated.
+static void Raw(GameFont font, float height, ImVec2 pos, ImU32 color, const char* text)
+{
+    GameText_Draw(ImGui::GetWindowDrawList(), font, height, pos, color, text);
 }
 
 // One choice of a row of choices: the chosen one in the rows' red and gold,
 // the others faded, white under the mouse.
 static bool Choice(const char* id, const char* label, float cx, float y, float s, bool chosen)
 {
+    label = T(label);
     float h = kTextHeight * s;
     ImVec2 size = GameText_Size(GAME_FONT_SQUARE, h, label);
     ImGui::SetCursorScreenPos(ImVec2(cx - size.x * 0.5f - 10 * s, y));
@@ -224,7 +246,7 @@ static void HostTab(float cx, float left, float right, float s)
     Label(GAME_FONT_ARIAL, 24 * s, ImVec2(left - 225 * s, 640 * s), kInk, "Listed for:");
     if (Choice("##friends", "FRIENDS", left - 110 * s, 670 * s, s, s_public == 0)) SetChoice(&s_public, 0, "game_public");
     if (Choice("##public", "EVERYONE", left + 110 * s, 670 * s, s, s_public == 1)) SetChoice(&s_public, 1, "game_public");
-    Label(GAME_FONT_ARIAL, 20 * s, ImVec2(left - 225 * s, 720 * s), kInk,
+    WrappedLabel(GAME_FONT_ARIAL, 20 * s, ImVec2(left - 225 * s, 720 * s), 470 * s, 2, kInk,
           s_public == 1 ? "Every player with this version sees your game." : "Only your Steam friends see your game.");
     // The session's size, the same setting as "Session" in the RepublicMP window.
     Label(GAME_FONT_ARIAL, 24 * s, ImVec2(left - 225 * s, 765 * s), kInk, "Players, you included:");
@@ -241,27 +263,24 @@ static void HostTab(float cx, float left, float right, float s)
         float rowX = right + 225 * s;
         if (Row("##hostNew", "HOST NEW GAME", rowX, 560 * s, s, idle)) HostThrough(MAIN_MENU_CUSTOM_GAME);
         if (Row("##hostSave", "HOST SAVED GAME", rowX, 600 * s, s, idle)) HostThrough(MAIN_MENU_LOAD_GAME);
-        Label(GAME_FONT_ARIAL, 20 * s, ImVec2(right, 655 * s), kInk, "Hosting starts once the city is loaded.");
+        WrappedLabel(GAME_FONT_ARIAL, 20 * s, ImVec2(right, 655 * s), 460 * s, 2, kInk,
+                     "Hosting starts once the city is loaded.");
     } else {
         // Only co-op plays for now; Republics shows what it will be (modes/republics).
         const RmpMode* republics = Modes_Republics();
         float y = 545 * s;
-        if (republics && republics->line1) {
-            Label(GAME_FONT_ARIAL, 22 * s, ImVec2(right, y), kInk, republics->line1);
-            y += 30 * s;
-        }
-        if (republics && republics->line2) {
-            Label(GAME_FONT_ARIAL, 22 * s, ImVec2(right, y), kInk, republics->line2);
-            y += 30 * s;
-        }
+        if (republics && republics->line1)
+            y += WrappedLabel(GAME_FONT_ARIAL, 22 * s, ImVec2(right, y), 460 * s, 2, kInk, republics->line1) * 26 * s + 4 * s;
+        if (republics && republics->line2)
+            y += WrappedLabel(GAME_FONT_ARIAL, 22 * s, ImVec2(right, y), 460 * s, 2, kInk, republics->line2) * 26 * s + 4 * s;
         Label(GAME_FONT_ARIAL, 22 * s, ImVec2(right, y + 10 * s), kRowRed, "In development - not playable yet.");
     }
     if (unsigned long long id = NetworkSteamId()) {
         char idText[32];
         snprintf(idText, sizeof(idText), "%llu", id);
-        Label(GAME_FONT_ARIAL, 22 * s, ImVec2(right, 740 * s), kInk, "Your SteamID64 (for a join by hand):");
-        Label(GAME_FONT_ARIAL, 28 * s, ImVec2(right, 770 * s), kInk, idText);
-        if (Row("##copy", "COPY", right + 360 * s, 768 * s, s)) ImGui::SetClipboardText(idText);
+        Label(GAME_FONT_ARIAL, 22 * s, ImVec2(right, 740 * s), kInk, "Your SteamID64:");
+        Raw(GAME_FONT_ARIAL, 28 * s, ImVec2(right, 770 * s), kInk, idText);
+        if (Row("##copy", "COPY", right + 380 * s, 768 * s, s)) ImGui::SetClipboardText(idText);
     }
 }
 
@@ -297,7 +316,7 @@ static void JoinTab(float cx, float listMin, float listMax, float s)
                               i == s_selected ? IM_COL32(0xAB, 0x03, 0x1D, 0x40) : IM_COL32(0xAB, 0x03, 0x1D, 0x18));
         char text[96];
         snprintf(text, sizeof(text), "%s%s", g.friendGame ? "* " : "", g.name);
-        Label(GAME_FONT_ARIAL, 24 * s, ImVec2(listMin + 10 * s, y + 4 * s), kInk, text);
+        Raw(GAME_FONT_ARIAL, 24 * s, ImVec2(listMin + 10 * s, y + 4 * s), kInk, text);
         Label(GAME_FONT_ARIAL, 24 * s, ImVec2(colMode, y + 4 * s), kInk, g.mode);
         snprintf(text, sizeof(text), "%d/%d", g.players, g.maxPlayers);
         Label(GAME_FONT_ARIAL, 24 * s, ImVec2(colPlayers, y + 4 * s), kInk, text);
@@ -310,7 +329,7 @@ static void JoinTab(float cx, float listMin, float listMax, float s)
         }
     }
     if (n == 0)
-        Label(GAME_FONT_ARIAL, 22 * s, ImVec2(listMin + 10 * s, y + 6 * s), kInk,
+        WrappedLabel(GAME_FONT_ARIAL, 22 * s, ImVec2(listMin + 10 * s, y + 6 * s), listMax - listMin - 20 * s, 2, kInk,
               SteamLobby_Refreshing() ? "Looking for games..."
                                       : "No games found: your friends' games and public ones of this version show here.");
 
@@ -333,7 +352,7 @@ static void JoinTab(float cx, float listMin, float listMax, float s)
     if ((Row("##connect", "CONNECT", listMax - 140 * s, 872 * s, s, canJoin) || enter) && canJoin)
         SaveSync_StartClient(s_target.c_str());
     if (!playable)
-        Label(GAME_FONT_ARIAL, 20 * s, ImVec2(listMin + 10 * s, 915 * s), kRowRed,
+        WrappedLabel(GAME_FONT_ARIAL, 20 * s, ImVec2(listMin + 10 * s, 915 * s), listMax - listMin - 20 * s, 1, kRowRed,
               "Republics is in development: pick Co-op on the HOST tab to join.");
 }
 
@@ -376,7 +395,7 @@ void MultiplayerPage_Draw()
                      ImGuiWindowFlags_NoBringToFrontOnFocus); // under the overlay's windows
 
     // The title, centred on the panel's red bar (42 of the texture's 700 lines).
-    const char* title = ":: MULTIPLAYER ::";
+    const char* title = T(":: MULTIPLAYER ::");
     float titleH = kTextHeight * s;
     ImVec2 titleSize = GameText_Size(GAME_FONT_SQUARE, titleH, title);
     Label(GAME_FONT_SQUARE, titleH, ImVec2(cx - titleSize.x * 0.5f, pMin.y + 42 * 0.87f * s - titleH * 0.5f), kWhite,

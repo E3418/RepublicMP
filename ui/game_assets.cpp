@@ -2,6 +2,7 @@
 // See game_assets.h.
 #include "game_assets.h"
 #include "ui_log.h"
+#include "ui_text.h"
 #include "../game/imgui_hook.h" // ImGuiHook_Device
 #include "imgui_internal.h"     // ImTextCharFromUtf8
 #include <d3d11.h>
@@ -173,7 +174,10 @@ static Font* GetFont(GameFont id)
     f.tried = true;
     std::vector<unsigned char> d;
     std::string dir = "fontsbitmap\\data\\";
-    if (!ReadFileBytes(GamePath((dir + kFontFiles[id] + ".fnt").c_str()), d) || d.size() < 4 ||
+    // The menu's font follows the language, as the game's own menu does:
+    // "Square" has no Cyrillic letters, "Buran" has them.
+    const char* file = id == GAME_FONT_SQUARE && UiText_IsCyrillic() ? "buran" : kFontFiles[id];
+    if (!ReadFileBytes(GamePath((dir + file + ".fnt").c_str()), d) || d.size() < 4 ||
         memcmp(d.data(), "BMF\x03", 4) != 0)
         return nullptr;
     for (size_t i = 4; i + 5 <= d.size();) {
@@ -218,23 +222,39 @@ static Font* GetFont(GameFont id)
     return f.ok ? &f : nullptr;
 }
 
-// Walks the text, calling emit(glyph, x) for each glyph at the font's own size.
+// Walks the text at a pixel height, calling emit(font, glyph, x, scale) per
+// glyph, x in pixels. A letter the font lacks comes from Arial (2229 glyphs:
+// accents, Cyrillic) at the same height, so no letter of a language is lost.
 template <typename Emit>
-static float Walk(const Font& f, const char* text, Emit emit)
+static float Walk(const Font& f, float height, const char* text, Emit emit)
 {
+    const Font* fallback = &f != &g_fonts[GAME_FONT_ARIAL] ? GetFont(GAME_FONT_ARIAL) : nullptr;
     float x = 0;
     unsigned prev = 0;
     for (const char* p = text; *p;) {
         unsigned c;
         int used = ImTextCharFromUtf8(&c, p, nullptr);
         p += used > 0 ? used : 1;
+        const Font* use = &f;
         auto g = f.glyphs.find(c);
-        if (g == f.glyphs.end()) g = f.glyphs.find('?');
-        if (g == f.glyphs.end()) continue;
-        auto k = f.kerning.find(((unsigned long long)prev << 32) | c);
-        if (k != f.kerning.end()) x += k->second;
-        emit(g->second, x);
-        x += g->second.advance;
+        const Glyph* glyph = g != f.glyphs.end() ? &g->second : nullptr;
+        if (!glyph && fallback) {
+            auto h = fallback->glyphs.find(c);
+            if (h != fallback->glyphs.end()) {
+                use = fallback;
+                glyph = &h->second;
+            }
+        }
+        if (!glyph) {
+            g = f.glyphs.find('?');
+            if (g == f.glyphs.end()) continue;
+            glyph = &g->second;
+        }
+        float scale = height / use->lineHeight;
+        auto k = use->kerning.find(((unsigned long long)prev << 32) | c);
+        if (k != use->kerning.end()) x += k->second * scale;
+        emit(*use, *glyph, x, scale);
+        x += glyph->advance * scale;
         prev = c;
     }
     return x;
@@ -244,8 +264,7 @@ ImVec2 GameText_Size(GameFont font, float height, const char* text)
 {
     Font* f = GetFont(font);
     if (!f) return ImGui::CalcTextSize(text);
-    float s = height / f->lineHeight;
-    return ImVec2(Walk(*f, text, [](const Glyph&, float) {}) * s, height);
+    return ImVec2(Walk(*f, height, text, [](const Font&, const Glyph&, float, float) {}), height);
 }
 
 void GameText_Draw(ImDrawList* drawList, GameFont font, float height, ImVec2 pos, ImU32 color, const char* text)
@@ -255,11 +274,10 @@ void GameText_Draw(ImDrawList* drawList, GameFont font, float height, ImVec2 pos
         drawList->AddText(pos, color, text);
         return;
     }
-    float s = height / f->lineHeight;
-    Walk(*f, text, [&](const Glyph& g, float x) {
-        if (g.page >= (int)f->pages.size() || !f->pages[g.page].srv || g.w <= 0 || g.h <= 0) return;
-        const Texture& page = f->pages[g.page];
-        ImVec2 a(pos.x + (x + g.xoff) * s, pos.y + g.yoff * s);
+    Walk(*f, height, text, [&](const Font& use, const Glyph& g, float x, float s) {
+        if (g.page >= (int)use.pages.size() || !use.pages[g.page].srv || g.w <= 0 || g.h <= 0) return;
+        const Texture& page = use.pages[g.page];
+        ImVec2 a(pos.x + x + g.xoff * s, pos.y + g.yoff * s);
         ImVec2 b(a.x + g.w * s, a.y + g.h * s);
         drawList->AddImage((ImTextureID)page.srv, a, b, ImVec2(g.x / page.size.x, g.y / page.size.y),
                            ImVec2((g.x + g.w) / page.size.x, (g.y + g.h) / page.size.y), color);

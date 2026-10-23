@@ -12,6 +12,8 @@ void MainMenuHook_Bind(const TsmHost* host);
 
 // True once per click on our item.
 bool MainMenuHook_TakeClick();
+// Our item's text in the game's language (default "MULTIPLAYER"); set once.
+void MainMenuHook_SetItemText(const wchar_t* text);
 
 // How many times the root menu's builder has run (the game's main thread):
 // while it keeps rising, the root main menu is on screen.
