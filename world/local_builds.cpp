@@ -601,19 +601,55 @@ static bool TakeCommitAsCommand(__int64 manager, int category)
     }
 }
 
+// Outside the lockstep: a tool's commit the area rule refuses
+// (Commands_RefusedHere) - the bulldozer by its cursor and its cut's ends, a
+// new or re-typed piece by its points, read as the command would carry them.
+// shortcut: a bulldozer drag over many segments and the other removal tools
+// (FillSegment refuses them) are not checked here; the lockstep checks them.
+static bool CommitRefusedHere(__int64 manager, int category)
+{
+    if (!Commands_ChecksHere()) return false;
+    __try {
+        if (IsDemolishToolActive()) {
+            __int64 thisPtr = GetPlacementManagerThisPtr();
+            float cursor[3] = { *(float*)(thisPtr + CURSOR_X_OFFSET), *(float*)(thisPtr + CURSOR_Y_OFFSET),
+                                *(float*)(thisPtr + CURSOR_Z_OFFSET) };
+            if (Commands_PointRefusedHere(cursor)) return true;
+            float a[3], b[3];
+            return *(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) != 0 && ReadDemolishRange(manager, a, b) &&
+                   (Commands_PointRefusedHere(a) || Commands_PointRefusedHere(b));
+        }
+        if (*(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) != 0) {
+            NetUpgradeMsg m = {};
+            return FillUpgrade(manager, category, m) && Commands_RefusedHere(LS_CMD_UPGRADE, &m, sizeof(m));
+        }
+        memset(&g_commandSegment, 0, sizeof(g_commandSegment));
+        return FillSegment(manager, category, g_commandSegment.seg) &&
+               Commands_RefusedHere(LS_CMD_SEGMENT, &g_commandSegment, sizeof(g_commandSegment));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 // Entry of FUN_140518a80. In a session a tool's commit becomes a command
-// (TakeCommitAsCommand); otherwise the original runs unchanged.
+// (TakeCommitAsCommand); otherwise the original runs unchanged, unless the
+// area rule refuses it.
 void HookedRoadCommit(__int64 manager,
                       unsigned __int64 p2, unsigned __int64 p3,
                       unsigned __int64 p4, unsigned int p5,
                       unsigned __int64 p6, unsigned __int64 p7)
 {
     int category = Networks_CategoryForManager(GetPlacementManagerThisPtr(), manager);
-    if (category >= 0 && p2 == 0 && Commands_TakeLocal() && !Networks_IsApplyingCommand() &&
-        !DemolishHook_InDemolish() && InterlockedCompareExchange(&g_buildingPlacementDepth, 0, 0) == 0 &&
-        TakeCommitAsCommand(manager, category))
-        return;
+    bool own = category >= 0 && p2 == 0 && !Networks_IsApplyingCommand() && !DemolishHook_InDemolish() &&
+               InterlockedCompareExchange(&g_buildingPlacementDepth, 0, 0) == 0;
+    if (own && Commands_TakeLocal() && TakeCommitAsCommand(manager, category)) return;
+    if (own && CommitRefusedHere(manager, category)) return;
     g_origRoadCommit(manager, p2, p3, p4, p5, p6, p7);
+}
+
+bool LocalBuilds_IsDemolishToolActive()
+{
+    return IsDemolishToolActive();
 }
 
 // Logs why a tool commit was not taken (from the game thread).
@@ -689,6 +725,24 @@ static void PlacementAsCommand(__int64 param_1, char* param_2, char param_3, cha
     }
     if (BuildingCount(*vecBeginPtr, *vecEndPtr) != before)
         Logf("republicmp  LOCKSTEP: the building tool placed a building here by itself - not covered, the PCs will differ");
+}
+
+// Outside the lockstep: the building tool's placing press at a spot the area
+// rule refuses; sim_patches then reads it as not pressed.
+bool LocalBuilds_PlacementRefusedHere()
+{
+    if (!Commands_ChecksHere()) return false;
+    float pos[3];
+    __try {
+        __int64 world = GetPlacementManagerThisPtr();
+        if (*(int*)(world + PLACEMENT_RESULT_OFFSET) != -1) return false; // not a valid place: the game shows why
+        pos[0] = *(float*)(world + CURSOR_X_OFFSET);
+        pos[1] = *(float*)(world + CURSOR_Y_OFFSET);
+        pos[2] = *(float*)(world + CURSOR_Z_OFFSET);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+    return Commands_PointRefusedHere(pos);
 }
 
 bool LocalBuilds_PlacementPress()

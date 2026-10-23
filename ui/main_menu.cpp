@@ -223,7 +223,7 @@ static void StatusPanel()
             break;
         }
         StatusDot(kBlue);
-        Wrapped(kBlue, "Hosting - waiting for players (up to %d)", Profile_GetMaxPlayers() - 1);
+        Wrapped(kBlue, "Hosting - waiting for players (up to %d)", SaveSync_MaxPlayers() - 1);
         Wrapped(kGrey, "Your game keeps running. Players connect to your IP (port %d).", SAVE_SYNC_PORT);
         if (lastError[0]) Wrapped(kYellow, "%s", lastError);
         break;

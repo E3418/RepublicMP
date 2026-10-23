@@ -53,6 +53,11 @@ void HookedRoadCommit(__int64 manager,
 // Lockstep: the building tool's placing press (sim_patches, 2cc37c). True if
 // it became a placement command - the game then reads it as not pressed.
 bool LocalBuilds_PlacementPress();
+// Outside the lockstep: the placing press at a spot the area rule refuses
+// (Commands_PointRefusedHere); the game then reads it as not pressed.
+bool LocalBuilds_PlacementRefusedHere();
+// The bulldozer ("terrain_demolish") is the selected tool.
+bool LocalBuilds_IsDemolishToolActive();
 
 void LocalBuilds_BeginBuildingPlacement();
 void LocalBuilds_EndBuildingPlacement();

@@ -58,6 +58,7 @@ void Commands_Bind(const TsmHost* host)
 
 struct Command {
     int kind;
+    int player = 0; // 0 the host (and the probe's own), 1.. a player
     unsigned long long afterTick;
     unsigned seq;
     std::vector<BYTE> data;
@@ -77,6 +78,7 @@ static DWORD g_applyThread = 0;
 static volatile LONG64 g_applyEpoch = 0;
 static unsigned g_seq = 0;
 static int g_session = COMMANDS_OFF; // in a session the player keeps the host's commands in g_record
+static CommandAreaFn g_areaRule = nullptr;
 
 static void Lock()
 {
@@ -184,10 +186,78 @@ static bool ApplyMoney(const LsMoneyDelta& d)
 
 static bool g_madeThisFrame = false;
 
+void Commands_SetAreaRule(CommandAreaFn fn) { g_areaRule = fn; }
+
+// The area rule over every point a command builds or demolishes on.
+// shortcut: buildings and networks only. Not checked yet: terrain and brushes,
+// group tools and planned construction (GROUP_TOOL, PLAN_START), directions,
+// hover tools, junctions, links, and the windows' settings and switches - add
+// their points or buildings here when a mode needs them.
+static bool InArea(int kind, int player, const void* p, size_t n)
+{
+    auto ok = [&](const float* pos) { return g_areaRule(player, pos); };
+    switch (kind) {
+    case LS_CMD_PLACE:
+    case LS_CMD_DEMOLISH:
+        if (n == sizeof(BuildingMsg)) return ok(&((const BuildingMsg*)p)->x);
+        break;
+    case LS_CMD_SEGMENT:
+        if (n == sizeof(NetSegmentMsg)) {
+            const NetSegment& s = ((const NetSegmentMsg*)p)->seg;
+            if (!ok(s.startNode) || !ok(s.endNode)) return false;
+            for (int i = 0; i < s.pointCount && i < NET_MAX_POINTS; i++)
+                if (!ok(s.points[i].pos)) return false;
+        }
+        break;
+    case LS_CMD_UPGRADE:
+        if (n == sizeof(NetUpgradeMsg)) {
+            const NetUpgradeMsg& m = *(const NetUpgradeMsg*)p;
+            for (int i = 0; i < m.pieceCount && i < NET_MAX_UPGRADE_PIECES; i++)
+                if (!ok(m.pieces[i].segStart) || !ok(m.pieces[i].segEnd)) return false;
+        }
+        break;
+    case LS_CMD_NET_DEMOLISH:
+        if (n == sizeof(NetDemolishMsg)) {
+            const NetDemolishMsg& m = *(const NetDemolishMsg*)p;
+            if (!ok(m.cursor)) return false;
+            if (m.hasRange && (!ok(m.rangeA) || !ok(m.rangeB))) return false;
+            for (int i = 0; i < m.pieceCount && i < 8; i++)
+                if (!ok(m.pieces[i].segStart) || !ok(m.pieces[i].segEnd)) return false;
+        } else if (n == sizeof(NetDemolishHoverMsg)) {
+            const NetDemolishHoverMsg& h = *(const NetDemolishHoverMsg*)p;
+            if (!ok(h.m.cursor)) return false;
+            if (h.hover.nodeKind && !ok(h.hover.node)) return false;
+            if (h.hover.edgeKind && (!ok(h.hover.edgeA) || !ok(h.hover.edgeB))) return false;
+        }
+        break;
+    }
+    return true;
+}
+
+bool Commands_ChecksHere()
+{
+    return !g_capturing && g_areaRule && g_areaRule(COMMANDS_LOCAL_PLAYER, nullptr);
+}
+
+bool Commands_RefusedHere(int kind, const void* data, size_t size)
+{
+    return Commands_ChecksHere() && !InArea(kind, COMMANDS_LOCAL_PLAYER, data, size);
+}
+
+bool Commands_PointRefusedHere(const float pos[3])
+{
+    return Commands_ChecksHere() && !g_areaRule(COMMANDS_LOCAL_PLAYER, pos);
+}
+
 // Makes one command through the module of its kind. A payload whose size does
 // not match the kind's message refuses it.
 static void Apply(const Command& c)
 {
+    if (g_areaRule && !InArea(c.kind, c.player, c.data.data(), c.data.size())) {
+        Logf("republicmp  LOCKSTEP: #%u %s of player %d after tick %llu - refused: outside their area", c.seq,
+             KindName(c.kind), c.player, c.afterTick);
+        return;
+    }
     const void* p = c.data.data();
     size_t n = c.data.size();
     bool ok = false;
@@ -341,7 +411,7 @@ static void PlayerBoundary(unsigned long long completed)
     Lock();
     mine.swap(g_outbox);
     Unlock();
-    for (const Command& c : mine) LockstepNet_SendCommand(c.kind, 0, c.data.data(), c.data.size());
+    for (const Command& c : mine) LockstepNet_SendCommand(c.kind, 0, 0, c.data.data(), c.data.size());
     while (g_replayAt < g_record.size() && g_record[g_replayAt].afterTick <= completed) {
         const Command& c = g_record[g_replayAt++];
         if (c.afterTick < completed)
@@ -380,7 +450,7 @@ void Commands_Boundary(unsigned long long completed)
         c.afterTick = completed;
         c.seq = ++g_seq;
         Apply(c);
-        if (g_session == COMMANDS_HOST) LockstepNet_SendCommand(c.kind, c.afterTick, c.data.data(), c.data.size());
+        if (g_session == COMMANDS_HOST) LockstepNet_SendCommand(c.kind, c.afterTick, c.player, c.data.data(), c.data.size());
         else if (g_capturing) g_record.push_back(std::move(c));
     }
 }
@@ -623,11 +693,12 @@ void Commands_SetSession(int role)
                                               : role == COMMANDS_PLAYER ? "ordered by the host" : "off");
 }
 
-void Commands_SubmitRemote(int kind, const void* data, size_t size)
+void Commands_SubmitRemote(int kind, int player, const void* data, size_t size)
 {
     if (g_session != COMMANDS_HOST) return;
     Command c;
     c.kind = kind;
+    c.player = player;
     c.afterTick = 0;
     c.seq = 0;
     c.data.assign((const BYTE*)data, (const BYTE*)data + size);
@@ -637,11 +708,12 @@ void Commands_SubmitRemote(int kind, const void* data, size_t size)
     Logf("republicmp  LOCKSTEP: %s from the player - made at the next boundary", KindName(kind));
 }
 
-void Commands_Receive(int kind, unsigned long long afterTick, const void* data, size_t size)
+void Commands_Receive(int kind, int player, unsigned long long afterTick, const void* data, size_t size)
 {
     if (g_session != COMMANDS_PLAYER) return;
     Command c;
     c.kind = kind;
+    c.player = player;
     c.afterTick = afterTick;
     c.seq = ++g_seq;
     c.data.assign((const BYTE*)data, (const BYTE*)data + size);

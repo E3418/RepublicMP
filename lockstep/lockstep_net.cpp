@@ -36,7 +36,7 @@ enum LockstepMsgType {
 #pragma pack(push, 1)
 struct LsHeader { unsigned type; unsigned size; };
 struct LsGrant { unsigned long long tick; int speed; };
-struct LsCommandHead { unsigned long long afterTick; int kind; };
+struct LsCommandHead { unsigned long long afterTick; int kind; int player; }; // player: host -> player only
 struct LsHash { unsigned long long tick; StateSummary s; };
 struct LsState { int paused; int speed; };
 struct LsPing { unsigned long long sentMs; int reply; };
@@ -490,11 +490,13 @@ void LockstepNet_Poll()
             break;
         case LS_CMD:
             if (n >= sizeof(LsCommandHead))
-                Commands_SubmitRemote(((const LsCommandHead*)p)->kind, p + sizeof(LsCommandHead), n - sizeof(LsCommandHead));
+                Commands_SubmitRemote(((const LsCommandHead*)p)->kind, m.peer + 1, p + sizeof(LsCommandHead),
+                                      n - sizeof(LsCommandHead));
             break;
         case LS_CMDS:
             if (n >= sizeof(LsCommandHead))
-                Commands_Receive(((const LsCommandHead*)p)->kind, ((const LsCommandHead*)p)->afterTick,
+                Commands_Receive(((const LsCommandHead*)p)->kind, ((const LsCommandHead*)p)->player,
+                                 ((const LsCommandHead*)p)->afterTick,
                                  p + sizeof(LsCommandHead), n - sizeof(LsCommandHead));
             break;
         case LS_ACK:
@@ -757,9 +759,9 @@ void LockstepNet_SendMark(int kind, const float pos[3])
     else Send(g_peers[0], LS_MARK, &k, sizeof(k));
 }
 
-void LockstepNet_SendCommand(int kind, unsigned long long afterTick, const void* data, size_t size)
+void LockstepNet_SendCommand(int kind, unsigned long long afterTick, int player, const void* data, size_t size)
 {
-    LsCommandHead h = { afterTick, kind };
+    LsCommandHead h = { afterTick, kind, player };
     if (g_isHost) Broadcast(LS_CMDS, &h, sizeof(h), data, size);
     else Send(g_peers[0], LS_CMD, &h, sizeof(h), data, size);
 }

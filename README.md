@@ -6,6 +6,10 @@ players share one city (**co-op**): the host's game is transferred to the
 joining players, and from there every game runs the same simulation tick by
 tick (**lockstep**).
 
+A second mode, **Republics** (in development), gives two players a republic
+each on one map cut in two halves of equal playable area; so far each builds on their own half
+only, and money is still shared.
+
 **Status:** alpha, tested with up to four players. Current version: **0.7.0**
 ([changelog](CHANGELOG.md)).
 
@@ -94,7 +98,8 @@ mismatch refuses it.
 1. Both players start the game with TesmioLoader and the same
    `RepublicMP.dll` installed.
 2. The host opens the **MULTIPLAYER** page - in the game's main menu, or in
-   the Multiplayer section of the Escape menu in a city - picks **Co-op**,
+   the Multiplayer section of the Escape menu in a city - picks **Co-op** or
+   **Republics**,
    the session's size and who sees the game in the list (Steam friends or
    everyone), then **Host new game** / **Host saved game** (hosting starts
    once the city has loaded) or, in a city, **Host this city**.

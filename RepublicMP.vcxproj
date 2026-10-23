@@ -203,6 +203,8 @@
     <ClCompile Include="lockstep\presence.cpp" />
     <ClCompile Include="game\world.cpp" />
     <ClCompile Include="game\camera.cpp" />
+    <ClCompile Include="game\minimap.cpp" />
+    <ClCompile Include="game\panel2d.cpp" />
     <ClCompile Include="modes\mode.cpp" />
     <ClCompile Include="modes\republics\republics.cpp" />
     <ClCompile Include="lockstep\rename.cpp" />
@@ -280,6 +282,8 @@
     <ClInclude Include="lockstep\presence.h" />
     <ClInclude Include="game\world.h" />
     <ClInclude Include="game\camera.h" />
+    <ClInclude Include="game\minimap.h" />
+    <ClInclude Include="game\panel2d.h" />
     <ClInclude Include="modes\mode.h" />
     <ClInclude Include="modes\republics\republics.h" />
     <ClInclude Include="api\republicmp_api.h" />

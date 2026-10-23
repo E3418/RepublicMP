@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Republics, first part** - the HOST tab now hosts Republics (2 players);
+  a player who joins gets the host's mode. The map is cut along one of its
+  diagonals, moved so both halves get the same playable area whatever the
+  map's border, and drawn as a red line on the map and the minimap: each player builds, lays and demolishes
+  buildings and networks on their own half only, and a click on the other
+  half is refused on both PCs with a notice - the host's too while it waits
+  alone for the player. A 50 m band along the line is
+  open to both, so roads and rails can join the halves. Money is still
+  shared, and terrain tools and windows are not limited yet.
+  Protocol 46: a command now carries the player who made it.
 - **The MULTIPLAYER page is the players' UI** - it now also opens over a
   city, from a Multiplayer section added to the game's Escape menu, and by
   itself when a session starts. While a session runs it shows it: the

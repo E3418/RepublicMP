@@ -73,6 +73,8 @@ static volatile LONG g_epoch = 1;
 static unsigned long long g_seed = 0;
 static volatile unsigned long long g_stepCount = 0;
 static StepObserverFn g_stepObservers[DETERMINISM_MAX_OBSERVERS] = {};
+static StepObserverFn g_frameObservers[DETERMINISM_MAX_OBSERVERS] = {};
+static int g_frameObserverCount = 0;
 static int g_stepObserverCount = 0;
 static bool g_mathRedirected = false;
 // For the probe: the simulation thread's draws inside Early and Late in this epoch
@@ -745,8 +747,16 @@ static void EmptySearchPool()
     Logf("republicmp  PROBE: search pool after the load: %lld / %lld / %lld entries - emptied", counts[0], counts[1], counts[2]);
 }
 
+static volatile LONG g_worldLoads = 0;
+
+unsigned Determinism_WorldLoads()
+{
+    return (unsigned)g_worldLoads;
+}
+
 static void HookedLoadWorld(void)
 {
+    InterlockedIncrement(&g_worldLoads);
     // A probe run starts its generator epoch exactly at the load, so the
     // random numbers the load itself draws are the same in both runs.
     bool session = g_sessionLoadPending;
@@ -1208,6 +1218,7 @@ void Determinism_BeforePrepare()
     timer[12] = g_frameStep ? 0 : 1;
     memcpy(g_tickTimer, timer, sizeof(g_tickTimer));
     Commands_RecordMoney();
+    for (int i = 0; i < g_frameObserverCount; i++) g_frameObservers[i]();
 }
 
 // Probe and plain layer: this PC's own clock admits the ticks.
@@ -1480,6 +1491,11 @@ void Determinism_SessionSpeed(bool* paused, int* speed)
 void Determinism_AddStepObserver(StepObserverFn fn)
 {
     if (g_stepObserverCount < DETERMINISM_MAX_OBSERVERS) g_stepObservers[g_stepObserverCount++] = fn;
+}
+
+void Determinism_AddFrameObserver(StepObserverFn fn)
+{
+    if (g_frameObserverCount < DETERMINISM_MAX_OBSERVERS) g_frameObservers[g_frameObserverCount++] = fn;
 }
 
 // ---------------------------------------------------------------------------

@@ -73,6 +73,11 @@ void Determinism_SessionSpeed(bool* paused, int* speed);
 #define DETERMINISM_MAX_OBSERVERS 4
 typedef void (*StepObserverFn)(void);
 void Determinism_AddStepObserver(StepObserverFn fn);
+// Called on every frame of an active layer (paused too), at the end of
+// Determinism_BeforePrepare: main thread, the frame's commands made. For
+// reads of the world a mode draws from; never a write (frames differ between
+// PCs). Up to DETERMINISM_MAX_OBSERVERS.
+void Determinism_AddFrameObserver(StepObserverFn fn);
 
 // Money trace (Debug window, on by default): every PC keeps its balances and
 // its construction sites after each tick of a lockstep session, and on a
@@ -118,6 +123,9 @@ bool Determinism_BeginSession(bool host);
 bool Determinism_SessionRunning();
 // A world load for the layer is pending (a session's or the probe's).
 bool Determinism_WorldLoading();
+// Any thread: how many world loads (0x430FC0) have begun since the game
+// started - what a module measured on the world before is stale once it moves.
+unsigned Determinism_WorldLoads();
 void Determinism_EndSession();
 // Any thread: a tick is being run in this frame (from Prepare to the end of
 // Late) - the early worker's calls included.

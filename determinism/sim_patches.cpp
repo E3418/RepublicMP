@@ -936,10 +936,18 @@ void SimPatches_ResetSearches()
         for (int i = 0; i < 3; i++) memcpy(workspace + i * 24 + 8, workspace + i * 24, 8);
 }
 
+static UnderUiFn g_underUi = nullptr;
+
+void SimPatches_SetUnderUi(UnderUiFn fn)
+{
+    g_underUi = fn;
+}
+
 static __int64 DetUiRoutine(void* world)
 {
     typedef __int64 (*UiFn)(void*);
     UiFn original = (UiFn)(g_exeBase + UI_ROUTINE_RVA);
+    if (g_underUi) g_underUi();
     if (!g_on || (BYTE*)world != g_exeBase + WORLD_RVA) return original(world);
     BYTE* shared = (BYTE*)world + SEARCH_WORKSPACE_OFFSET;
     BYTE saved[SEARCH_WORKSPACE_SIZE];
@@ -1137,6 +1145,7 @@ static bool DetPlacePress(void* input)
 {
     bool pressed = (*(PressFn*)(g_exeBase + PLACE_PRESS_IMPORT))(input);
     if (pressed && Determinism_IsActive() && LocalBuilds_PlacementPress()) return false;
+    if (pressed && !Determinism_IsActive() && LocalBuilds_PlacementRefusedHere()) return false;
     return pressed;
 }
 
