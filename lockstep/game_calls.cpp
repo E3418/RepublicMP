@@ -193,15 +193,16 @@ static const GameCallSite kSites[] = {
     { 0x7702C4, 0x1A04F0, "construction panel: rebuild the construction list", "WBb", 0, 0, false },
     { 0x77DBB7, 0x1A04F0, "construction window: rebuild the construction list", "WBb", 0, 0, false },
     // Building pick tools: one routine call per click (copy waste and transfer settings, copy
-    // distribution links, copy specific sources) and the distribution office's lists.
+    // distribution links, copy specific sources) and the distribution office's lists (also the
+    // destinations panel's pick; 1d4330 never reads its first argument, rcx is left over).
     { 0x1DBCBE, 0x1DC5D0, "copy waste settings tool: copy", "WBB", 0, 0, false },
     { 0x1DC00F, 0x1DC7D0, "copy transfer settings tool: copy", "WBB", 0, 0, false },
     { 0x2B8A8E, 0x2B8B10, "copy distribution tool: copy links", "xBB", 0, 0, false },
     { 0x1D6C18, 0x1D7E10, "copy sources tool: copy", "xBBxA", 0xF5C8, 0, false },
-    { 0x1DB790, 0x1D4330, "distribution office tool: add to list +f18", "WBR", 0xF18, 0, false },
-    { 0x1DB7A5, 0x1D4330, "distribution office tool: add to list +f48", "WBR", 0xF48, 0, false },
-    { 0x1DB7BA, 0x1D4330, "distribution office tool: add to list +f30", "WBR", 0xF30, 0, false },
-    { 0x1DB7D3, 0x1D4330, "distribution office tool: add to list +f60", "WBR", 0xF60, 0, false },
+    { 0x1DB790, 0x1D4330, "distribution office tool: add to list +f18", "xBR", 0xF18, 0, false },
+    { 0x1DB7A5, 0x1D4330, "distribution office tool: add to list +f48", "xBR", 0xF48, 0, false },
+    { 0x1DB7BA, 0x1D4330, "distribution office tool: add to list +f30", "xBR", 0xF30, 0, false },
+    { 0x1DB7D3, 0x1D4330, "distribution office tool: add to list +f60", "xBR", 0xF60, 0, false },
     // The citizens' destinations panel 776d40, drawn by the windows of homes, stops and the
     // other buildings with the list the window's +260 selects (by SoylentGreed): "any
     // building" 1d4330(-, 0, list) (a picked building goes through the tool above),

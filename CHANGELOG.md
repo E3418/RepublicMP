@@ -6,9 +6,10 @@ Protocol 45 - every player needs this build.
 
 - **Citizens' destinations** - the destinations panel of homes, bus stops and
   the other buildings that send people somewhere (workers, students,
-  passengers, tourists) works in a session: "any building", Remove and the
-  share buttons are made on every PC, like picking a building already was
-  (by SoylentGreed). "Remove all connections" is still not carried.
+  passengers, tourists) works in a session: picking a building, "any
+  building", Remove and the share buttons are made on every PC (by
+  SoylentGreed). Picking was refused before and did nothing in a session.
+  "Remove all connections" is still not carried.
 - **Game list** - the MULTIPLAYER page has HOST and JOIN tabs. A hosted
   session is listed through a Steam lobby, for Steam friends (the default)
   or for everyone; JOIN lists the friends' games and the public ones of the
