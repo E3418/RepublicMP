@@ -50,6 +50,9 @@ Protocol 50 - every player needs this build.
 - **Logs for construction sites made on one PC** - a segment command logs
   the pieces at its ends and whether they are planned: a new piece joined to
   a planned one starts that one's construction.
+- **Desync records show the storage** - a building's desync record now lists
+  each storage slot's entries and amount, so two logs show which slot split
+  and by how much.
 
 ## 0.7.2
 
