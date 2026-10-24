@@ -19,6 +19,7 @@
 #include "../determinism/sim_patches.h"
 #include "../determinism/construction_view.h"
 #include "../determinism/probe_trace.h"
+#include "../determinism/citizen_trace.h"
 #include "../determinism/probe_watch.h"
 #include "../save/save_zip.h"
 #include "../transport/network.h"
@@ -72,6 +73,7 @@ extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPlugi
     SimPatches_Bind(host);
     ConstructionView_Bind(host);
     ProbeTrace_Bind(host);
+    CitizenTrace_Bind(host);
     ProbeWatch_Bind(host);
     BuildingSettings_Bind(host);
     Republics_Bind(host);
@@ -121,6 +123,9 @@ extern "C" __declspec(dllexport) int TsmPluginStart(void)
 
     bool okMinimap = Minimap_InstallHook();
     Logf("republicmp  minimap draw hook: %d%s", okMinimap, okMinimap ? "" : " - modes draw nothing on the minimap");
+
+    bool okCitizenTrace = CitizenTrace_Install();
+    Logf("republicmp  citizen trace hooks: %d%s", okCitizenTrace, okCitizenTrace ? "" : " - desync reports list no citizen events");
 
     bool okTerrain = InstallTerrainHooks();
     Logf("republicmp  terrain hooks: %d%s", okTerrain, okTerrain ? "" : " - terrain will NOT be fully synced");

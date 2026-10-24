@@ -288,6 +288,9 @@
     <ClCompile Include="game\camera.cpp">
       <Filter>game</Filter>
     </ClCompile>
+    <ClCompile Include="determinism\citizen_trace.cpp">
+      <Filter>determinism</Filter>
+    </ClCompile>
     <ClCompile Include="game\minimap.cpp">
       <Filter>game</Filter>
     </ClCompile>
@@ -550,6 +553,9 @@
     </ClInclude>
     <ClInclude Include="game\camera.h">
       <Filter>game</Filter>
+    </ClInclude>
+    <ClInclude Include="determinism\citizen_trace.h">
+      <Filter>determinism</Filter>
     </ClInclude>
     <ClInclude Include="game\minimap.h">
       <Filter>game</Filter>

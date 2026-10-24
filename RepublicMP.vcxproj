@@ -205,6 +205,7 @@
     <ClCompile Include="lockstep\presence.cpp" />
     <ClCompile Include="game\world.cpp" />
     <ClCompile Include="game\camera.cpp" />
+    <ClCompile Include="determinism\citizen_trace.cpp" />
     <ClCompile Include="game\minimap.cpp" />
     <ClCompile Include="game\panel2d.cpp" />
     <ClCompile Include="modes\mode.cpp" />
@@ -286,6 +287,7 @@
     <ClInclude Include="lockstep\presence.h" />
     <ClInclude Include="game\world.h" />
     <ClInclude Include="game\camera.h" />
+    <ClInclude Include="determinism\citizen_trace.h" />
     <ClInclude Include="game\minimap.h" />
     <ClInclude Include="game\panel2d.h" />
     <ClInclude Include="modes\mode.h" />

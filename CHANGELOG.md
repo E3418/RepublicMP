@@ -13,6 +13,10 @@ Protocol 50 - every player needs this build.
   locomotive was on this PC's camera; it now does as off the camera too.
   A debug key (Ctrl+Numpad5) the game read straight from the keyboard is
   switched off in a session.
+- **Desync reports list the citizens' events** (#55) - who boarded a vehicle,
+  got a workplace or left the game in the two hash intervals before a
+  desync (`CITIZEN_EVENT` lines), so the two logs show the first one that
+  happened at another tick or on one PC only.
 - **Republics, first part** - the HOST tab now hosts Republics (2 players);
   a player who joins gets the host's mode. The map is cut along one of its
   diagonals, moved so both halves get the same playable area whatever the

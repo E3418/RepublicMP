@@ -4,6 +4,7 @@
 #include "commands.h"
 #include "presence.h"
 #include "../determinism/determinism.h"
+#include "../determinism/citizen_trace.h"
 #include "../transport/network.h"
 #include <deque>
 #include <vector>
@@ -169,6 +170,8 @@ static void DumpRecords(unsigned long long tick, const char* what)
             k.valid = false;
         }
     ReleaseSRWLockExclusive(&g_recordsLock);
+    // Who boarded, was hired or left since two hashes before (#55).
+    CitizenTrace_Dump(tick > 2 * LOCKSTEP_HASH_TICKS ? tick - 2 * LOCKSTEP_HASH_TICKS : 0, tick);
     if (!r.valid) {
         Logf("republicmp  DESYNC_RECORD: none kept for tick %llu", tick);
         return;
