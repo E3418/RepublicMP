@@ -4,6 +4,14 @@
 
 Protocol 50 - every player needs this build.
 
+- **Fix: field vehicles desynced** (#55) - a farm vehicle working a field
+  measured its speed only while it was on this PC's camera and under 500 m
+  away, so each PC moved it differently. It now moves as off the camera on
+  every PC, like the other vehicle placements already did.
+  A train wagon standing in a station followed its locomotive only while
+  the locomotive was on this PC's camera; it now does as off the camera too.
+  A debug key (Ctrl+Numpad5) the game read straight from the keyboard is
+  switched off in a session.
 - **Republics, first part** - the HOST tab now hosts Republics (2 players);
   a player who joins gets the host's mode. The map is cut along one of its
   diagonals, moved so both halves get the same playable area whatever the
