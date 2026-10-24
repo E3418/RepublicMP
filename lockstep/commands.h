@@ -58,6 +58,7 @@ enum LockstepCommandKind {
     LS_CMD_LINK = 29,           // link_tools.cpp: a station or distribution link added with a link pick tool
     LS_CMD_OFFICE_SELECTION = 30, // office_selection.cpp: the construction offices assign tool's selection
     LS_CMD_NEW_CITY = 31,       // new_city.cpp: a city made with the city tool (position and name)
+    LS_CMD_JOIN = 32,           // join_tool.cpp: the join tool's node (two edges made one)
 };
 
 // Money a local action changed on this PC (an interface purchase, a terrain

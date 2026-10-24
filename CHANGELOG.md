@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-Protocol 48 - every player needs this build.
+Protocol 49 - every player needs this build.
 
 - **Republics, first part** - the HOST tab now hosts Republics (2 players);
   a player who joins gets the host's mode. The map is cut along one of its
@@ -39,6 +39,9 @@ Protocol 48 - every player needs this build.
 - **Logs for road and pipe desyncs** - a segment command logs how many
   buildings (construction sites) it made on this PC, and a segment the game
   refuses on one PC logs the buildings in its way.
+- **Join tool** - the tool that makes the two pieces of a road, rail or pipe
+  at a node one piece works in a session (by SoylentGreed); it was put away
+  before. The node the clicking player picked is joined on every PC.
 
 ## 0.7.2
 
