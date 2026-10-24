@@ -175,11 +175,19 @@ static void DumpRecords(unsigned long long tick, const char* what)
     }
     RecordLines out;
     if (strstr(subsystems, "buildings")) {
-        out.Add("tick %llu, %d buildings (index category x y z progress produced workers storage slots)", tick,
-                (int)r.buildings.size());
-        for (const BuildingRecord& b : r.buildings)
-            out.Add("B %d %d %.9g %.9g %.9g %.9g %.9g %d %016llX %d", b.index, b.category, b.pos[0], b.pos[1], b.pos[2],
-                    b.progress, b.produced, b.workers, b.storage, b.slots);
+        out.Add("tick %llu, %d buildings (index category x y z progress produced workers storage slots | each slot's "
+                "entries:amount)", tick, (int)r.buildings.size());
+        for (const BuildingRecord& b : r.buildings) {
+            // Each slot's entry count and amount: two logs show which slot split and by how much.
+            char slots[RECORD_SLOTS * 24] = "";
+            size_t used = 0;
+            for (int s = 0; s < b.slots && s < RECORD_SLOTS; s++) {
+                int n = _snprintf_s(slots + used, sizeof(slots) - used, _TRUNCATE, " %d:%.9g", b.slotEntries[s], b.slotAmount[s]);
+                if (n > 0) used += n;
+            }
+            out.Add("B %d %d %.9g %.9g %.9g %.9g %.9g %d %016llX %d |%s", b.index, b.category, b.pos[0], b.pos[1], b.pos[2],
+                    b.progress, b.produced, b.workers, b.storage, b.slots, slots);
+        }
     }
     if (strstr(subsystems, "vehicles")) {
         out.Add("tick %llu, %d vehicles (index x y z cargo)", tick, (int)r.vehicles.size());

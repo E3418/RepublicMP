@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-Protocol 49 - every player needs this build.
+Protocol 50 - every player needs this build.
 
 - **Republics, first part** - the HOST tab now hosts Republics (2 players);
   a player who joins gets the host's mode. The map is cut along one of its
@@ -42,6 +42,17 @@ Protocol 49 - every player needs this build.
 - **Join tool** - the tool that makes the two pieces of a road, rail or pipe
   at a node one piece works in a session (by SoylentGreed); it was put away
   before. The node the clicking player picked is joined on every PC.
+- **Fix: the bulldozer on a network node** - a removal through a hovered node
+  found the node by its exact position; a node whose height differed in its
+  last bits was missed, and the PC then cut whatever piece its own cursor
+  picked. The node is now matched by its place in the network and its x and
+  z, and when the sender's node is not found nothing is cut.
+- **Logs for construction sites made on one PC** - a segment command logs
+  the pieces at its ends and whether they are planned: a new piece joined to
+  a planned one starts that one's construction.
+- **Desync records show the storage** - a building's desync record now lists
+  each storage slot's entries and amount, so two logs show which slot split
+  and by how much.
 
 ## 0.7.2
 
