@@ -530,6 +530,8 @@ static bool TakeCommitAsCommand(__int64 manager, int category)
             m.cursor[1] = *(float*)(thisPtr + CURSOR_Y_OFFSET);
             m.cursor[2] = *(float*)(thisPtr + CURSOR_Z_OFFSET);
             m.hasRange = listed && ReadDemolishRange(manager, m.rangeA, m.rangeB) ? 1 : 0;
+            m.edgeIndex = -1;
+            if (m.hasRange && !multi) Networks_EdgeIdentity(manager, seg, &m.edgeIndex, &m.edgeCheck);
             // A removal drag over many segments: the message holds 8, so the
             // rest go in further commands (whole segments, independent).
             static NetPiece s_pieces[DEMOLISH_MAX_PIECES];

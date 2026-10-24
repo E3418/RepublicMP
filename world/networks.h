@@ -178,6 +178,12 @@ struct NetUpgradeMsg {
 // with that one before the commit (route buffer and end nodes included, as
 // the upgrade does). Short pieces, which the cursor pick skips, are armed
 // through the node of the piece, as the tool does.
+// The piece's segment also travels by identity - its place in the manager's
+// segment list +0x2b0 and a check of its nodes and point count, the lists
+// being equal on every PC in lockstep (by SoylentGreed: the bulldozer's
+// commands replay "only when the same edge and range are selected"). A PC
+// whose cursor pick finds another piece or none, as with a planned (white)
+// piece under the cursor, arms that segment directly.
 struct NetDemolishMsg {
     int category;
     float cursor[3];  // thisPtr+0xf6c at the sender's commit
@@ -188,7 +194,13 @@ struct NetDemolishMsg {
     // demolished on its own at the receiver.
     int pieceCount;
     NetPiece pieces[8];
+    int edgeIndex;      // the piece's segment in manager +0x2b0, -1 = not known
+    unsigned edgeCheck; // Networks_EdgeCheck of that segment
 };
+
+// A segment's place in the manager's list +0x2b0 and its check (its nodes'
+// positions and its point count); false when it is not listed.
+bool Networks_EdgeIdentity(__int64 manager, __int64 seg, int* index, unsigned* check);
 
 // Direction of a factory connection. The factoryconnection_oneway tool
 // (FUN_1403d6e70 with mode 0x32) commits nothing: a click on an existing
@@ -313,6 +325,8 @@ struct NetDemolishHover {
     float edgeA[3];  // the edge's node 0 and node 1
     float edgeB[3];
     int edgePoints;
+    int nodeIndex;      // the node in the manager's committed nodes +0x298, -1 = not listed there
+    unsigned nodeCheck; // its position's bits
 };
 struct NetDemolishHoverMsg {
     NetDemolishMsg m; // the cursor; no range, no pieces

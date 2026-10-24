@@ -3,6 +3,7 @@
 #include "office_selection.h"
 #include "commands.h"
 #include "world_refs.h"
+#include "../determinism/determinism.h"
 #include <string.h>
 
 #define WORLD_RVA 0x9D4F10
@@ -55,6 +56,7 @@ struct SelectionMsg {
 static int g_ready = -1;
 static State g_shared;           // the session's state as this PC last saw it agreed
 static bool g_sharedValid = false;
+static unsigned g_sharedLoads = 0; // Determinism_WorldLoads() when g_shared was taken
 
 void OfficeSelection_Bind(const TsmHost* host)
 {
@@ -151,12 +153,22 @@ void OfficeSelection_Poll()
         return;
     }
     if (!Ready()) return;
+    // A load rebuilds the tool's object from the save: what was seen before
+    // it is not a click. Capturing begins before the session's own load, so
+    // the start is taken once it is done (the host sent its pre-load state
+    // as a change, made on the host alone).
+    if (Determinism_WorldLoading()) {
+        g_sharedValid = false;
+        return;
+    }
     static State now;
     if (!Read(now)) return;
-    if (!g_sharedValid) {
+    unsigned loads = Determinism_WorldLoads();
+    if (!g_sharedValid || loads != g_sharedLoads) {
         // The session's start: every PC loaded the same save.
         g_shared = now;
         g_sharedValid = true;
+        g_sharedLoads = loads;
         return;
     }
     if (Same(now, g_shared)) return;

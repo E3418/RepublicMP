@@ -13,6 +13,7 @@
 #include "../lockstep/shared_save.h"
 #include "../lockstep/research.h"
 #include "../lockstep/hover_tools.h"
+#include "../lockstep/join_tool.h"
 #include "../lockstep/cargo_settings.h"
 #include "../lockstep/source_slots.h"
 #include "../lockstep/link_tools.h"
@@ -822,6 +823,7 @@ static bool InstallToolStubs()
                                   : kToolCalls[i][1] == 0x4184C0 ? (unsigned __int64)&HoverTools_RailPlace
                                   : kToolCalls[i][1] == 0x418F90 ? (unsigned __int64)&HoverTools_RailRemove
                                   : kToolCalls[i][1] == 0x4182D0 ? (unsigned __int64)&HoverTools_Junction
+                                  : kToolCalls[i][1] == 0x3C9A00 ? (unsigned __int64)&JoinTool_Run
                                   : kToolCalls[i][1] == 0x1D51A0 ? (unsigned __int64)&SourceSlots_AddSourceTool
                                   : kToolCalls[i][1] == 0x2B6F30 ? (unsigned __int64)&LinkTools_Station
                                   : kToolCalls[i][1] == 0x2B78B0 ? (unsigned __int64)&LinkTools_Distribution

@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-Protocol 47 - every player needs this build.
+Protocol 49 - every player needs this build.
 
 - **Republics, first part** - the HOST tab now hosts Republics (2 players);
   a player who joins gets the host's mode. The map is cut along one of its
@@ -26,6 +26,22 @@ Protocol 47 - every player needs this build.
   record; it now only reads buildings still listed. A setting command whose
   building is not found no longer gives up on one unreadable entry, and logs
   the nearest building of that kind.
+- **Fix: the bulldozer on networks** - a piece the bulldozer removed on one
+  PC was often left on the other, planned (white) pieces most of all: the
+  other PC looked for it under the cursor and by position, and silently did
+  nothing when it found none. The piece now also travels as its place in the
+  network's segment list with a check (by SoylentGreed), and is armed
+  directly where the cursor picks another piece or none; a hovered node
+  travels the same way. A demolition that is not made logs why.
+- **Fix: the offices assign tool's selection at a session's start** - the
+  host sent the selection it saw before the session's load as a change, and
+  made it alone. The start is now taken after every world load.
+- **Logs for road and pipe desyncs** - a segment command logs how many
+  buildings (construction sites) it made on this PC, and a segment the game
+  refuses on one PC logs the buildings in its way.
+- **Join tool** - the tool that makes the two pieces of a road, rail or pipe
+  at a node one piece works in a session (by SoylentGreed); it was put away
+  before. The node the clicking player picked is joined on every PC.
 
 ## 0.7.2
 
