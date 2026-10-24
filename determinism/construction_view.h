@@ -21,7 +21,11 @@
 // writes into the listed buildings - the shipyard timer +fc0 and the stage
 // records' slot data (+20b0..+21b8 of each 0x21b8-byte record, the bytes
 // the scaffold generator 167540 writes too) - is kept before the call and
-// put back after, so the simulation reads the same values on every PC.
+// put back after. Worker target vectors +6b8/+6d0 are detached during the
+// drawer and replaced with private scratch vectors: Late 137b20 reads them
+// and re-targets citizens when their count changes. All listed buildings,
+// including untyped sites, are guarded. Rendering never publishes those
+// local targets into the shared simulation.
 //
 // The log (Debug window) writes, every two seconds, the drawer's list and up
 // to six construction sites on it: progress, flags, the simulation's and this

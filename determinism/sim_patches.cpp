@@ -1263,17 +1263,20 @@ typedef U64 (*SiteDrawFn)(U64 world, U64 pass);
 static U64 DetSiteDraw(U64 world, U64 pass)
 {
     SiteDrawFn original = (SiteDrawFn)(g_exeBase + SITE_DRAW_RVA);
-    bool fix = g_on && ConstructionView_GetDraw() && !g_inPhase;
+    bool privateDraw = g_on && !g_inPhase;
     ConstructionView_Sample((BYTE*)world, (int)(pass & 0xFF));
-    bool view = fix && VisibleIn();
+    bool view = privateDraw && ConstructionView_GetDraw() && VisibleIn();
     ConstructionView_View();
-    ConstructionView_Keep((BYTE*)world, view);
+    // Owning the camera scope and isolating the drawer's writes are separate:
+    // a nested call may already have this PC's view and still needs a guard,
+    // including when the optional construction drawing toggle is off.
+    ConstructionView_Keep((BYTE*)world, privateDraw);
     U64 r;
     {
-        Determinism_PrivateScope privateRng(view);
+        Determinism_PrivateScope privateRng(privateDraw);
         r = original(world, pass);
     }
-    ConstructionView_After(view);
+    ConstructionView_After(privateDraw);
     VisibleOut(view);
     return r;
 }

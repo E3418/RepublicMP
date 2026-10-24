@@ -4,6 +4,15 @@
 
 Protocol 51 - every player needs this build.
 
+- **Construction rendering and worker targets** - the site drawer rebuilt
+  worker target vectors on each PC's render frames; Late copied them and
+  re-targeted construction workers, including on held frames. The drawer now
+  uses private vectors and restores the original headers, while construction
+  animation stays enabled. Untyped sites and finished buildings on its list
+  are guarded too. A nested camera scope no longer bypasses the guard.
+  Found while investigating building/citizen desyncs; awaiting an in-game
+  comparison of both players' logs.
+
 - **Republics, first part** - the HOST tab now hosts Republics (2 players);
   a player who joins gets the host's mode. The map is cut along one of its
   diagonals, moved so both halves get the same playable area whatever the

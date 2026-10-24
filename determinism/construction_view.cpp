@@ -27,6 +27,7 @@
 #define SCAFFOLD_OFFSET 0x640         // three vectors: +640, +658, +670 (167540)
 #define PILES_OFFSET 0x718            // vector: the dirt piles' places
 #define PARTS_OFFSET 0x6B8            // two vectors the drawer clears and refills: +6b8, +6d0
+#define PART_HEADERS_BYTES 0x30       // two headers {begin, end, capacity}, three pointers each
 #define SHIPYARD_TIMER_OFFSET 0xFC0   // float: the shipyard branch adds the frame time (2dd2c5)
 #define LOG_MS 2000
 #define LOG_SITES 6
@@ -109,8 +110,8 @@ static long long VectorBytes(BYTE* b, unsigned offset)
     }
 }
 
-// What the drawer may write into a building: the shipyard timer and the
-// stage records' slot data.
+// Scalar and stage data the drawer may write into a building. The worker
+// target vectors below use private storage instead of a copy-back guard.
 static unsigned long long KeptHash(BYTE* b)
 {
     unsigned long long h = 0xcbf29ce484222325ull;
@@ -139,8 +140,20 @@ struct Kept {
     BYTE* records;
     int stages;
     BYTE tail[MAX_STAGES][STAGE_KEEP_BYTES];
+    BYTE sharedParts[PART_HEADERS_BYTES];
+    BYTE drawParts[PART_HEADERS_BYTES] = {}; // reusable native storage, empty at every call
 };
-static std::vector<Kept> g_kept; // render thread only
+// The drawer 2dc470 clears/refills building +6b8/+6d0 at 2df8db..2df901
+// and 2e19ec..2e1a04. They also feed simulation: Late 137b20 copies them to
+// +688/+6a0 (13898d, 1389a0) and, when the first count changes, re-targets
+// the building's workers through 82e590 at 1389e2. A local render, including
+// one between two ticks, must not publish those targets to the shared world.
+// Draw into two private vectors and restore the original headers afterwards.
+// Never restore an old header over storage the drawer could have reallocated:
+// the original storage is detached for the entire call and remains untouched.
+// Cache the native scratch storage by guard slot, not by a world pointer;
+// entries are discarded on reuse, so scratch storage can outlive a world load.
+static std::vector<Kept> g_kept; // presentation calls are serialized with simulation
 static size_t g_keptCount = 0;
 
 static bool KeepOne(BYTE* b, Kept& k)
@@ -151,15 +164,24 @@ static bool KeepOne(BYTE* b, Kept& k)
         k.stages = StageCount(b, &k.records);
         for (int s = 0; s < k.stages; s++)
             memcpy(k.tail[s], k.records + (size_t)s * STAGE_SIZE + STAGE_KEEP_FROM, STAGE_KEEP_BYTES);
+        memcpy(k.sharedParts, b + PARTS_OFFSET, sizeof(k.sharedParts));
+        // Keep each private allocation, but discard the previous draw's entries.
+        for (int i = 0; i < 2; i++)
+            memcpy(k.drawParts + i * 0x18 + 8, k.drawParts + i * 0x18, 8);
+        memcpy(b + PARTS_OFFSET, k.drawParts, sizeof(k.drawParts));
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
 }
 
-static void PutBackOne(const Kept& k)
+static void PutBackOne(Kept& k)
 {
     __try {
+        // Save the private headers after any growth, then reattach the shared
+        // vectors before checking the stage records or returning early.
+        memcpy(k.drawParts, k.building + PARTS_OFFSET, sizeof(k.drawParts));
+        memcpy(k.building + PARTS_OFFSET, k.sharedParts, sizeof(k.sharedParts));
         *(float*)(k.building + SHIPYARD_TIMER_OFFSET) = k.timer;
         // The drawer does not add or remove stage records; a list that changed is left alone.
         BYTE* records = nullptr;
@@ -265,7 +287,9 @@ void ConstructionView_Keep(BYTE* world, bool keep)
     BYTE** end;
     if (!ReadList(world, &begin, &end)) return;
     for (BYTE** it = begin; it < end; ++it) {
-        if (!IsSite(*it)) continue;
+        // The drawer has branches for untyped network sites and finished
+        // buildings too. Protect every listed building, not just typed sites.
+        if (!*it) continue;
         if (g_keptCount == g_kept.size()) g_kept.resize(g_kept.size() + 16);
         if (KeepOne(*it, g_kept[g_keptCount])) g_keptCount++;
     }
@@ -281,7 +305,7 @@ void ConstructionView_After(bool keep)
     g_logging = false;
     Logf("republicmp  CONSTRUCTION: drawer list %d building(s), %d site(s) on it; calls %d (colour) %d (pass 1) in 2 s; %s",
          g_listed, g_listedSites, g_callsSinceLog[0], g_callsSinceLog[1],
-         keep ? "drawn with this PC's view, kept fields put back" : "the simulation's view");
+         keep ? "presentation fields restored, worker targets private" : "the simulation's view");
     g_callsSinceLog[0] = g_callsSinceLog[1] = 0;
     for (int i = 0; i < g_siteCount; i++) {
         const SiteLog& s = g_sites[i];
