@@ -932,6 +932,59 @@ static int IndexOnSegment(__int64 seg, const float pos[3])
     return -2;
 }
 
+static unsigned Fnv(const void* data, size_t n, unsigned h = 2166136261u)
+{
+    for (size_t i = 0; i < n; i++) {
+        h ^= ((const unsigned char*)data)[i];
+        h *= 16777619u;
+    }
+    return h | 1u;
+}
+
+static unsigned EdgeCheck(__int64 seg)
+{
+    float w[7] = {};
+    memcpy(w, (const float*)(*(__int64*)(seg + SEG_NODE0_OFFSET) + NODE_POS_OFFSET), 12);
+    memcpy(w + 3, (const float*)(*(__int64*)(seg + SEG_NODE1_OFFSET) + NODE_POS_OFFSET), 12);
+    int points = (int)((*(__int64*)(seg + SEG_POINTS_END_OFFSET) - *(__int64*)(seg + SEG_POINTS_BEGIN_OFFSET)) / 0x18);
+    memcpy(w + 6, &points, 4);
+    return Fnv(w, sizeof(w));
+}
+
+static unsigned NodeCheck(__int64 node) { return Fnv((const float*)(node + NODE_POS_OFFSET), 12); }
+
+bool Networks_EdgeIdentity(__int64 manager, __int64 seg, int* index, unsigned* check)
+{
+    *index = -1;
+    *check = 0;
+    __try {
+        __int64* begin = *(__int64**)(manager + MGR_SEGMENTS_BEGIN_OFFSET);
+        __int64* end = *(__int64**)(manager + MGR_SEGMENTS_END_OFFSET);
+        if (!seg || !begin || end < begin) return false;
+        for (__int64* it = begin; it < end; ++it)
+            if (*it == seg) {
+                if (!*(__int64*)(seg + SEG_NODE0_OFFSET) || !*(__int64*)(seg + SEG_NODE1_OFFSET)) return false;
+                *index = (int)(it - begin);
+                *check = EdgeCheck(seg);
+                return true;
+            }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        *index = -1;
+    }
+    return false;
+}
+
+// The segment at index in the manager's list when its check matches, or 0.
+static __int64 EdgeAt(__int64 manager, int index, unsigned check)
+{
+    __int64* begin = *(__int64**)(manager + MGR_SEGMENTS_BEGIN_OFFSET);
+    __int64* end = *(__int64**)(manager + MGR_SEGMENTS_END_OFFSET);
+    if (index < 0 || !begin || end < begin || index >= end - begin) return 0;
+    __int64 seg = begin[index];
+    if (!seg || !*(__int64*)(seg + SEG_NODE0_OFFSET) || !*(__int64*)(seg + SEG_NODE1_OFFSET)) return 0;
+    return EdgeCheck(seg) == check ? seg : 0;
+}
+
 // A segment of the manager that has both `a` and `b` on it (nodes or
 // interior points), or 0.
 static __int64 FindSegmentWithRange(__int64 manager, const float a[3], const float b[3])
@@ -1105,6 +1158,18 @@ bool Networks_ReadDemolishHover(__int64 manager, NetDemolishHover* h)
                     break;
                 }
         }
+        h->nodeIndex = -1;
+        if (h->nodeKind) {
+            __int64 node = *(__int64*)((uintptr_t)g_exe + kHoverNodeRvas[h->nodeKind - 1]);
+            __int64* nb = *(__int64**)(manager + NET_NODES_OFFSET);
+            __int64* ne = *(__int64**)(manager + NET_NODES_OFFSET + 8);
+            for (__int64* it = nb; nb && it < ne; ++it)
+                if (*it == node) {
+                    h->nodeIndex = (int)(it - nb);
+                    h->nodeCheck = NodeCheck(node);
+                    break;
+                }
+        }
         for (int k = 0; k < 2 && !h->edgeKind; k++) {
             __int64 edge = *(__int64*)((uintptr_t)g_exe + kHoverEdgeRvas[k]);
             for (__int64* it = begin; edge && it && it < end; ++it)
@@ -1131,6 +1196,16 @@ static void ApplyHoverRefs(__int64 manager, const NetDemolishHover& h)
     __int64* begin = *(__int64**)(manager + MGR_SEGMENTS_BEGIN_OFFSET);
     __int64* end = *(__int64**)(manager + MGR_SEGMENTS_END_OFFSET);
     __int64 node = 0, edge = 0;
+    const char* nodeBy = "position";
+    if (h.nodeKind && h.nodeIndex >= 0) {
+        // The node by its place in the committed nodes, which every PC has alike.
+        __int64* nb = *(__int64**)(manager + NET_NODES_OFFSET);
+        __int64* ne = *(__int64**)(manager + NET_NODES_OFFSET + 8);
+        if (nb && ne > nb && h.nodeIndex < ne - nb && nb[h.nodeIndex] && NodeCheck(nb[h.nodeIndex]) == h.nodeCheck) {
+            node = nb[h.nodeIndex];
+            nodeBy = "list place";
+        }
+    }
     for (__int64* it = begin; it && it < end; ++it) {
         __int64 e = *it;
         if (!e) continue;
@@ -1146,8 +1221,9 @@ static void ApplyHoverRefs(__int64 manager, const NetDemolishHover& h)
     }
     if (node) *(__int64*)((uintptr_t)g_exe + kHoverNodeRvas[h.nodeKind - 1]) = node;
     if (edge) *(__int64*)((uintptr_t)g_exe + kHoverEdgeRvas[h.edgeKind - 1]) = edge;
-    Logf("republicmp  NETWORKS:   hover demolition: node %s, edge %s", !h.nodeKind ? "none" : node ? "found" : "MISSING",
-         !h.edgeKind ? "none" : edge ? "found" : "MISSING");
+    Logf("republicmp  NETWORKS:   hover demolition: node %s%s%s (sender's #%d at (%.2f,%.2f,%.2f)), edge %s",
+         !h.nodeKind ? "none" : node ? "found by " : "MISSING", node ? nodeBy : "", "", h.nodeIndex, h.node[0], h.node[1],
+         h.node[2], !h.edgeKind ? "none" : edge ? "found" : "MISSING");
 }
 
 bool Networks_ApplyCommandDemolishHover(const NetDemolishHoverMsg& msg)
@@ -1180,7 +1256,12 @@ static bool ApplyDemolishInner(const NetDemolishMsg& m, bool* outRemoved)
         return false;
     }
     __int64 thisPtr = GetWorldThisPtr();
-    if (ToolWrapperGuardBusy(thisPtr)) return false;
+    if (ToolWrapperGuardBusy(thisPtr)) {
+        Logf("republicmp  NETWORKS:   demolition not made - the tool wrapper guard is set on this PC");
+        return false;
+    }
+    const char* why = nullptr; // why nothing was removed, for the log
+    bool byIdentity = false;
 
     unsigned char* lmbHeld = (unsigned char*)((uintptr_t)g_exe + LMB_HELD_RVA);
     unsigned char* lmbJustPressed = (unsigned char*)((uintptr_t)g_exe + LMB_JUST_PRESSED_RVA);
@@ -1205,6 +1286,29 @@ static bool ApplyDemolishInner(const NetDemolishMsg& m, bool* outRemoved)
                 reset(manager, manager + MANAGER_RESET_STATE_OFFSET);
                 float c[3] = { m.cursor[0], m.cursor[1], m.cursor[2] };
                 fcaf0(manager, c, ROAD_DEMOLISH_TYPE, 0, 0, 0, 0, 0, 0, 0);
+                if (m.hasRange && m.edgeIndex >= 0) {
+                    // The sender's segment by identity: when the cursor picked
+                    // another piece or none, it is armed directly.
+                    __int64 seg = EdgeAt(manager, m.edgeIndex, m.edgeCheck);
+                    if (!seg)
+                        why = "the sender's segment is not here (its place in the list or its check differs)";
+                    else if (*(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) == 0 ||
+                             *(__int64*)(manager + MGR_UPG_SEGMENT_OFFSET) != seg) {
+                        EnsureDragNode(manager, MGR_START_NODE_OFFSET);
+                        EnsureDragNode(manager, MGR_END_NODE_OFFSET);
+                        if (*(__int64*)(manager + MGR_START_NODE_OFFSET) && *(__int64*)(manager + MGR_END_NODE_OFFSET)) {
+                            *(unsigned char*)(manager + MGR_UPG_MULTI_OFFSET) = 0;
+                            *(__int64*)(manager + MGR_UPG_SEGMENT_OFFSET) = seg;
+                            *(int*)(manager + MGR_UPG_RANGE_START_OFFSET) = -2; // never the sender's, so it is written
+                            *(int*)(manager + MGR_UPG_RANGE_END_OFFSET) = -2;
+                            *(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) = 1;
+                            direct = true;
+                            byIdentity = true;
+                        } else {
+                            why = "no drag nodes to arm the sender's segment with";
+                        }
+                    }
+                }
                 if (*(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) == 0 && m.hasRange) {
                     // Picking by cursor skips short segments; the tool removes
                     // those through the hovered node (FUN_1403abc90 ~290-320,
@@ -1278,7 +1382,12 @@ static bool ApplyDemolishInner(const NetDemolishMsg& m, bool* outRemoved)
                     if (adopted || (!viaNode && !direct)) {
                         commit(manager, 0, 0, 0, 0, 0, 0);
                         *outRemoved = true;
+                    } else {
+                        why = "the sender's range is not on the armed segment";
                     }
+                } else if (!why) {
+                    why = m.hasRange ? "the sender's piece is not under the cursor, at its nodes or on any segment here"
+                                     : "nothing is under the cursor here";
                 }
                 reset(manager, manager + MANAGER_RESET_STATE_OFFSET);
             } __finally {
@@ -1293,8 +1402,14 @@ static bool ApplyDemolishInner(const NetDemolishMsg& m, bool* outRemoved)
     }
     InterlockedDecrement(&g_applyingSegment);
     if (threw) Logf("republicmp  NETWORKS: <exception applying demolish>");
+    else if (!*outRemoved)
+        Logf("republicmp  NETWORKS:   demolition not made - %s (cursor (%.2f,%.2f,%.2f), segment #%d)", why ? why : "?",
+             m.cursor[0], m.cursor[1], m.cursor[2], m.edgeIndex);
     else if (*outRemoved) {
-        if (direct)
+        if (byIdentity)
+            Logf("republicmp  NETWORKS:   the cursor picked another piece or none - armed the sender's segment #%d directly",
+                 m.edgeIndex);
+        else if (direct)
             Logf("republicmp  NETWORKS:   not picked at the cursor or its nodes - armed directly on the piece");
         else if (viaNode)
             Logf("republicmp  NETWORKS:   nothing picked at the cursor - armed through the piece's node");
@@ -1322,6 +1437,7 @@ static bool ApplyDemolishPieces(const NetDemolishMsg& m, bool* outRemoved)
     for (int i = 0; i < m.pieceCount && i < 8; i++) {
         NetDemolishMsg one = {};
         one.category = m.category;
+        one.edgeIndex = -1;
         bool found = false;
         __try {
             __int64 manager = *(__int64*)(GetWorldThisPtr() + info->managerOffset);
@@ -1338,6 +1454,7 @@ static bool ApplyDemolishPieces(const NetDemolishMsg& m, bool* outRemoved)
                 memcpy(one.rangeA, n0, 12);
                 memcpy(one.rangeB, n1, 12);
                 one.hasRange = 1;
+                Networks_EdgeIdentity(manager, seg, &one.edgeIndex, &one.edgeCheck); // found here: its own identity
                 found = true;
             }
         } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -1515,6 +1632,55 @@ bool Networks_InstallDragStartHook()
                              sizeof(kDragStartExpect), "republicmp drag start");
 }
 
+// The world's building list +0x11b08 (construction sites of networks are in it).
+#define WORLD_BUILDINGS_OFFSET 0x11B08
+
+static int BuildingCount()
+{
+    __try {
+        __int64 world = GetWorldThisPtr();
+        __int64 b = *(__int64*)(world + WORLD_BUILDINGS_OFFSET), e = *(__int64*)(world + WORLD_BUILDINGS_OFFSET + 8);
+        return b && e >= b ? (int)((e - b) / 8) : 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return -1;
+    }
+}
+
+#define BUILDING_POS_OFFSET 0x350      // building: float x, y, z
+#define BUILDING_TYPE_OFFSET 0x318     // building: its type record
+#define TYPE_CATEGORY_OFFSET 0x360     // type record: int category
+#define REJECTED_NEAR_M 20.0f
+
+// A segment the engine refused here: the buildings near its points, so the
+// two PCs' logs show what this PC has in the way that the other has not.
+static void LogBuildingsNear(const NetSegment& seg)
+{
+    int logged = 0;
+    __try {
+        __int64 world = GetWorldThisPtr();
+        __int64* b = *(__int64**)(world + WORLD_BUILDINGS_OFFSET);
+        __int64* e = *(__int64**)(world + WORLD_BUILDINGS_OFFSET + 8);
+        for (__int64* it = b; b && it < e && logged < 6; ++it) {
+            __int64 bld = *it;
+            if (!bld) continue;
+            const float* p = (const float*)(bld + BUILDING_POS_OFFSET);
+            float best = 1e30f;
+            for (int i = -2; i < seg.pointCount && i < NET_MAX_POINTS; i++) {
+                const float* q = i == -2 ? seg.startNode : i == -1 ? seg.endNode : seg.points[i].pos;
+                float dx = p[0] - q[0], dz = p[2] - q[2], d = dx * dx + dz * dz;
+                if (d < best) best = d;
+            }
+            if (best > REJECTED_NEAR_M * REJECTED_NEAR_M) continue;
+            __int64 type = *(__int64*)(bld + BUILDING_TYPE_OFFSET);
+            Logf("republicmp  NETWORKS:   near the refused piece: building #%d, category 0x%X at (%.2f,%.2f,%.2f), %.1f m",
+                 (int)(it - b), type ? *(int*)(type + TYPE_CATEGORY_OFFSET) : -1, p[0], p[1], p[2], sqrtf(best));
+            ++logged;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    if (!logged) Logf("republicmp  NETWORKS:   near the refused piece: no building within %.0f m", REJECTED_NEAR_M);
+}
+
 bool Networks_ApplyCommandSegment(const NetSegmentMsg& msg)
 {
     const NetSegment& seg = msg.seg;
@@ -1526,7 +1692,13 @@ bool Networks_ApplyCommandSegment(const NetSegmentMsg& msg)
     BuildMode mine = BuildMode_Read();
     BuildMode_Write(msg.mode);
     bool engineAccepted = false;
+    int before = BuildingCount();
     bool ok = ApplySegment(seg, &engineAccepted);
+    // Compared between the PCs' logs: a segment that makes construction
+    // sites on one PC and none on the other (a planned road, type -1).
+    Logf("republicmp  NETWORKS:   buildings %d -> %d (type %d, %s)", before, BuildingCount(), seg.typeId,
+         engineAccepted ? "accepted" : "rejected");
+    if (ok && !engineAccepted) LogBuildingsNear(seg);
     BuildMode_Write(mine);
     return ok && engineAccepted;
 }
