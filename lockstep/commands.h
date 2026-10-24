@@ -94,6 +94,25 @@ unsigned long long Commands_ApplyEpoch();
 // Any thread: queues a captured action; it is made at the next boundary.
 void Commands_Submit(int kind, const void* data, size_t size);
 
+// Who made a command: 0 the host, 1.. a player by its connection on the host.
+// The host stamps it; what a player says of itself is never read.
+// A mode's rule on where a player may act (modes/): false for a point the
+// player may not build on or demolish refuses the whole command, on every PC.
+// Main thread, while a command is made; null: no rule. Called with pos null,
+// it says whether it applies at all.
+typedef bool (*CommandAreaFn)(int player, const float pos[3]);
+void Commands_SetAreaRule(CommandAreaFn fn);
+
+// Outside the lockstep (a Republics host alone) the game makes the local
+// player's actions itself: the hooks that would make a command ask here
+// first and skip the game's call when the rule refuses it. All false while
+// commands are captured or when no rule applies. The rule's player is then
+// COMMANDS_LOCAL_PLAYER, this PC's own.
+#define COMMANDS_LOCAL_PLAYER -1
+bool Commands_ChecksHere();
+bool Commands_RefusedHere(int kind, const void* data, size_t size);
+bool Commands_PointRefusedHere(const float pos[3]);
+
 // Changes made outside the hooks, found by comparing with a record (main
 // thread, while commands are captured): what the interface changed between
 // the end of a frame and the start of the next (AfterFrame records, Collect
@@ -133,7 +152,7 @@ void Commands_ProbeEnd(size_t* recorded, size_t* replayed);
 // 2 player. Capture is on while a session runs.
 enum { COMMANDS_OFF = 0, COMMANDS_HOST = 1, COMMANDS_PLAYER = 2 };
 void Commands_SetSession(int role);
-// Host, game thread: a command the player sent; ordered at the next boundary.
-void Commands_SubmitRemote(int kind, const void* data, size_t size);
-// Player, game thread: a command the host made after `afterTick`.
-void Commands_Receive(int kind, unsigned long long afterTick, const void* data, size_t size);
+// Host, game thread: a command `player` sent; ordered at the next boundary.
+void Commands_SubmitRemote(int kind, int player, const void* data, size_t size);
+// Player, game thread: a command of `player` the host made after `afterTick`.
+void Commands_Receive(int kind, int player, unsigned long long afterTick, const void* data, size_t size);

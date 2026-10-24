@@ -11,8 +11,10 @@ The DLL offers two kinds of game on the RepublicMP window's start page:
 - **Co-op** (built): one republic, 2-4 players. Every PC simulates the same
   city in deterministic lockstep; player actions are commands made at the
   same tick on every PC.
-- **Republics** (planned, `modes/republics/`): each player runs a republic of
-  their own on one map; the neighbour is drawn as render-only copies.
+- **Republics** (in development, `modes/republics/`): 2 players, each with a
+  republic of their own on one map cut along its diagonal. It runs on the
+  same lockstep as co-op; the mode adds rules on top (where a player may
+  build, later a wallet per player).
 
 ## Layers
 
@@ -106,6 +108,7 @@ function.
 | `0x30D1A0` Late body, call-site relays, tool stubs | inline / call sites | `determinism/sim_patches` |
 | window button call sites (`kSites`) | call sites | `lockstep/game_calls` |
 | `0x28AF60` root main menu builder | inline | `game/main_menu_hook` |
+| `0x4BDE80` minimap map and border | inline | `game/minimap` |
 | `IDXGISwapChain::Present` | vtable | `game/present_hook` |
 | the game window's `WndProc` | subclass | `game/imgui_hook` |
 
@@ -119,6 +122,21 @@ different build.
   page in the RepublicMP window, a frame callback and an overlay. Its
   `Xxx_Bind(host)` is called from `core/main.cpp` and calls
   `Modes_SetRepublics`.
+- `RmpMode.frame` and the overlay run on the render thread. A mode that reads
+  the world for them does it on the main thread, in a frame observer
+  (`Determinism_AddFrameObserver`: every frame of a session, paused too, after
+  the frame's commands) or a step observer (every step, also outside a
+  session), and only reads there. What it measured is stale after a load
+  (`Determinism_WorldLoads`).
+- To draw under the game's HUD and windows instead of above them (the
+  overlay is above everything), a mode draws with the game's 2D panel
+  (`game/panel2d`) from `SimPatches_SetUnderUi` (before the interface) or
+  `Minimap_SetDraw` (on the minimap, after its border).
+- A rule on the players' commands goes through the commands module, e.g.
+  `Commands_SetAreaRule`: it is checked when the command is made, on every
+  PC, with the player the host stamped on it (0 the host, 1.. a player).
+  Outside the lockstep (a host alone) the hooks ask it first
+  (`Commands_ChecksHere`, `Commands_RefusedHere`) and skip the game's call.
 - Settings of its own go to `RepublicMP.profile.ini` under a section of its
   own (`Profile_GetInt` / `Profile_SetInt`).
 - New files go into `RepublicMP.vcxproj` and `.filters`.
@@ -134,7 +152,8 @@ different build.
   What is known about the game beyond the code, with its evidence, is in
   `docs/findings.md`.
 - Diagnostics are off by default (the Debug window turns them on; the money
-  trace is the exception).
+  trace and the per-object desync records are the exceptions: a desync in a
+  player's session has to be explained from their logs).
 - Files are CRLF. Code, comments and the changelog are in English; no
   internal tags. Work taken from another project is credited in the code,
   e.g. "(by SoylentGreed)".

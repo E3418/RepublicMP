@@ -29,6 +29,8 @@
 
 #include "../game/world.h"
 #include "../game/camera.h"
+#include "../game/panel2d.h"
+#include "../game/minimap.h"
 #include "../modes/republics/republics.h"
 #include "version.h"
 #include "profile.h"
@@ -45,6 +47,8 @@ extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPlugi
     Profile_Bind(host);
     World_Bind(host);
     Camera_Bind(host);
+    Panel2D_Bind(host);
+    Minimap_Bind(host);
     LocalBuilds_Bind(host);
     PresentHook_Bind(host);
     GameSpeed_Bind(host);
@@ -114,6 +118,9 @@ extern "C" __declspec(dllexport) int TsmPluginStart(void)
     bool okCollision = InstallPlacementCollisionHook();
     Logf("republicmp  placement collision hook: %d%s", okCollision,
          okCollision ? "" : " - access roads may take a different route on each PC");
+
+    bool okMinimap = Minimap_InstallHook();
+    Logf("republicmp  minimap draw hook: %d%s", okMinimap, okMinimap ? "" : " - modes draw nothing on the minimap");
 
     bool okTerrain = InstallTerrainHooks();
     Logf("republicmp  terrain hooks: %d%s", okTerrain, okTerrain ? "" : " - terrain will NOT be fully synced");

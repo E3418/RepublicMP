@@ -75,3 +75,9 @@ int SimPatches_LastPopulation();
 void SimPatches_WaitRender();
 // After loading: retain private vector storage, discard entries from the previous city.
 void SimPatches_ResetSearches();
+
+// Render thread, every frame right before the interface (317db0, relayed at
+// 482b52) draws, after the 3D frame is composited: what is drawn here with the
+// game's 2D panel (game/panel2d) lies under the HUD. One, null for none.
+typedef void (*UnderUiFn)(void);
+void SimPatches_SetUnderUi(UnderUiFn fn);

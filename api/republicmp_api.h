@@ -29,6 +29,26 @@
 //   Camera_Clip, Camera_Project
 #include "../game/camera.h"
 
+// --- Drawing in the game's own 2D pass, so its HUD and windows cover it:
+// Panel2D_ScreenSize, Panel2D_ScreenSegments (from SimPatches_SetUnderUi:
+// under the interface), Minimap_SetDraw / Minimap_Frame / Minimap_DrawSegments
+// (on the minimap, after its border).
+#include "../game/panel2d.h"
+#include "../game/minimap.h"
+#include "../determinism/sim_patches.h"
+
+// --- The session: its state and the host's game mode (SaveSync_GetState,
+// SaveSync_GetGameMode, SESSION_MODE_REPUBLICS).
+#include "../session/save_sync.h"
+
+// --- A main-thread point on every frame of a session, for reads of the world
+// the overlay draws from (Determinism_AddFrameObserver).
+#include "../determinism/determinism.h"
+
+// --- Lockstep commands: the area rule (Commands_SetAreaRule) that refuses a
+// player's building or network command by where it is, on every PC.
+#include "../lockstep/commands.h"
+
 // --- Pause and speed: ReadGameSpeed, WriteGameSpeed, EnsureGamePaused,
 // EnsureGameUnpaused (in a co-op session the host decides them).
 #include "../session/game_speed.h"

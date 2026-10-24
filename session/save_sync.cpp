@@ -44,6 +44,7 @@ void SaveSync_Bind(const TsmHost* host)
 
 static volatile SessionState g_state = SESSION_IDLE;
 static volatile bool g_isHost = false;
+static volatile int g_gameMode = SESSION_MODE_COOP; // SaveSync_GetGameMode
 static char g_targetIp[64] = SAVE_SYNC_TEST_HOST_IP; // client target - overridable from the UI
 static char g_peerIp[64] = "";
 static char g_lastError[256] = "";
@@ -158,6 +159,7 @@ struct SessionHello {
     int protocol;      // REPUBLICMP_PROTOCOL
     char version[16];  // REPUBLICMP_VERSION
     unsigned int dllCrc;
+    int gameMode;      // the host's SESSION_MODE_*; a player's is not read
 };
 
 // Step reports in both directions after the hello.
@@ -198,6 +200,7 @@ static void MakeHello(SessionHello* h)
     h->protocol = REPUBLICMP_PROTOCOL;
     strncpy_s(h->version, REPUBLICMP_VERSION, _TRUNCATE);
     h->dllCrc = SaveSync_GetLocalDllCrc();
+    h->gameMode = g_gameMode;
 }
 
 // Compares the peer's hello with ours; fills why on a mismatch.
@@ -812,7 +815,7 @@ static int RunHostJoin(std::vector<Joiner>& js)
     return joined;
 }
 
-// The host: up to Profile_GetMaxPlayers() - 1 players. The join port stays
+// The host: up to SaveSync_MaxPlayers() - 1 players. The join port stays
 // open while there is room (a full session stops listening); a player who
 // connects during the game joins through a re-sync of everyone, so all load
 // the same save again.
@@ -938,7 +941,7 @@ static const char* MonitorLockstepHost(std::vector<Joiner>& batch)
             return kResyncReason;
         }
         // Room for more: a new player joins through a re-sync of everyone.
-        if (count < Profile_GetMaxPlayers() - 1) {
+        if (count < SaveSync_MaxPlayers() - 1) {
             if (OpenListener()) {
                 NetLink s = NetworkAcceptReady(g_listener, 0, 0);
                 if (s != NET_NO_LINK) {
@@ -960,7 +963,7 @@ static void RunHostSessionPlayers()
     std::vector<Joiner> batch;
     std::vector<std::string> comingBack; // the players expected back for a re-sync (addresses)
     while (!g_disconnectRequested) {
-        int room = Profile_GetMaxPlayers() - 1;
+        int room = SaveSync_MaxPlayers() - 1;
         if (!OpenListener()) {
             SetSessionError("couldn't listen on port %d (already in use?)", SAVE_SYNC_PORT);
             break;
@@ -1126,6 +1129,8 @@ static bool RunClientJoin(bool rejoin)
             SaveStatus("[CLIENT] join refused: %s", why);
             break;
         }
+        g_gameMode = theirs.gameMode == SESSION_MODE_REPUBLICS ? SESSION_MODE_REPUBLICS : SESSION_MODE_COOP;
+        SaveStatus("[CLIENT] the host plays %s", g_gameMode == SESSION_MODE_REPUBLICS ? "Republics" : "co-op");
         SessionDlcs myDlcs, theirDlcs;
         MakeDlcs(&myDlcs);
         if (!NetworkSendExact(sock, &myDlcs, sizeof(myDlcs)) || !NetworkRecvExact(sock, &theirDlcs, sizeof(theirDlcs)) ||
@@ -1329,7 +1334,14 @@ bool SaveSync_IsWorldLoaded()
     return World_IsLoaded();
 }
 
-void SaveSync_StartHost()
+int SaveSync_GetGameMode() { return g_gameMode; }
+
+int SaveSync_MaxPlayers()
+{
+    return g_gameMode == SESSION_MODE_REPUBLICS ? SESSION_REPUBLICS_PLAYERS : Profile_GetMaxPlayers();
+}
+
+void SaveSync_StartHost(int gameMode)
 {
     if (g_state != SESSION_IDLE) return;
     if (!SaveSync_IsWorldLoaded()) {
@@ -1340,6 +1352,7 @@ void SaveSync_StartHost()
     }
     g_disconnectRequested = false;
     g_isHost = true;
+    g_gameMode = gameMode;
     g_resyncRequested = false;
     g_resyncing = false;
     g_sessionStartTick = GetTickCount64();
@@ -1356,6 +1369,7 @@ void SaveSync_StartClient(const char* hostIp)
         strncpy_s(g_targetIp, hostIp, _TRUNCATE);
     }
     g_isHost = false;
+    g_gameMode = SESSION_MODE_COOP; // the host's hello says
     g_resyncing = false;
     g_sessionStartTick = GetTickCount64();
     SetSessionError("");

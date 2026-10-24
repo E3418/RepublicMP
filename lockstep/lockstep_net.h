@@ -119,7 +119,8 @@ bool LockstepNet_HostState(bool* paused, int* speed);
 // command, the simulation never sees it.
 void LockstepNet_SendMark(int kind, const float pos[3]);
 
-// Both: commands (host: made after `afterTick`, to every player; player: to the host).
-void LockstepNet_SendCommand(int kind, unsigned long long afterTick, const void* data, size_t size);
+// Both: commands (host: `player`'s, made after `afterTick`, to every player;
+// player: to the host, which stamps who sent it).
+void LockstepNet_SendCommand(int kind, unsigned long long afterTick, int player, const void* data, size_t size);
 // Both, after tick `tick`: the state summary for the comparison.
 void LockstepNet_StateAfter(unsigned long long tick, const StateSummary& s);

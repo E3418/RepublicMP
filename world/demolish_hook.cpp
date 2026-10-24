@@ -79,6 +79,20 @@ static bool DemolishAsCommand(__int64 thisPtr, __int64 building, const unsigned 
     return true;
 }
 
+static bool DemolishRefusedHere(__int64 building)
+{
+    float pos[3];
+    __try {
+        const float* p = (const float*)(building + OBJ_POS_OFFSET);
+        pos[0] = p[0];
+        pos[1] = p[1];
+        pos[2] = p[2];
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+    return Commands_PointRefusedHere(pos);
+}
+
 static void HookedDemolish(__int64 thisPtr, __int64 building,
                            unsigned long long p3, unsigned long long p4,
                            unsigned long long p5, unsigned long long p6,
@@ -92,6 +106,17 @@ static void HookedDemolish(__int64 thisPtr, __int64 building,
         !Networks_IsApplyingCommand() && g_terrainApplyingCommand == 0) {
         unsigned long long args[5] = { p3, p4, p5, p6, p7 };
         if (Commands_TakeLocal() && DemolishAsCommand(thisPtr, building, args)) {
+            InterlockedDecrement(&g_depth);
+            return;
+        }
+        // Outside the lockstep: the bulldozer on a building the area rule
+        // refuses. Only with the tool selected and the button held, so the
+        // game's own demolitions pass.
+        // shortcut: one of the game's own on the other half while the player
+        // holds the bulldozer is refused too; a flag from the tool's click would
+        // tell them apart.
+        if (LocalBuilds_IsDemolishToolActive() && (GetAsyncKeyState(VK_LBUTTON) & 0x8000) &&
+            Commands_ChecksHere() && DemolishRefusedHere(building)) {
             InterlockedDecrement(&g_depth);
             return;
         }

@@ -55,9 +55,17 @@ void SaveStatus(const char* fmt, ...);
 // True while a world is loaded (not the main menu, not mid-load).
 bool SaveSync_IsWorldLoaded();
 
+// The kind of game a session plays: the host's choice, sent in its hello.
+enum { SESSION_MODE_COOP = 0, SESSION_MODE_REPUBLICS = 1 };
+#define SESSION_REPUBLICS_PLAYERS 2
+
 // Refused (no-op) while a session is active. Hosting needs a loaded world;
 // leaving the world ends the session (SaveSync_Tick).
-void SaveSync_StartHost();
+void SaveSync_StartHost(int gameMode = SESSION_MODE_COOP);
+// The current/last session's mode (a player: the host's).
+int SaveSync_GetGameMode();
+// The session's size: the profile's for co-op, 2 for Republics.
+int SaveSync_MaxPlayers();
 void SaveSync_StartClient(const char* hostIp = nullptr); // nullptr = keep last IP
 
 // Ends the session: stops hosting / leaves the host, closes the lockstep

@@ -107,8 +107,9 @@ void MultiplayerPage_Tick()
     if (lastState == SESSION_IDLE && st != SESSION_IDLE) MultiplayerPage_Open();
     lastState = st;
     if (SaveSync_IsHostRole() && (st == SESSION_HOST_LISTENING || st == SESSION_HOST_JOINING || st == SESSION_HOST_IN_GAME))
-        SteamLobby_Advertise(s_public == 1, Profile_GetNick(), "Co-op", 1 + LockstepNet_PeerCount(),
-                             Profile_GetMaxPlayers());
+        SteamLobby_Advertise(s_public == 1, Profile_GetNick(),
+                             SaveSync_GetGameMode() == SESSION_MODE_REPUBLICS ? "Republics" : "Co-op",
+                             1 + LockstepNet_PeerCount(), SaveSync_MaxPlayers());
     else
         SteamLobby_StopAdvertising();
     SteamLobby_Tick();
@@ -128,7 +129,7 @@ void MultiplayerPage_Tick()
     }
     if (s_leftMenu && s_sawUnloaded && loaded && !s_menuOn && GetTickCount64() - s_loadedSince > 2000) {
         s_hostAfterLoad = false;
-        if (SaveSync_GetState() == SESSION_IDLE) SaveSync_StartHost(); // the page comes up on its SESSION view
+        if (SaveSync_GetState() == SESSION_IDLE) SaveSync_StartHost(s_mode); // the page comes up on its SESSION view
     }
 }
 
@@ -259,7 +260,9 @@ static void HostTab(float cx, float left, float right, float s)
     if (Choice("##public", "EVERYONE", left + 110 * s, 670 * s, s, s_public == 1)) SetChoice(&s_public, 1, "game_public");
     WrappedLabel(GAME_FONT_ARIAL, 20 * s, ImVec2(left - 225 * s, 720 * s), 470 * s, 2, kInk,
           s_public == 1 ? "Every player with this version sees your game." : "Only your Steam friends see your game.");
-    // The session's size, the same setting as "Session" in the RepublicMP window.
+    // The session's size, the same setting as "Session" in the RepublicMP window
+    // (Republics is always 2).
+    if (s_mode == 0) {
     Label(GAME_FONT_ARIAL, 24 * s, ImVec2(left - 225 * s, 765 * s), kInk, "Players, you included:");
     int players = Profile_GetMaxPlayers();
     for (int n = PROFILE_MIN_PLAYERS; n <= PROFILE_MAX_PLAYERS; ++n) {
@@ -268,29 +271,25 @@ static void HostTab(float cx, float left, float right, float s)
         snprintf(label, sizeof(label), "%d", n);
         if (Choice(id, label, left + (n - 3) * 110 * s, 795 * s, s, players == n)) Profile_SetMaxPlayers(n);
     }
+    }
 
     bool idle = SaveSync_GetState() == SESSION_IDLE;
-    if (s_mode == 0 && !s_menuOn) {
+    if (!s_menuOn) {
         // Over a loaded city: that city is the game.
-        if (Row("##hostCity", "HOST THIS CITY", right + 225 * s, 560 * s, s, idle)) SaveSync_StartHost();
+        if (Row("##hostCity", "HOST THIS CITY", right + 225 * s, 560 * s, s, idle)) SaveSync_StartHost(s_mode);
         WrappedLabel(GAME_FONT_ARIAL, 20 * s, ImVec2(right, 615 * s), 460 * s, 2, kInk,
                      "The players who join get this city.");
-    } else if (s_mode == 0) {
+    } else {
         float rowX = right + 225 * s;
         if (Row("##hostNew", "HOST NEW GAME", rowX, 560 * s, s, idle)) HostThrough(MAIN_MENU_CUSTOM_GAME);
         if (Row("##hostSave", "HOST SAVED GAME", rowX, 600 * s, s, idle)) HostThrough(MAIN_MENU_LOAD_GAME);
         WrappedLabel(GAME_FONT_ARIAL, 20 * s, ImVec2(right, 655 * s), 460 * s, 2, kInk,
                      "Hosting starts once the city is loaded.");
-    } else {
-        // Only co-op plays for now; Republics shows what it will be (modes/republics).
-        const RmpMode* republics = Modes_Republics();
-        float y = 545 * s;
-        if (republics && republics->line1)
-            y += WrappedLabel(GAME_FONT_ARIAL, 22 * s, ImVec2(right, y), 460 * s, 2, kInk, republics->line1) * 26 * s + 4 * s;
-        if (republics && republics->line2)
-            y += WrappedLabel(GAME_FONT_ARIAL, 22 * s, ImVec2(right, y), 460 * s, 2, kInk, republics->line2) * 26 * s + 4 * s;
-        Label(GAME_FONT_ARIAL, 22 * s, ImVec2(right, y + 10 * s), kRowRed, "In development - not playable yet.");
     }
+    // Republics (modes/republics): what it is, under the ways to host.
+    const RmpMode* republics = Modes_Republics();
+    if (s_mode == 1 && republics && republics->line1)
+        WrappedLabel(GAME_FONT_ARIAL, 20 * s, ImVec2(right, 700 * s), 460 * s, 1, kRowRed, republics->line1);
     if (unsigned long long id = NetworkSteamId()) {
         char idText[32];
         snprintf(idText, sizeof(idText), "%llu", id);
@@ -305,7 +304,6 @@ static void HostTab(float cx, float left, float right, float s)
 static void JoinTab(float cx, float listMin, float listMax, float s)
 {
     bool idle = SaveSync_GetState() == SESSION_IDLE;
-    bool playable = s_mode == 0;
     LobbyGame games[16];
     int n = SteamLobby_Games(games, 16);
     if (s_selected >= n) s_selected = -1;
@@ -339,7 +337,7 @@ static void JoinTab(float cx, float listMin, float listMax, float s)
         if (g.pingMs >= 0) snprintf(text, sizeof(text), "%d ms", g.pingMs);
         else snprintf(text, sizeof(text), "-");
         Label(GAME_FONT_ARIAL, 24 * s, ImVec2(colPing, y + 4 * s), kInk, text);
-        if (join && idle && playable) {
+        if (join && idle) {
             snprintf(text, sizeof(text), "steam:%llu", g.host);
             SaveSync_StartClient(text);
         }
@@ -353,7 +351,7 @@ static void JoinTab(float cx, float listMin, float listMax, float s)
     if (Row("##refresh", SteamLobby_Refreshing() ? "LOOKING..." : "REFRESH", mid - 250 * s, 820 * s, s,
             !SteamLobby_Refreshing()))
         SteamLobby_Refresh();
-    bool canJoinListed = idle && playable && s_selected >= 0;
+    bool canJoinListed = idle && s_selected >= 0;
     if (Row("##joinListed", "JOIN", mid + 250 * s, 820 * s, s, canJoinListed) && canJoinListed) {
         char host[32];
         snprintf(host, sizeof(host), "steam:%llu", games[s_selected].host);
@@ -364,12 +362,9 @@ static void JoinTab(float cx, float listMin, float listMax, float s)
     ImGui::SetCursorScreenPos(ImVec2(listMin + 260 * s, 876 * s));
     bool enter = false;
     InkInput("##target", "76561198... or 192.168...", &s_target, 400 * s, s, &enter);
-    bool canJoin = idle && playable && !s_target.empty();
+    bool canJoin = idle && !s_target.empty();
     if ((Row("##connect", "CONNECT", listMax - 140 * s, 872 * s, s, canJoin) || enter) && canJoin)
         SaveSync_StartClient(s_target.c_str());
-    if (!playable)
-        WrappedLabel(GAME_FONT_ARIAL, 20 * s, ImVec2(listMin + 10 * s, 915 * s), listMax - listMin - 20 * s, 1, kRowRed,
-              "Republics is in development: pick Co-op on the HOST tab to join.");
 }
 
 // SESSION: what the session is doing and who is in it on the left; who sees

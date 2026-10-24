@@ -316,6 +316,21 @@ Inferred, several sites each.
   staging copy and `Close` copies it all back (16 MB): batch edits.
 - Water: the game imports no water height or level setter; it looks fixed
   per map.
+- **The map's extent** (2026-10-23): `[terrain+0x87C]` x `[+0x880]` (floats,
+  C3DDLL64 `GetTerrainSize` DLL `0xF8DF0`), from `$WORLDSIZE` in the map's
+  `script.ini`: 20000 x 20000 on every stock map (1000 x 1000 for
+  `terrain_editor`; files read). The map is `[-x/2, x/2]` by `[-z/2, z/2]`
+  around the origin; y is up (index 1).
+- **The playable border:** `0x410D50(world, const float* xyz)` is true for a
+  point outside it. It is the map's `$BORDER_POLYGON` when it has one (edge
+  list `world+0xFC50`, 0x48-byte edges, point-in-polygon `0x30D80`: a square
+  of +-8000 on terrain3 and terrain6, irregular on terrain_svk and
+  campaign1); without one, the `BOUNDARY` rectangle of `script.ini`
+  (`terrain+0x8DC..+0x8E8`, +-8001 on typical maps); with `world+0x1090` set,
+  the map inset by 100. Placement `0x2BADE0` refuses with error 5
+  (`editor/error_building_border.png`) at `0x2CAA4C` and `0x2CB15F`; the drag
+  tick reaches it through `0x4FA970` and `0x51D160`. A byte at `0xA54BC0`
+  turns the check off (meaning unknown).
 
 ## Clock and threads
 
@@ -382,6 +397,29 @@ Inferred unless noted.
   write at index `[world+0x11B0]` and increment the count; an item at the
   last index never triggers a game item.
 
+### The minimap (2026-10-23)
+Inferred, static. Drawn on the render thread: `0x317DB0` -> `0x4C1370`
+(object `[world+0xD400]` in rcx; byte `+0` set = open, else the collapsed
+`0x4BF880`) -> `0x4BEB10` -> `0x4BDE80` (map texture, town names, border).
+- The panel is docked bottom right: `+0x48` / `+0x4C` its right and bottom
+  edges (screen size minus `50u`, `u` the UI scale `exe+0x992088`, written
+  every frame), `+0x50` the map's side S (`[410u, 0.75 * screen height]`,
+  resized at `0x4BDE10`), `+0x54` / `+0x58` the panel's width `S + 72.5u` and
+  height `S + 20u`.
+- The map square is centred at (right - width + height/2, bottom -
+  height/2): +x right, +z up, the whole map, no rotation. The border
+  (`world+0xFC50`) is drawn at `S/20000` px a metre, `S * 0.004` px wide, red
+  when the edge's int in `terrain+0x8B8` is set, else blue; the camera
+  marker (`0x9E9D10`) uses the map's own size instead.
+- **The game's 2D panel** `C3D_PANEL2D` at `exe+0x9BE060` draws the HUD and
+  the minimap, unbatched, in call order: `BeginDraw(p, technique or null =
+  "Basic", false)` / `Draw(p, u0, v0, u1, v1, z, true)` / `EndDraw(p)` (IAT
+  `0x86C918`, `0x86C860`, `0x86C8F8`); fields and textures in
+  `game/panel2d.h`. The interface `0x317DB0` begins it at `0x3181D1` and ends
+  it at `0x32C7A2`, after the 3D frame (`RenderFinal`, `0x482A7C`); `0x4BDE80`
+  returns with it begun. The windows (`0x6E9B80`, at `0x31D545`) draw after
+  the minimap.
+
 ## Steam
 
 From WRMP's ADR 0010 (2026-10-15; inspection of the files, the spike was
@@ -441,6 +479,56 @@ not done):
   bytes). Testing needs two machines with two Steam accounts owning the game.
 - `C3DDLL64.dll` also exports a network layer (`C3D_NET_PEER`) the game does
   not import.
+
+## Money
+
+Inferred (static pass over every `.pdata` function, 2026-10-23); sites were
+read in the disassembly, what a payer pays for is a guess unless said.
+- **The balances are two doubles on the world:** rubles `world+0x588`
+  (`exe+0x9D5498`), dollars `world+0x580` (`exe+0x9D5490`). Most payers write
+  them RIP-relative, e.g. the import purchase `0x1AAD70` (`0x1AAF03`,
+  `0x1AAF12`). `world+0x578` is the unlimited-money flag: payers skip the
+  charge, and the Late body pins both balances to 1e8 (`0x30DAAC`, `0x30DAB3`).
+- **Per building**, from the two building loops (`0x137B20` from Late at
+  `0x30D6D4`, list `world+0x11DF0`; `0x139A70` from the step at `0x30C983`,
+  dispatched on `[[b+0x318]+0x360]`, building in rdx): `0x143710` (building
+  economy, "collapse_soft"), `0x159070` (construction payment, from `0x1389F9`),
+  `0x171E10`, `0x173320` (every building), `0x183580`, `0x183D30`, `0x184930`,
+  `0x1856F0`, `0x1B7D50`, `0x1B9A40`, `0x1D2DD0` ("alcohol").
+- **Player actions:** placement `0x2BADE0` (`0x2CB7F2`, `0x2CB8E0`); building
+  window `0x6F8CC0`; vehicle purchase window `0x80CC60`; `0x174E40` (from the
+  UI `0x70FEE0`, purpose unknown); the `gui_click` windows `0x4AFA90`,
+  `0x4B79C0`, `0x4B9140`; the settings window's money button `0x337450`.
+  Tools in the Late body's tool-name dispatcher: terrain raise/lower/level
+  `0x3A8A70`; `vehicle_replace` -> `0x1AAD70`; waypoint, road sign, area
+  paste, `join_hub_all` and others through `0x159070`; the drag tick
+  `0x4FCAF0` (`0x5171D5`, `0x5172D2`).
+- **Vehicles, outside any building update:**
+  - the vehicle update `0x66D530` -> `0x68B330` and its `0x831120`,
+    `0x831700`: `[veh+0x9EC]` 3 dollars, 4 rubles (trade or loading charges?);
+  - the vehicle job queue `0x6141D0` (object `[exe+0x9E2350]`): `0x60B8E0`
+    pays (a purchase or spawn?), `0x60E4D0` gets;
+  - the deferred removal queue `0x3DEF80` (`world+0x12930`, Late `0x3155FC`)
+    -> `0x3E0730` (a sale refund?), also reached from demolition.
+  Part of this runs on the "Filling" worker `0x2593D0`
+  (`determinism.cpp`, `H_setEvent`: in a session the main thread waits for
+  it). `veh+0x4F8` is a building pointer (meaning unknown); no vehicle ->
+  depot field is known.
+- **Entity lists** `world+0x126A8` and `+0x126F0`, paid by `0x832E90` from
+  the step (`0x30CCC8`..`0x30CDB4`) on `C3D_TIMER::PowerTime`: building
+  pointer at `+0x20`, currency by `+0x71C`, amount from `[b+0x1218]`. Purpose
+  unknown.
+- **No owner:** the scenario script `0x59F1F0` sets the balances (only from
+  the function tables `0x909818`, `0x967320`).
+- **Load and new game:** the loader `0x430FC0` (`0x437CB6`, both at once),
+  the header import `0x430690`; the new game's starting money `0x2FB1D0`.
+- **"Not enough money" checks:** the drag tick `0x5171A4`, `0x5172A9`;
+  placement `0x2CB7BD`, `0x2CB8AB`; the vehicle purchase window `0x810AEE`;
+  the import purchase `0x1AAEE4`; the vehicle update `0x6937BF`.
+- **Statistics:** `0x2FDB00(world, {resource, qty, money}, list)` (54
+  callers) sits next to most writes; lists `world+0x11348` and
+  `[veh+0x108]+0x1B8`. Where the monthly history lives is not known.
+- Not covered: leaf functions without `.pdata` and calls through vtables.
 
 ## Other
 

@@ -285,6 +285,12 @@
     <ClCompile Include="game\camera.cpp">
       <Filter>game</Filter>
     </ClCompile>
+    <ClCompile Include="game\minimap.cpp">
+      <Filter>game</Filter>
+    </ClCompile>
+    <ClCompile Include="game\panel2d.cpp">
+      <Filter>game</Filter>
+    </ClCompile>
     <ClCompile Include="modes\mode.cpp">
       <Filter>modes</Filter>
     </ClCompile>
@@ -537,6 +543,12 @@
       <Filter>game</Filter>
     </ClInclude>
     <ClInclude Include="game\camera.h">
+      <Filter>game</Filter>
+    </ClInclude>
+    <ClInclude Include="game\minimap.h">
+      <Filter>game</Filter>
+    </ClInclude>
+    <ClInclude Include="game\panel2d.h">
       <Filter>game</Filter>
     </ClInclude>
     <ClInclude Include="modes\mode.h">
