@@ -531,6 +531,7 @@ static void PutAwayUncarriedTool()
     if ((strcmp(name, "building_copyweights") == 0 || strcmp(name, "firestation_addfire") == 0) && LinkTools_PickReady())
         return; // link_tools.cpp
     if (strcmp(name, "join_hub_all") == 0 && JoinTool_Ready()) return; // join_tool.cpp
+    if (strcmp(name, "vehicle_tovehicle") == 0) return; // its click is a game call (game_calls.cpp)
     bool trees = false;
     for (const char* prefix : kTreeTools) trees |= strncmp(name, prefix, strlen(prefix)) == 0;
     if ((trees && !BrushTools_Ready(3)) || (strcmp(name, "terrain_demolish_trees") == 0 && !BrushTools_Ready(1))) {

@@ -218,6 +218,10 @@ static const GameCallSite kSites[] = {
     { 0x77836D, 0x1D4550, "destinations panel: share down", "xIFD", 0, 0, false },
     { 0x32F3E3, 0x32F450, "city tool: make the city", "xxx", 0, 0, false, CALL_NEW_CITY },
     { 0x32F403, 0x32FF40, "city tool: give the city its buildings", "xx", 0, 0, false, CALL_NEW_CITY_ASSIGN },
+    // The vehicle window's "Load onto flatbed of another vehicle" (vehicle_tovehicle, 2b6ab0): a
+    // click is 68a420(the picked vehicle, the window's vehicle +d298, 1); its answer picks the
+    // tool's message and ends the tool, so a captured click answers 1 (by SoylentGreed).
+    { 0x2B6DF5, 0x68A420, "vehicle-to-vehicle tool: load onto the picked vehicle", "VOb", 0, 1, false },
 };
 #define SITE_COUNT (sizeof(kSites) / sizeof(kSites[0]))
 

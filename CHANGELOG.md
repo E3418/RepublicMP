@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-Protocol 50 - every player needs this build.
+Protocol 51 - every player needs this build.
 
 - **Republics, first part** - the HOST tab now hosts Republics (2 players);
   a player who joins gets the host's mode. The map is cut along one of its
@@ -50,6 +50,9 @@ Protocol 50 - every player needs this build.
 - **Logs for construction sites made on one PC** - a segment command logs
   the pieces at its ends and whether they are planned: a new piece joined to
   a planned one starts that one's construction.
+- **Load onto flatbed** - the vehicle window's "Load onto flatbed of another
+  vehicle" works in a session (by SoylentGreed); the tool was put away
+  before. The click is made on every PC.
 - **Desync records show the storage** - a building's desync record now lists
   each storage slot's entries and amount, so two logs show which slot split
   and by how much.
