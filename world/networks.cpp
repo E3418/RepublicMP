@@ -951,7 +951,14 @@ static unsigned EdgeCheck(__int64 seg)
     return Fnv(w, sizeof(w));
 }
 
-static unsigned NodeCheck(__int64 node) { return Fnv((const float*)(node + NODE_POS_OFFSET), 12); }
+// A node's check: its x and z. Its height can differ in the last bits between
+// the PCs (a test found the same node by position but not by its full bits).
+static unsigned NodeCheck(__int64 node)
+{
+    const float* p = (const float*)(node + NODE_POS_OFFSET);
+    float xz[2] = { p[0], p[2] };
+    return Fnv(xz, sizeof(xz));
+}
 
 bool Networks_EdgeIdentity(__int64 manager, __int64 seg, int* index, unsigned* check)
 {
@@ -1191,7 +1198,8 @@ bool Networks_ReadDemolishHover(__int64 manager, NetDemolishHover* h)
 }
 
 // Sets this PC's hovered node / edge to the carried ones (after the replay cleared them).
-static void ApplyHoverRefs(__int64 manager, const NetDemolishHover& h)
+// True when the carried node and edge were both found here.
+static bool ApplyHoverRefs(__int64 manager, const NetDemolishHover& h)
 {
     __int64* begin = *(__int64**)(manager + MGR_SEGMENTS_BEGIN_OFFSET);
     __int64* end = *(__int64**)(manager + MGR_SEGMENTS_END_OFFSET);
@@ -1219,11 +1227,25 @@ static void ApplyHoverRefs(__int64 manager, const NetDemolishHover& h)
         }
         if (h.edgeKind && !edge && SamePos(p0, h.edgeA) && SamePos(p1, h.edgeB) && EdgePointCount(e) == h.edgePoints) edge = e;
     }
+    if (h.nodeKind && !node) {
+        // Any committed node at the place (x and z close, the height near).
+        __int64* nb = *(__int64**)(manager + NET_NODES_OFFSET);
+        __int64* ne = *(__int64**)(manager + NET_NODES_OFFSET + 8);
+        for (__int64* it = nb; nb && it < ne && !node; ++it) {
+            if (!*it) continue;
+            const float* p = (const float*)(*it + NODE_POS_OFFSET);
+            if (fabsf(p[0] - h.node[0]) < 0.05f && fabsf(p[2] - h.node[2]) < 0.05f && fabsf(p[1] - h.node[1]) < 0.5f) {
+                node = *it;
+                nodeBy = "place among the nodes";
+            }
+        }
+    }
     if (node) *(__int64*)((uintptr_t)g_exe + kHoverNodeRvas[h.nodeKind - 1]) = node;
     if (edge) *(__int64*)((uintptr_t)g_exe + kHoverEdgeRvas[h.edgeKind - 1]) = edge;
     Logf("republicmp  NETWORKS:   hover demolition: node %s%s%s (sender's #%d at (%.2f,%.2f,%.2f)), edge %s",
          !h.nodeKind ? "none" : node ? "found by " : "MISSING", node ? nodeBy : "", "", h.nodeIndex, h.node[0], h.node[1],
          h.node[2], !h.edgeKind ? "none" : edge ? "found" : "MISSING");
+    return (!h.nodeKind || node) && (!h.edgeKind || edge);
 }
 
 bool Networks_ApplyCommandDemolishHover(const NetDemolishHoverMsg& msg)
@@ -1279,7 +1301,9 @@ static bool ApplyDemolishInner(const NetDemolishMsg& m, bool* outRemoved)
             float savedCursor[3] = { cursor[0], cursor[1], cursor[2] };
             __try {
                 HoverGlobals_Clear();
-                if (g_applyHover) ApplyHoverRefs(manager, *g_applyHover);
+                // Without the sender's node or edge the cursor would pick another piece here: nothing is cut.
+                bool hoverOk = !g_applyHover || ApplyHoverRefs(manager, *g_applyHover);
+                if (!hoverOk) why = "the sender's hovered node or edge is not here";
                 *lmbHeld = 0;
                 *lmbJustPressed = 0;
                 cursor[0] = m.cursor[0]; cursor[1] = m.cursor[1]; cursor[2] = m.cursor[2];
@@ -1379,10 +1403,10 @@ static bool ApplyDemolishInner(const NetDemolishMsg& m, bool* outRemoved)
                     // Through the node, or armed directly, the engine's own pick
                     // is only a stand-in for the sender's piece - never cut it on
                     // its own.
-                    if (adopted || (!viaNode && !direct)) {
+                    if (hoverOk && (adopted || (!viaNode && !direct))) {
                         commit(manager, 0, 0, 0, 0, 0, 0);
                         *outRemoved = true;
-                    } else {
+                    } else if (!why) {
                         why = "the sender's range is not on the armed segment";
                     }
                 } else if (!why) {
@@ -1681,6 +1705,40 @@ static void LogBuildingsNear(const NetSegment& seg)
     if (!logged) Logf("republicmp  NETWORKS:   near the refused piece: no building within %.0f m", REJECTED_NEAR_M);
 }
 
+#define SEG_PLANNED_OFFSET 0x140 // segment: byte 1 = planned (white); a piece joined to it starts its construction (51c89b)
+
+// The pieces at the new segment's ends and their planned bytes (+140, +141),
+// before it is laid: compared between the PCs' logs when a segment makes a
+// construction site on one PC only.
+static void LogPiecesAtEnds(const NetSegment& seg)
+{
+    const NetCategoryInfo* info = Networks_GetCategoryInfo(seg.category);
+    if (!info) return;
+    char text[400] = "";
+    size_t used = 0;
+    int found = 0;
+    __try {
+        __int64 manager = *(__int64*)(GetWorldThisPtr() + info->managerOffset);
+        __int64* b = manager ? *(__int64**)(manager + MGR_SEGMENTS_BEGIN_OFFSET) : nullptr;
+        __int64* e = manager ? *(__int64**)(manager + MGR_SEGMENTS_END_OFFSET) : nullptr;
+        for (__int64* it = b; b && it < e && found < 6; ++it) {
+            __int64 s = *it;
+            if (!s) continue;
+            __int64 n0 = *(__int64*)(s + SEG_NODE0_OFFSET), n1 = *(__int64*)(s + SEG_NODE1_OFFSET);
+            bool touches = (n0 && (NodeNear(n0, seg.startNode) || NodeNear(n0, seg.endNode))) ||
+                           (n1 && (NodeNear(n1, seg.startNode) || NodeNear(n1, seg.endNode)));
+            if (!touches) continue;
+            int n = _snprintf_s(text + used, sizeof(text) - used, _TRUNCATE, " #%d planned %u/%u type %d;", (int)(it - b),
+                                *(unsigned char*)(s + SEG_PLANNED_OFFSET), *(unsigned char*)(s + SEG_PLANNED_OFFSET + 1),
+                                *(int*)(s + SEG_TYPE_OFFSET));
+            if (n > 0) used += n;
+            ++found;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    if (found) Logf("republicmp  NETWORKS:   pieces at its ends:%s", text);
+}
+
 bool Networks_ApplyCommandSegment(const NetSegmentMsg& msg)
 {
     const NetSegment& seg = msg.seg;
@@ -1693,6 +1751,7 @@ bool Networks_ApplyCommandSegment(const NetSegmentMsg& msg)
     BuildMode_Write(msg.mode);
     bool engineAccepted = false;
     int before = BuildingCount();
+    LogPiecesAtEnds(seg);
     bool ok = ApplySegment(seg, &engineAccepted);
     // Compared between the PCs' logs: a segment that makes construction
     // sites on one PC and none on the other (a planned road, type -1).
