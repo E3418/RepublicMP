@@ -4,6 +4,12 @@
 
 Protocol 51 - every player needs this build.
 
+- **Held vehicle rendering guard** - follow +4a0 links throughout the parent
+  and child closure used by the native render builders, including objects
+  outside the root render list. Pointer changes to or from null now refuse
+  the held pass without restoring a potentially freed pointer. This closes
+  guard gaps; the remaining live vehicle and resource desyncs need retesting.
+
 - **Commands during session setup** - retain queued commands until the
   lockstep connection is ready. The host waits until roster acceptance ends;
   a player waits for its own connection. Previously the host could apply
