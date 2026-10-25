@@ -55,6 +55,9 @@ bool LockstepNet_SessionStarted();
 void LockstepNet_Close();
 // Host: at least one player is connected; player: connected to the host.
 bool LockstepNet_IsConnected();
+// Commands/ticks wait until the host has finished accepting its roster.
+// A player is ready after its own connection and hello have been set up.
+bool LockstepNet_CommandsReady();
 bool LockstepNet_IsHost();
 // Host: the players connected now.
 int LockstepNet_PeerCount();

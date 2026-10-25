@@ -2,6 +2,10 @@
 // See state_hash.h.
 #include "state_hash.h"
 #include <string.h>
+#include <stdio.h>
+#include <stdint.h>
+#include <map>
+#include <tuple>
 
 #define WORLD_RVA 0x9D4F10
 
@@ -285,4 +289,202 @@ unsigned long long StateHash_All(const StateSummary& s)
     Mix(h, &s.hashVehicles, 8);
     Mix(h, &s.hashCitizens, 8);
     return h;
+}
+
+// Stock changes outside the common tick are suspicious even when the resource
+// window only appears to display data. Capture exact entries, not just slot
+// sums, so a transfer between entries cannot cancel out in the diagnostic.
+static volatile LONG g_storageTrace = 0;
+static volatile LONG g_storageUiLogs = 0;
+static volatile LONG g_recipeLogs = 0;
+#define MAX_STORAGE_RECORDS 131072
+
+bool StateHash_GetStorageTrace()
+{
+    return InterlockedCompareExchange(&g_storageTrace, 0, 0) != 0;
+}
+
+void StateHash_SetStorageTrace(bool on)
+{
+    InterlockedExchange(&g_storageUiLogs, 0);
+    InterlockedExchange(&g_recipeLogs, 0);
+    InterlockedExchange(&g_storageTrace, on ? 1 : 0);
+}
+
+// No C++ allocation inside the protected reader. The second pass refuses a
+// changed list shape rather than leaving a partially filled snapshot usable.
+// Refuse malformed diagnostic vectors without raising an access violation:
+// the loader has a limited crash-report budget, which diagnostics must not use.
+static bool RecordVector(BYTE* at, size_t stride, long long max, BYTE** begin, long long* count)
+{
+    uintptr_t v[2] = {};
+    SIZE_T done = 0;
+    if (!ReadProcessMemory(GetCurrentProcess(), at, v, sizeof(v), &done) || done != sizeof(v)) return false;
+    if (!v[0] && !v[1]) { *begin = nullptr; *count = 0; return true; }
+    if (!v[0] || v[1] < v[0] || (v[1] - v[0]) % stride || (v[1] - v[0]) / stride > (unsigned long long)max) return false;
+    if (v[1] > v[0] && !ReadablePtr((void*)v[0], v[1] - v[0])) return false;
+    *begin = (BYTE*)v[0];
+    *count = (long long)((v[1] - v[0]) / stride);
+    return true;
+}
+
+static long long ResourceSize(bool recipe)
+{
+    __try {
+        BYTE* raw = nullptr;
+        long long nb = 0, total = 0;
+        if (!RecordVector(g_exeBase + WORLD_RVA + WORLD_BUILDINGS_OFFSET, 8, MAX_OBJECTS, &raw, &nb)) return -1;
+        BYTE** bl = (BYTE**)raw;
+        for (long long i = 0; i < nb; i++) {
+            BYTE* b = bl[i];
+            if (!b) continue;
+            const int offset = recipe ? 0x610 : BLD_STORAGE_OFFSET;
+            const int stride = recipe ? 0x21B8 : BLD_STORAGE_SLOT_SIZE;
+            BYTE* slots = nullptr;
+            long long ns = 0;
+            if (!RecordVector(b + offset, stride, recipe ? 16 : RECORD_SLOTS, &slots, &ns)) return -1;
+            for (long long s = 0; s < ns; s++) {
+                BYTE* entries = nullptr;
+                long long n = 0;
+                if (!RecordVector(slots + s * stride + (recipe ? 8 : 0), ENTRY_SIZE, MAX_ENTRIES, &entries, &n) ||
+                    total + n > MAX_STORAGE_RECORDS) return -1;
+                total += n;
+            }
+        }
+        return total;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return -1; }
+}
+
+static bool FillResources(StorageRecord* out, size_t size, bool recipe)
+{
+    __try {
+        BYTE* raw = nullptr;
+        long long nb = 0;
+        if (!RecordVector(g_exeBase + WORLD_RVA + WORLD_BUILDINGS_OFFSET, 8, MAX_OBJECTS, &raw, &nb)) return false;
+        BYTE** bl = (BYTE**)raw;
+        size_t used = 0;
+        for (long long i = 0; i < nb; i++) {
+            BYTE* b = bl[i];
+            if (!b) continue;
+            const int offset = recipe ? 0x610 : BLD_STORAGE_OFFSET;
+            const int stride = recipe ? 0x21B8 : BLD_STORAGE_SLOT_SIZE;
+            BYTE* slots = nullptr;
+            long long ns = 0;
+            if (!RecordVector(b + offset, stride, recipe ? 16 : RECORD_SLOTS, &slots, &ns)) return false;
+            for (long long s = 0; s < ns; s++) {
+                BYTE* slot = slots + s * stride + (recipe ? 8 : 0);
+                long long n = 0;
+                BYTE* entries = nullptr;
+                if (!RecordVector(slot, ENTRY_SIZE, MAX_ENTRIES, &entries, &n)) return false;
+                for (long long e = 0; e < n; e++) {
+                    if (used >= size) return false;
+                    StorageRecord& v = out[used++];
+                    memset(&v, 0, sizeof(v));
+                    v.object = (unsigned long long)(uintptr_t)b;
+                    v.building = *(int*)(b + BLD_INDEX_OFFSET);
+                    v.ordinal = (int)i;
+                    v.slot = (int)s;
+                    v.entry = (int)e;
+                    const char* name = *(const char**)(entries + e * ENTRY_SIZE);
+                    if (name) {
+                        if (!ReadablePtr(name, MAX_NAME)) return false;
+                        for (int k = 0; k < MAX_NAME && name[k]; k++) {
+                            unsigned char c = (unsigned char)name[k];
+                            v.resource[k] = c >= 32 && c < 127 ? (char)c : '?';
+                        }
+                    }
+                    memcpy(&v.amount, entries + e * ENTRY_SIZE + ENTRY_AMOUNT_OFFSET, 4);
+                    if (recipe) memcpy(&v.required, entries + e * ENTRY_SIZE + 12, 4);
+                }
+            }
+        }
+        return used == size;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+bool StateHash_StorageRecords(std::vector<StorageRecord>& out)
+{
+    long long n = ResourceSize(false);
+    if (n < 0) { out.clear(); return false; }
+    out.resize((size_t)n);
+    if (FillResources(out.data(), out.size(), false)) return true;
+    out.clear();
+    return false;
+}
+
+void StateHash_LogStorageUi(const std::vector<StorageRecord>& before, unsigned long long tick)
+{
+    if (!StateHash_GetStorageTrace() || InterlockedCompareExchange(&g_storageUiLogs, 0, 0) >= 32) return;
+    std::vector<StorageRecord> after;
+    if (!StateHash_StorageRecords(after)) return;
+    if (before.size() != after.size()) {
+        if (InterlockedIncrement(&g_storageUiLogs) <= 32)
+            Logf("republicmp  STORAGE_UI: after tick %llu entry count changed %zu -> %zu", tick, before.size(), after.size());
+        return;
+    }
+    for (size_t i = 0; i < before.size(); i++) {
+        const StorageRecord& a = before[i];
+        const StorageRecord& b = after[i];
+        if (a.object != b.object || a.slot != b.slot || a.entry != b.entry || strcmp(a.resource, b.resource)) {
+            if (InterlockedIncrement(&g_storageUiLogs) <= 32)
+                Logf("republicmp  STORAGE_UI: after tick %llu entry identity/order changed at record %zu", tick, i);
+            return;
+        }
+        unsigned oldBits = 0, newBits = 0;
+        memcpy(&oldBits, &a.amount, 4);
+        memcpy(&newBits, &b.amount, 4);
+        if (oldBits == newBits) continue;
+        LONG line = InterlockedIncrement(&g_storageUiLogs);
+        if (line > 32) return;
+        Logf("republicmp  STORAGE_UI: after tick %llu building %d slot %d entry %d [%s] %.9g (%08X) -> %.9g (%08X)%s",
+             tick, a.building, a.slot, a.entry, a.resource, a.amount, oldBits, b.amount, newBits,
+             line == 32 ? " - UI report limit reached; toggle storage trace to reset" : "");
+    }
+}
+
+// Network construction objects keep a recipe in +610 even without a building
+// type. 159070 later charges from each material entry's +c; equal progress
+// hashes do not prove these requirements match. Capture command-side changes
+// before paid construction consumes them (by SoylentGreed, stage layout).
+bool StateHash_RecipeRecords(std::vector<StorageRecord>& out)
+{
+    long long n = ResourceSize(true);
+    if (n < 0) { out.clear(); return false; }
+    out.resize((size_t)n);
+    if (FillResources(out.data(), out.size(), true)) return true;
+    out.clear();
+    return false;
+}
+
+// Saving can leave multiple native building indices at zero until the next
+// simulation pass. Compare before/after snapshots by this process's object
+// identity instead; log the list ordinal so both PCs can name those objects.
+// No saved pointer is dereferenced after the snapshot or used across PCs.
+using RecipeIdentity = std::tuple<unsigned long long, int, int>;
+static RecipeIdentity RecipeKey(const StorageRecord& r)
+{
+    return std::make_tuple(r.object, r.slot, r.entry);
+}
+
+void StateHash_LogRecipeChanges(const std::vector<StorageRecord>& before, unsigned seq, unsigned long long tick)
+{
+    if (!StateHash_GetStorageTrace() || InterlockedCompareExchange(&g_recipeLogs, 0, 0) >= 512) return;
+    std::vector<StorageRecord> after;
+    if (!StateHash_RecipeRecords(after)) return;
+    std::map<RecipeIdentity, const StorageRecord*> old;
+    for (const StorageRecord& r : before) old.emplace(RecipeKey(r), &r);
+    for (const StorageRecord& r : after) {
+        const StorageRecord* was = nullptr;
+        auto found = old.find(RecipeKey(r));
+        if (found != old.end() && !strcmp(found->second->resource, r.resource)) was = found->second;
+        unsigned bits = 0, oldBits = 0;
+        memcpy(&bits, &r.required, 4);
+        if (was) memcpy(&oldBits, &was->required, 4);
+        if (was && bits == oldBits) continue;
+        LONG line = InterlockedIncrement(&g_recipeLogs);
+        if (line > 512) return;
+        Logf("republicmp  CONSTRUCTION_RECIPE: command #%u after tick %llu building %d list #%d stage %d entry %d [%s] required %.9g (%08X), %s %.9g (%08X)%s",
+             seq, tick, r.building, r.ordinal, r.slot, r.entry, r.resource, r.required, bits, was ? "previous" : "new entry; previous",
+             was ? was->required : 0.0f, oldBits, line == 512 ? " - recipe report limit reached" : "");
+    }
 }

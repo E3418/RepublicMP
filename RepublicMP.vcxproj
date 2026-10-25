@@ -213,6 +213,7 @@
     <ClCompile Include="lockstep\lockstep_net.cpp" />
     <ClCompile Include="determinism\determinism.cpp" />
     <ClCompile Include="determinism\sim_patches.cpp" />
+    <ClCompile Include="determinism\office_guard.cpp" />
     <ClCompile Include="determinism\construction_view.cpp" />
     <ClCompile Include="determinism\probe_trace.cpp" />
     <ClCompile Include="determinism\probe_watch.cpp" />
@@ -295,6 +296,7 @@
     <ClInclude Include="lockstep\lockstep_net.h" />
     <ClInclude Include="determinism\determinism.h" />
     <ClInclude Include="determinism\sim_patches.h" />
+    <ClInclude Include="determinism\office_guard.h" />
     <ClInclude Include="determinism\construction_view.h" />
     <ClInclude Include="determinism\probe_trace.h" />
     <ClInclude Include="determinism\probe_watch.h" />

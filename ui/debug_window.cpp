@@ -8,6 +8,7 @@
 #include "../session/save_sync.h"
 #include "../determinism/determinism.h"
 #include "../determinism/construction_view.h"
+#include "../determinism/state_hash.h"
 #include "../lockstep/building_settings.h"
 #include "debug_log.h"
 #include "../lockstep/lockstep_net.h"
@@ -99,6 +100,14 @@ void DebugWindow::Draw()
         if (ImGui::Checkbox("Money trace (lockstep desyncs)", &moneyTrace)) Determinism_SetMoneyTrace(moneyTrace);
         ImGui::TextWrapped("On by default: on a desync each log gets the balances and construction sites "
                            "of the ticks before it, and every command that changed the money.");
+        ImGui::Spacing();
+
+        bool storageTrace = StateHash_GetStorageTrace();
+        if (ImGui::Checkbox("Storage resource trace (lockstep desyncs)", &storageTrace)) StateHash_SetStorageTrace(storageTrace);
+        ImGui::TextWrapped("Off by default: enable on both PCs before the test. Desync records include resource names "
+                           "and exact amounts for every slot; up to 32 stock changes left by the UI are logged as STORAGE_UI. "
+                           "Command-created or changed material requirements are logged as CONSTRUCTION_RECIPE (up to 512 lines). "
+                           "This adds per-frame reads while enabled.");
         ImGui::Spacing();
 
         // --- Construction sites (determinism/construction_view) ---

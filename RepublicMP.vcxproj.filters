@@ -96,6 +96,9 @@
     <ClCompile Include="determinism\determinism.cpp">
       <Filter>determinism</Filter>
     </ClCompile>
+    <ClCompile Include="determinism\office_guard.cpp">
+      <Filter>determinism</Filter>
+    </ClCompile>
     <ClCompile Include="determinism\sim_patches.cpp">
       <Filter>determinism</Filter>
     </ClCompile>
@@ -348,6 +351,9 @@
       <Filter>determinism</Filter>
     </ClInclude>
     <ClInclude Include="determinism\determinism.h">
+      <Filter>determinism</Filter>
+    </ClInclude>
+    <ClInclude Include="determinism\office_guard.h">
       <Filter>determinism</Filter>
     </ClInclude>
     <ClInclude Include="determinism\sim_patches.h">

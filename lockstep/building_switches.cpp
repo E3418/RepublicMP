@@ -5,6 +5,7 @@
 #include "commands.h"
 #include "world_refs.h"
 #include "building_settings.h"
+#include "../determinism/determinism.h"
 #include <string.h>
 #include <vector>
 
@@ -389,6 +390,18 @@ void BuildingSwitches_Before(bool simBusy)
     g_worldFrame = false;
     if (!Commands_Capturing()) g_authReady = false; // the next session takes its own start
     if (!Commands_TakeUi() || simBusy) return;
+    // Learned UI noise belongs to the loaded world. Keeping it across loads
+    // can suppress a real setting because an older city's UI changed that word.
+    static unsigned noiseLoad = ~0u;
+    unsigned load = Determinism_WorldLoads();
+    if (load != noiseLoad) {
+        g_noiseBuilding.clear();
+        for (auto& noise : g_noiseSlot) noise.clear();
+        g_noiseWorld.clear();
+        g_noiseLogged = g_heapLogged = g_leftLogged = 0;
+        g_frame = 0;
+        noiseLoad = load;
+    }
     g_click = Clicked();
     g_epoch = Commands_ApplyEpoch();
     g_worldFrame = true;

@@ -21,7 +21,9 @@
 #include "../world/networks.h"
 #include "determinism.h"
 #include "held_frame.h"
+#include "state_hash.h"
 #include "construction_view.h"
+#include "office_guard.h"
 #include <string.h>
 #include <intrin.h>
 #include <limits.h>
@@ -33,6 +35,7 @@
 void SimPatches_Bind(const TsmHost* host)
 {
     TsmBind(host);
+    OfficeGuard_Bind(host);
 }
 
 // ---------------------------------------------------------------------------
@@ -846,6 +849,7 @@ static bool InstallToolStubs()
 
 void SimPatches_BeforeEarly(__int64 world)
 {
+    OfficeGuard_BeginStep();
     g_simThread = GetCurrentThreadId();
     if (g_on) RecountPopulation(world);
     g_inPhase = true;
@@ -853,6 +857,7 @@ void SimPatches_BeforeEarly(__int64 world)
 
 void SimPatches_AfterEarly()
 {
+    OfficeGuard_EndStep();
     g_inPhase = false;
     if (g_on) HeldFrame_AfterEarly(); // the pass left every building off the camera
     g_visibleFresh = false; // the native pass may have removed buildings
@@ -966,6 +971,12 @@ static __int64 DetUiRoutine(void* world)
     CargoSettings_Before(g_inPhase);
     SourceSlots_Before(g_inPhase);
     Research_Before(g_inPhase);
+    std::vector<StorageRecord> storageBefore;
+    bool storageAudit = StateHash_GetStorageTrace() && Determinism_SessionRunning() &&
+                        !g_inPhase && StateHash_StorageRecords(storageBefore);
+    unsigned storageLoad = Determinism_WorldLoads();
+    unsigned long long storageEpoch = Commands_ApplyEpoch();
+    unsigned long long storageTick = Determinism_StepCount();
     __int64 r = original(world);
     // The cargo settings first: a half they put back is the same again for the switches.
     CargoSettings_After(g_inPhase);
@@ -974,6 +985,8 @@ static __int64 DetUiRoutine(void* world)
     BuildingSwitches_After(g_inPhase);
     VehicleSwitches_After(g_inPhase);
     Commands_GuardSettings();
+    if (storageAudit && storageLoad == Determinism_WorldLoads() && storageEpoch == Commands_ApplyEpoch())
+        StateHash_LogStorageUi(storageBefore, storageTick);
     Determinism_UiSpeedEnd();
     VisibleOut(view);
     memcpy(g_privateSearch, shared, sizeof(saved));
@@ -1247,6 +1260,13 @@ typedef U64 (*SiteUpdateFn)(U64 world, U64 building, float a3, U64 a4);
 static U64 DetSiteUpdate(U64 world, U64 building, float a3, U64 a4)
 {
     SiteUpdateFn original = (SiteUpdateFn)(g_exeBase + SITE_UPDATE_RVA);
+    // 159070 writes +ddc = 0 at 15921c BEFORE its pause test at 159234,
+    // then +898/+fc0 on the paused return. Held Late therefore changed the
+    // last productivity even with zero time. The next tick compares it while
+    // choosing worker targets (15b8d8..15ba4c, 82e590): extra local frames
+    // must not change that input. Ordered commands may still update sites.
+    if (g_on && Determinism_IsActive() && !Commands_Applying() &&
+        (GetCurrentThreadId() != g_simThread || !Determinism_InStepFrame())) return 0;
     if (!g_on || !Determinism_GetMoneyTrace()) return original(world, building, a3, a4);
     double rub = *(double*)(world + 0x588), usd = *(double*)(world + 0x580);
     U64 r = original(world, building, a3, a4);
@@ -1331,6 +1351,7 @@ static bool CallTo(unsigned int site, BYTE* target, unsigned char out[5])
 
 bool SimPatches_Install()
 {
+    bool officeGuard = OfficeGuard_Install();
     bool late = InstallInlineHook(g_exeBase + LATE_RVA, (void*)&HookedLate, (void**)&o_late,
                                   kLateExpect, sizeof(kLateExpect), "republicmp late body");
 
@@ -1402,7 +1423,7 @@ bool SimPatches_Install()
     ImmigrantInvite_Install(); // the residential window's invite presses; without them they act on one PC
     Logf("republicmp  SIM_PATCHES: late hook %d, relays %d (building visibility, saplings, render before Early, interface searches, Prepare at speed 0, window cost display, placing press, buy press, route tools, pick ray), tool stubs %d (%d calls)%s",
          late, relays, tools, (int)TOOL_CALL_COUNT, sitesOk ? "" : " - unexpected bytes at a relay site");
-    return late && relays && tools;
+    return late && relays && tools && officeGuard;
 }
 
 bool SimPatches_Apply()

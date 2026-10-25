@@ -4,6 +4,48 @@
 
 Protocol 51 - every player needs this build.
 
+- **Commands during session setup** - retain queued commands until the
+  lockstep connection is ready. The host waits until roster acceptance ends;
+  a player waits for its own connection. Previously the host could apply
+  commands at tick zero and broadcast them to no player, while a waiting
+  player could discard its requests. Tick admission uses the same readiness
+  gate. Offline probe recording and replay keep their existing behavior.
+
+- **Shared terrain brush collisions** - ordered brush samples now run the
+  eleven network obstacle queries in 3a5930 against the full network with
+  the local shortlist suppressed. Local camera lists could accept a different
+  number of cells, changing the terrain and its worker-price charge.
+- **Construction updates on held frames** - the Late site's 159070 update
+  is skipped outside common simulation ticks and ordered commands. Native
+  code cleared productivity before checking pause, so extra local frames
+  changed the value used by the next tick's worker-target update.
+- **Construction recipe report identity** - compare local snapshots by object
+  identity instead of a temporarily zero native building index. Logs include
+  the building list ordinal. A save no longer compares unrelated recipes or
+  consumes the report budget on false changes.
+
+- **Linked-office lookup crash guard** - before the shared simulation checks
+  vehicles assigned through a building's linked offices, validate live object
+  membership and the lists the native lookup will read. Invalid references
+  refuse that assignment and produce a bounded OFFICE_GUARD error instead of
+  reaching the unsafe read at 0x19F660. This contains the observed crash; the
+  writer that corrupted the office list has not yet been identified.
+
+- **Construction recipe diagnostics** - the optional storage resource trace
+  also records new or changed material requirements after ordered commands,
+  including network sites. CONSTRUCTION_RECIPE lines retain resource names
+  and exact required float bits, so a tiny money desync can be traced back to
+  the command that produced a different recipe. Off by default, 512-line cap.
+- **Storage desync diagnostics** - building records describe up to 64 slots.
+  The optional Debug storage resource trace retains individual resource names,
+  amounts and float bits at the compared tick, and reports stock mutations left
+  by the UI after its command guards. It is off by default and does not change
+  simulation hashes or the protocol. UI mutation reports are limited to 32.
+- **Window capture after loading** - learned interface noise is cleared when
+  the world is loaded, so an earlier world's passive UI writes cannot suppress
+  a real setting in the new world. This is separate from the railway-office
+  stock desync, whose cause has not yet been established.
+
 - **Construction rendering and worker targets** - the site drawer rebuilt
   worker target vectors on each PC's render frames; Late copied them and
   re-targeted construction workers, including on held frames. The drawer now

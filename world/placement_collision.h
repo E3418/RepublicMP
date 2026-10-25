@@ -17,6 +17,8 @@
 // the query against the whole network: argument 10 cleared and the
 // shortlist's end set to its begin for the call, then restored. Every other
 // caller (194 in the road planner alone) gets the native query untouched.
+// During an ordered brush sample the eleven 3a5930 obstacle checks use the
+// same full-network route. Local brush previews retain their normal queries.
 //
 // (by SoylentGreed)
 #pragma once

@@ -77,6 +77,7 @@ struct Peer {
 };
 
 static Peer g_peers[LOCKSTEP_MAX_PEERS];
+static volatile LONG g_commandsReady = 0;
 static int g_peerSlots = 0; // slots used this session
 static bool g_isHost = false;
 static CRITICAL_SECTION g_inLock, g_listLock;
@@ -102,6 +103,8 @@ struct OwnRecords {
     std::vector<BuildingRecord> buildings;
     std::vector<VehicleRecord> vehicles;
     std::vector<CitizenRecord> citizens;
+    std::vector<StorageRecord> storage;
+    bool storageEnabled = false, storageValid = false;
 };
 static OwnRecords g_records[LS_RECORD_KEEP];
 static SRWLOCK g_recordsLock = SRWLOCK_INIT;
@@ -111,6 +114,9 @@ static void KeepRecords(unsigned long long tick)
     OwnRecords& r = g_records[(tick / LOCKSTEP_HASH_TICKS) % LS_RECORD_KEEP];
     AcquireSRWLockExclusive(&g_recordsLock);
     r.tick = tick;
+    r.storageEnabled = StateHash_GetStorageTrace();
+    r.storageValid = r.storageEnabled && StateHash_StorageRecords(r.storage);
+    if (!r.storageEnabled) r.storage.clear();
     r.valid = StateHash_BuildingRecords(r.buildings) && StateHash_VehicleRecords(r.vehicles) &&
               StateHash_CitizenRecords(r.citizens);
     ReleaseSRWLockExclusive(&g_recordsLock);
@@ -187,6 +193,15 @@ static void DumpRecords(unsigned long long tick, const char* what)
             }
             out.Add("B %d %d %.9g %.9g %.9g %.9g %.9g %d %016llX %d |%s", b.index, b.category, b.pos[0], b.pos[1], b.pos[2],
                     b.progress, b.produced, b.workers, b.storage, b.slots, slots);
+        }
+    }
+    if (strstr(subsystems, "buildings") && r.storageEnabled) {
+        out.Add("tick %llu, storage resource entries: %s (building slot entry resource amount bits)",
+                tick, r.storageValid ? "complete" : "unavailable: read or size limit");
+        if (r.storageValid) for (const StorageRecord& s : r.storage) {
+            unsigned bits = 0;
+            memcpy(&bits, &s.amount, 4);
+            out.Add("S %d %d %d [%s] %.9g %08X", s.building, s.slot, s.entry, s.resource, s.amount, bits);
         }
     }
     if (strstr(subsystems, "vehicles")) {
@@ -339,6 +354,7 @@ static DWORD WINAPI RecvThread(LPVOID param)
 
 static void ResetState()
 {
+    InterlockedExchange(&g_commandsReady, 0);
     EnterCriticalSection(&g_inLock);
     g_inbox.clear();
     LeaveCriticalSection(&g_inLock);
@@ -429,6 +445,9 @@ int LockstepNet_HostAccept(int expected, DWORD timeoutMs, volatile bool* cancel,
     NetworkClose(listener);
     // The first ones waited for the others: their silence so far is not a drop.
     for (int i = 0; i < g_peerSlots; i++) g_peers[i].lastReceived = GetTickCount64();
+    // Publishing a peer early is needed by the receive threads, but the
+    // command boundary must not consume its queue until all accepts finish.
+    InterlockedExchange(&g_commandsReady, g_peerSlots > 0 ? 1 : 0);
     if (g_peerSlots) Logf("republicmp  LOCKSTEP: connected as host with %d player(s)", g_peerSlots);
     return g_peerSlots;
 }
@@ -461,6 +480,7 @@ bool LockstepNet_Join(const char* hostIp, DWORD timeoutMs, volatile bool* cancel
                 return false;
             }
             StartPeer(s, "host", hostIp);
+            InterlockedExchange(&g_commandsReady, 1);
             Logf("republicmp  LOCKSTEP: connected as player");
             return true;
         }
@@ -471,6 +491,7 @@ bool LockstepNet_Join(const char* hostIp, DWORD timeoutMs, volatile bool* cancel
 
 void LockstepNet_Close()
 {
+    InterlockedExchange(&g_commandsReady, 0);
     Locks();
     for (int i = 0; i < g_peerSlots; i++) {
         Peer& p = g_peers[i];
@@ -498,6 +519,10 @@ int LockstepNet_PeerCount()
 }
 
 bool LockstepNet_IsConnected() { return LockstepNet_PeerCount() > 0; }
+bool LockstepNet_CommandsReady()
+{
+    return InterlockedCompareExchange(&g_commandsReady, 0, 0) != 0 && LockstepNet_IsConnected();
+}
 bool LockstepNet_IsHost() { return g_isHost; }
 const char* LockstepNet_Desync() { return g_desync; }
 
@@ -655,6 +680,7 @@ void LockstepNet_Poll()
 
 bool LockstepNet_MayRun(unsigned long long tick)
 {
+    if (!LockstepNet_CommandsReady()) return false;
     bool any = false, may = true;
     for (int i = 0; i < g_peerSlots; i++) {
         const Peer& p = g_peers[i];

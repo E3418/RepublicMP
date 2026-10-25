@@ -59,7 +59,7 @@ unsigned long long StateHash_All(const StateSummary& s);
 
 // Per-object detail for the probe: what the subsystem hashes cover, one
 // record per list entry, so two runs can name the first objects that differ.
-#define RECORD_SLOTS 8
+#define RECORD_SLOTS 64
 struct BuildingRecord {
     int index;              // +0x00
     int category;           // type +0x360 (-1: no type)
@@ -87,3 +87,23 @@ struct CitizenRecord {
 bool StateHash_BuildingRecords(std::vector<BuildingRecord>& out);
 bool StateHash_CitizenRecords(std::vector<CitizenRecord>& out);
 bool StateHash_VehicleRecords(std::vector<VehicleRecord>& out);
+
+// Optional storage diagnostics, off by default. These records do not change the
+// state hash or protocol. Resource names start at definition +0 (by SoylentGreed).
+struct StorageRecord {
+    unsigned long long object; // local snapshot identity only; never sent or logged
+    int building, ordinal, slot, entry;
+    char resource[65];
+    float amount;
+    float required; // recipe records only; zero for stored resources
+};
+bool StateHash_GetStorageTrace();
+void StateHash_SetStorageTrace(bool on);
+bool StateHash_StorageRecords(std::vector<StorageRecord>& out);
+// The same entry representation for construction requirements: slot is the
+// stage number, amount is delivered material, required is the recipe quantity.
+bool StateHash_RecipeRecords(std::vector<StorageRecord>& out);
+void StateHash_LogRecipeChanges(const std::vector<StorageRecord>& before, unsigned seq, unsigned long long tick);
+// Called after the UI guards restore queued changes. Logs only changes left
+// in live storage; an ordered command or load in between invalidates the sample.
+void StateHash_LogStorageUi(const std::vector<StorageRecord>& before, unsigned long long tick);
