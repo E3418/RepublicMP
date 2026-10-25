@@ -4,6 +4,15 @@
 
 Protocol 51 - every player needs this build.
 
+- **Storage trace preference** - remember the storage resource trace in
+  RepublicMP.profile.ini as debug/storage_trace, alongside the existing money
+  trace and construction drawing/logging preferences. Missing keys stay off.
+
+- **In-game session controls** - add host re-sync, the existing desync delay
+  choices and countdown to the multiplayer page. Add map-ping key rebinding
+  with Escape cancellation, and show the version and DLL build checksum at
+  the card's bottom-right corner. Both interfaces use the same session settings.
+
 - **Held vehicle rendering guard** - follow +4a0 links throughout the parent
   and child closure used by the native render builders, including objects
   outside the root render list. Pointer changes to or from null now refuse

@@ -8,6 +8,7 @@
 #include "ui_text.h"
 #include "../game/main_menu_hook.h"
 #include "../game/world.h"
+#include "../game/window_focus.h"
 #include "../game/system_menu.h"
 #include "../core/profile.h"
 #include "../modes/mode.h"
@@ -45,6 +46,8 @@ static int s_mode = -1; // 0 co-op, 1 republics (remembered in the profile); -1 
 static int s_public = -1; // a hosted game is listed for everyone (1) or for friends (0)
 static int s_tab = 0;     // 0 host, 1 join
 static int s_selected = -1;
+static bool s_pingWaiting = false;
+static bool s_pingDown[256] = {};
 
 void MultiplayerPage_Open()
 {
@@ -61,6 +64,7 @@ bool MultiplayerPage_IsOpen() { return s_open && (s_menuOn || World_IsReady()) &
 static void Close()
 {
     s_open = false;
+    s_pingWaiting = false;
     MainMenuHook_SetHidden(false);
     ImGui::SetWindowFocus(nullptr); // no focus left over to take keys while nothing is shown
 }
@@ -367,6 +371,62 @@ static void JoinTab(float cx, float listMin, float listMax, float s)
         SaveSync_StartClient(s_target.c_str());
 }
 
+// The same map-ping binding as the ImGui panel. Ignore keys already held
+// when capture starts, and let Escape cancel without leaving this page.
+static void SessionPingKey(float x, float y, float s)
+{
+    Label(GAME_FONT_ARIAL, 24 * s, ImVec2(x, y), kInk, "Map ping key:");
+    char name[32];
+    Presence_KeyName(Presence_GetPingKey(), name, sizeof(name));
+    if (Row("##sessionPingKey", s_pingWaiting ? "PRESS A KEY..." : name, x + 230 * s, y + 30 * s, s) && !s_pingWaiting) {
+        s_pingWaiting = true;
+        for (int vk = 0; vk < 256; ++vk) s_pingDown[vk] = (GetAsyncKeyState(vk) & 0x8000) != 0;
+        return;
+    }
+    WrappedLabel(GAME_FONT_ARIAL, 20 * s, ImVec2(x, y + 70 * s), 450 * s, 2, kInk,
+                 s_pingWaiting ? "Press a key or mouse button; Esc cancels." : "Point at the map and press this key to ping.");
+    if (!s_pingWaiting || !IsGameWindowFocused()) return;
+    for (int vk = 1; vk < 256; ++vk) {
+        bool down = (GetAsyncKeyState(vk) & 0x8000) != 0;
+        if (down && !s_pingDown[vk] && (vk == VK_ESCAPE || Presence_SetPingKey(vk))) {
+            s_pingWaiting = false;
+            break;
+        }
+        s_pingDown[vk] = down;
+    }
+}
+
+// Reuse the session service's policy and countdown; these controls change the
+// same values as the ImGui panel, with no separate resync clock or requests.
+static void SessionResync(float x, float y, float s, bool host, bool ready)
+{
+    if (Row("##sessionResync", "RE-SYNC NOW", x + 235 * s, y, s, host && ready)) SaveSync_RequestResync();
+    if (!host) {
+        WrappedLabel(GAME_FONT_ARIAL, 22 * s, ImVec2(x, y + 48 * s), 470 * s, 2, kInk,
+                     "The host controls re-sync.");
+        return;
+    }
+    Label(GAME_FONT_ARIAL, 22 * s, ImVec2(x, y + 48 * s), kInk, "After a desync:");
+    static const int seconds[] = { -1, 0, 60, 120, 300 };
+    static const char* const labels[] = { "OFF", "NOW", "1 MIN", "2 MIN", "5 MIN" };
+    for (int i = 0; i < IM_ARRAYSIZE(seconds); ++i) {
+        ImGui::PushID(i);
+        if (Choice("##resyncDelay", labels[i], x + (47 + 94 * i) * s, y + 78 * s, s * 0.8f,
+                   SaveSync_GetDesyncResyncSeconds() == seconds[i])) SaveSync_SetDesyncResyncSeconds(seconds[i]);
+        ImGui::PopID();
+    }
+    ULONGLONG left = SaveSync_GetMsUntilDesyncResync();
+    if (left) {
+        char countdown[128];
+        ULONGLONG secondsLeft = (left + 999) / 1000;
+        snprintf(countdown, sizeof(countdown), "%s %llu:%02llu", T("Re-sync in:"), secondsLeft / 60, secondsLeft % 60);
+        Raw(GAME_FONT_ARIAL, 22 * s, ImVec2(x, y + 116 * s), kRowRed, countdown);
+    } else {
+        WrappedLabel(GAME_FONT_ARIAL, 22 * s, ImVec2(x, y + 116 * s), 470 * s, 2, kInk,
+                     LockstepNet_Desync()[0] ? "No automatic re-sync pending." : "No desync detected.");
+    }
+}
+
 // SESSION: what the session is doing and who is in it on the left; who sees
 // the game, our SteamID64, the cursors and Stop / Disconnect on the right.
 static void SessionTab(float left, float right, float bottom, float s)
@@ -417,6 +477,11 @@ static void SessionTab(float left, float right, float bottom, float s)
     }
     if (n == 0 && st != SESSION_HOST_LISTENING) Label(GAME_FONT_ARIAL, 22 * s, ImVec2(x + 10 * s, y), kInk, "...");
 
+    // Four player rows end above this block; keep the actions clear of Back.
+    float resyncY = y + 20 * s;
+    if (resyncY < 760 * s) resyncY = 760 * s;
+    SessionResync(x, resyncY, s, host, st == SESSION_HOST_IN_GAME && !resync);
+
     // Right: the host chooses who sees the game in the list, and gives out its SteamID64.
     float c1 = right + 120 * s, c2 = right + 340 * s;
     float ry = 540 * s;
@@ -438,6 +503,8 @@ static void SessionTab(float left, float right, float bottom, float s)
     bool cursors = Presence_GetShowCursors();
     if (Choice("##sShow", "SHOW", c1, ry + 30 * s, s, cursors)) Presence_SetShowCursors(true);
     if (Choice("##sHide", "HIDE", c2, ry + 30 * s, s, !cursors)) Presence_SetShowCursors(false);
+
+    SessionPingKey(right, ry + 90 * s, s);
 
     // The game is left (Stop hosting / Disconnect) only after the session's first moments.
     bool canStop = SaveSync_GetSessionAgeMs() >= SAVE_SYNC_STOP_BUTTON_DELAY_MS;
@@ -492,6 +559,7 @@ void MultiplayerPage_Draw()
         s_targetInit = true;
     }
 
+    bool bindingAtStart = s_pingWaiting;
     float s = MainMenuHook_UiScale();
     ImVec2 display = ImGui::GetIO().DisplaySize;
     float cx = display.x * 0.5f;
@@ -536,8 +604,11 @@ void MultiplayerPage_Draw()
     ImGui::GetWindowDrawList()->AddLine(ImVec2(pMin.x + 40 * s, 520 * s), ImVec2(pMax.x - 40 * s, 520 * s), kRowRed);
 
     if (session) SessionTab(left, right, pMax.y - 70 * s, s);
-    else if (s_tab == 0) HostTab(cx, left, right, s);
-    else JoinTab(cx, pMin.x + 50 * s, pMax.x - 50 * s, s);
+    else {
+        s_pingWaiting = false;
+        if (s_tab == 0) HostTab(cx, left, right, s);
+        else JoinTab(cx, pMin.x + 50 * s, pMax.x - 50 * s, s);
+    }
 
     const char* status = SaveSync_GetLastError(); // why the last session ended or failed
     if (!session && status && status[0])
@@ -546,7 +617,15 @@ void MultiplayerPage_Draw()
     // Escape in the text field only reverts the text (WantTextInput is last
     // frame's: the field lets go of Escape within this one).
     if (Row("##back", "BACK", left, pMax.y - 70 * s, s) ||
-        (ImGui::IsKeyPressed(ImGuiKey_Escape) && !ImGui::GetIO().WantTextInput))
+        (ImGui::IsKeyPressed(ImGuiKey_Escape) && !bindingAtStart && !ImGui::GetIO().WantTextInput))
         Close();
+    // The build belongs to this card, below the action rows, in the menu's
+    // plain player-list font and ink. The window clips it with the parchment.
+    char build[96];
+    snprintf(build, sizeof(build), "RepublicMP %s  build %08X", SaveSync_GetLocalVersion(), SaveSync_GetLocalDllCrc());
+    float buildHeight = 18 * s;
+    ImVec2 buildSize = GameText_Size(GAME_FONT_ARIAL, buildHeight, build);
+    ImVec2 buildAt(pMax.x - buildSize.x - 40 * s, pMax.y - buildSize.y - 14 * s);
+    Raw(GAME_FONT_ARIAL, buildHeight, buildAt, kInk, build);
     ImGui::End();
 }

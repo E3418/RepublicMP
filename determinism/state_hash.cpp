@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // See state_hash.h.
 #include "state_hash.h"
+#include "../core/profile.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -40,9 +41,12 @@
 #define MAX_ENTRIES 4096
 #define MAX_NAME 64
 
+static void LoadSettings();
+
 void StateHash_Bind(const TsmHost* host)
 {
     TsmBind(host);
+    LoadSettings();
 }
 
 // FNV-1a, 64 bit.
@@ -299,6 +303,13 @@ static volatile LONG g_storageUiLogs = 0;
 static volatile LONG g_recipeLogs = 0;
 #define MAX_STORAGE_RECORDS 131072
 
+// Read once at bind, like the money and construction diagnostics. A missing
+// key keeps the expensive resource trace off; only an explicit toggle saves it.
+static void LoadSettings()
+{
+    InterlockedExchange(&g_storageTrace, Profile_GetInt("debug", "storage_trace", 0) != 0 ? 1 : 0);
+}
+
 bool StateHash_GetStorageTrace()
 {
     return InterlockedCompareExchange(&g_storageTrace, 0, 0) != 0;
@@ -309,6 +320,7 @@ void StateHash_SetStorageTrace(bool on)
     InterlockedExchange(&g_storageUiLogs, 0);
     InterlockedExchange(&g_recipeLogs, 0);
     InterlockedExchange(&g_storageTrace, on ? 1 : 0);
+    Profile_SetInt("debug", "storage_trace", on ? 1 : 0);
 }
 
 // No C++ allocation inside the protected reader. The second pass refuses a
