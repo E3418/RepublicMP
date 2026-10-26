@@ -4,6 +4,13 @@
 
 Protocol 51 - every player needs this build.
 
+- **Fix: closing the MULTIPLAYER page** (#53) - the Escape that closed the
+  page (and its key repeats) also reached the game through its own Escape
+  latch, which the mod's key capture did not cover: with the build menu open
+  or a tool in hand the game closed and reopened them several times, with
+  the window sound each time. The latch is now cleared while the keys are the
+  page's. The left button that clicked BACK also stays the page's until it is
+  released.
 - **Lockstep messages** - each message leaves as one buffer in one send (one
   TCP segment or one Steam message instead of two or three), TCP sends small
   messages at once (TCP_NODELAY), and a send to a player whose link stalls

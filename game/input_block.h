@@ -36,3 +36,12 @@ void InputBlock_SetUiCapture(bool mouse, bool keys);
 // Per-frame (game thread, Present hook): clears the left-button bytes while
 // blocked and tracks the start/end of a block.
 void InputBlock_Tick();
+
+// The game reads Escape through a latch byte (exe+0xA54C91) its window message
+// handler sets (0x443E73) and whoever acts on it clears: the Late body's tool
+// cancel, build menu and pause menu (0x30DABA, 0x30DEB4, 0x30E0EA) and the
+// windows' close. C3D_INPUT does not see it, so while the keys are the mod's
+// (the MULTIPLAYER page, or the Escape that closed it until it is released)
+// the latch is cleared before Late reads it (game thread, Late's start) - an
+// Escape for the page, and its key repeats, never also reach the game.
+void InputBlock_ClearGameEscape();

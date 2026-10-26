@@ -172,11 +172,14 @@ void ImGuiHook_NewFrameAndRender()
     // What goes to the mod's windows does not reach the game too (game/input_block).
     // The page is modal, like the game's own menus: while it is up the game gets
     // no click and no key. The Escape that closed it stays ours until released,
-    // so it does not open the game's pause menu as well.
-    static bool s_escapeHeld = false;
+    // so it does not open the game's pause menu as well; so does the left
+    // button that clicked BACK - the game took that held button as its own and,
+    // at a high game speed, answered it on every tick of the frame.
+    static bool s_escapeHeld = false, s_mouseHeld = false;
     s_escapeHeld = (page || s_escapeHeld) && (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
+    s_mouseHeld = (page || s_mouseHeld) && (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
     bool menuButton = MultiplayerPage_MenuButtonShown(); // beside the game's Escape menu
-    InputBlock_SetUiCapture(page || ((g_imguiVisible || menuButton) && io.WantCaptureMouse),
+    InputBlock_SetUiCapture(page || s_mouseHeld || ((g_imguiVisible || menuButton) && io.WantCaptureMouse),
                             page || s_escapeHeld || (g_imguiVisible && io.WantTextInput));
 
     // The other players' cursors and pings show while the overlay is hidden too.

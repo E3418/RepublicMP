@@ -20,6 +20,7 @@
 #include "../lockstep/office_selection.h"
 #include "../world/networks.h"
 #include "determinism.h"
+#include "../game/input_block.h"
 #include "held_frame.h"
 #include "state_hash.h"
 #include "construction_view.h"
@@ -608,6 +609,7 @@ static void PrivateLate(__int64 world)
 
 static void HookedLate(__int64 world)
 {
+    InputBlock_ClearGameEscape(); // an Escape for the MULTIPLAYER page is not the game's too
     bool active = g_on && Determinism_IsActive() && world == (__int64)(g_exeBase + WORLD_RVA);
     if (!active) { o_late(world); return; }
     Determinism_BeforeLate();
