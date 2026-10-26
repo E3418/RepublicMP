@@ -67,6 +67,9 @@ void NetworkClose(NetLink sock);
 
 // Our SteamID64, for players to connect to; 0 without Steam.
 unsigned long long NetworkSteamId();
+// This PC's IPv4 addresses (loopback left out), for players on the LAN or a
+// VPN to connect to; how many were written. Any thread.
+int NetworkLocalAddresses(char (*out)[16], int max);
 // A friend's Steam "Join Game" or accepted invite while we are idle: the host
 // to connect to ("steam:<id>"), once; false when there is none. Friends see
 // Join Game while we listen.

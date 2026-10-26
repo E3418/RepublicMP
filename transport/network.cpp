@@ -4,6 +4,8 @@
 #include "steam_net.h"
 #include "steam_lobby.h"
 #include <cstdio>
+#include <cstring>
+#include <ws2tcpip.h> // getaddrinfo, inet_ntop
 #include <mstcpip.h> // SIO_KEEPALIVE_VALS
 #include <algorithm> // std::min - NOMINMAX is defined project-wide, so windows.h's min/max macros are gone
 
@@ -28,6 +30,33 @@ bool NetworkInit()
          LOBYTE(wsaData.wVersion), HIBYTE(wsaData.wVersion));
     SteamNet_Init(); // optional: without Steam, links are TCP only
     return true;
+}
+
+int NetworkLocalAddresses(char (*out)[16], int max)
+{
+    static bool s_started = false;
+    if (!s_started) {
+        WSADATA wsaData;
+        s_started = WSAStartup(MAKEWORD(2, 2), &wsaData) == 0; // counted: NetworkInit's own stays valid
+        if (!s_started) return 0;
+    }
+    char name[256] = {};
+    if (gethostname(name, sizeof(name)) != 0) return 0;
+    addrinfo hints = {}, *list = nullptr;
+    hints.ai_family = AF_INET;
+    if (getaddrinfo(name, nullptr, &hints, &list) != 0) return 0;
+    int n = 0;
+    for (addrinfo* a = list; a && n < max; a = a->ai_next) {
+        const sockaddr_in* in = (const sockaddr_in*)a->ai_addr;
+        if ((ntohl(in->sin_addr.s_addr) >> 24) == 127) continue;
+        char text[16] = {};
+        if (!inet_ntop(AF_INET, &in->sin_addr, text, sizeof(text))) continue;
+        bool seen = false;
+        for (int i = 0; i < n; i++) seen |= strcmp(out[i], text) == 0;
+        if (!seen) strcpy_s(out[n++], 16, text);
+    }
+    freeaddrinfo(list);
+    return n;
 }
 
 // Windows SO_RCVTIMEO/SO_SNDTIMEO take a DWORD (ms), not a struct timeval.

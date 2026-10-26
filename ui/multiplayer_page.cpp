@@ -43,7 +43,7 @@ static ULONGLONG s_loadedSince = 0;  // the world has been loaded since (0: not 
 static std::string s_target;
 static bool s_targetInit = false;
 static int s_mode = -1; // 0 co-op, 1 republics (remembered in the profile); -1 not read yet
-static int s_public = -1; // a hosted game is listed for everyone (1) or for friends (0)
+static int s_public = -1; // a hosted game is listed for everyone (1), for friends (0) or not at all (2: LAN / IP)
 static int s_tab = 0;     // 0 host, 1 join
 static int s_selected = -1;
 static bool s_pingWaiting = false;
@@ -103,14 +103,19 @@ void MultiplayerPage_Tick()
     // A hosted session is listed in the game list (Steam lobby) while it runs,
     // whether it was started here or from the RepublicMP window.
     if (s_mode < 0) s_mode = Profile_GetInt("profile", "game_mode", 0) == 1 ? 1 : 0;
-    if (s_public < 0) s_public = Profile_GetInt("profile", "game_public", 0) == 1 ? 1 : 0;
+    if (s_public < 0) {
+        int v = Profile_GetInt("profile", "game_public", 0);
+        s_public = v == 1 || v == 2 ? v : 0;
+    }
     SessionState st = SaveSync_GetState();
     // A session that starts, however it was started (here, Steam's Join Game,
     // the RepublicMP window), brings the page up on its SESSION view.
     static SessionState lastState = SESSION_IDLE;
     if (lastState == SESSION_IDLE && st != SESSION_IDLE) MultiplayerPage_Open();
     lastState = st;
-    if (SaveSync_IsHostRole() && (st == SESSION_HOST_LISTENING || st == SESSION_HOST_JOINING || st == SESSION_HOST_IN_GAME))
+    // LAN / IP: no Steam lobby; the players connect by this PC's address.
+    if (s_public != 2 && SaveSync_IsHostRole() &&
+        (st == SESSION_HOST_LISTENING || st == SESSION_HOST_JOINING || st == SESSION_HOST_IN_GAME))
         SteamLobby_Advertise(s_public == 1, Profile_GetNick(),
                              SaveSync_GetGameMode() == SESSION_MODE_REPUBLICS ? "Republics" : "Co-op",
                              1 + LockstepNet_PeerCount(), SaveSync_MaxPlayers());
@@ -252,18 +257,44 @@ static void SetChoice(int* value, int chosen, const char* key)
     Profile_SetInt("profile", key, chosen);
 }
 
+// LAN / IP: this PC's first address (and how many more) with a Copy button.
+// The list is read again every few seconds (a VPN may come up later).
+static void LocalAddresses(float x, float y, float s, const char* copyId)
+{
+    static char addresses[4][16];
+    static int count = 0;
+    static ULONGLONG readAt = 0;
+    ULONGLONG now = GetTickCount64();
+    if (!readAt || now - readAt > 5000) {
+        count = NetworkLocalAddresses(addresses, 4);
+        readAt = now;
+    }
+    Label(GAME_FONT_ARIAL, 22 * s, ImVec2(x, y), kInk, "Your IP:");
+    if (!count) {
+        Raw(GAME_FONT_ARIAL, 22 * s, ImVec2(x, y + 30 * s), kInk, T("No network address found."));
+        return;
+    }
+    std::string all = addresses[0];
+    for (int i = 1; i < count; i++) all += std::string("  ") + addresses[i];
+    Raw(GAME_FONT_ARIAL, count > 1 ? 22 * s : 28 * s, ImVec2(x, y + 30 * s), kInk, all.c_str());
+    if (Row(copyId, "COPY", x + 380 * s, y + 28 * s, s)) ImGui::SetClipboardText(addresses[0]);
+}
+
 // HOST: the game mode and who sees the game on the left, the ways to start
-// hosting and our SteamID64 on the right.
+// hosting and our SteamID64 (or IP) on the right.
 static void HostTab(float cx, float left, float right, float s)
 {
     Label(GAME_FONT_ARIAL, 24 * s, ImVec2(left - 225 * s, 540 * s), kInk, "Game mode:");
     if (Choice("##coop", "CO-OP", left - 110 * s, 570 * s, s, s_mode == 0)) SetChoice(&s_mode, 0, "game_mode");
     if (Choice("##republics", "REPUBLICS", left + 110 * s, 570 * s, s, s_mode == 1)) SetChoice(&s_mode, 1, "game_mode");
     Label(GAME_FONT_ARIAL, 24 * s, ImVec2(left - 225 * s, 640 * s), kInk, "Listed for:");
-    if (Choice("##friends", "FRIENDS", left - 110 * s, 670 * s, s, s_public == 0)) SetChoice(&s_public, 0, "game_public");
-    if (Choice("##public", "EVERYONE", left + 110 * s, 670 * s, s, s_public == 1)) SetChoice(&s_public, 1, "game_public");
+    if (Choice("##friends", "FRIENDS", left - 150 * s, 670 * s, s, s_public == 0)) SetChoice(&s_public, 0, "game_public");
+    if (Choice("##public", "EVERYONE", left + 25 * s, 670 * s, s, s_public == 1)) SetChoice(&s_public, 1, "game_public");
+    if (Choice("##lan", "LAN / IP", left + 190 * s, 670 * s, s, s_public == 2)) SetChoice(&s_public, 2, "game_public");
     WrappedLabel(GAME_FONT_ARIAL, 20 * s, ImVec2(left - 225 * s, 720 * s), 470 * s, 2, kInk,
-          s_public == 1 ? "Every player with this version sees your game." : "Only your Steam friends see your game.");
+          s_public == 1   ? "Every player with this version sees your game."
+          : s_public == 2 ? "Not listed on Steam: players join by your IP (LAN or VPN, ports 5556 and 5560)."
+                          : "Only your Steam friends see your game.");
     // The session's size, the same setting as "Session" in the RepublicMP window
     // (Republics is always 2).
     if (s_mode == 0) {
@@ -303,7 +334,9 @@ static void HostTab(float cx, float left, float right, float s)
     const RmpMode* republics = Modes_Republics();
     if (s_mode == 1 && republics && republics->line1)
         WrappedLabel(GAME_FONT_ARIAL, 20 * s, ImVec2(right, 700 * s), 460 * s, 1, kRowRed, republics->line1);
-    if (unsigned long long id = NetworkSteamId()) {
+    if (s_public == 2) {
+        LocalAddresses(right, 740 * s, s, "##copyIp");
+    } else if (unsigned long long id = NetworkSteamId()) {
         char idText[32];
         snprintf(idText, sizeof(idText), "%llu", id);
         Label(GAME_FONT_ARIAL, 22 * s, ImVec2(right, 740 * s), kInk, "Your SteamID64:");
@@ -496,10 +529,14 @@ static void SessionTab(float left, float right, float bottom, float s)
     float ry = 540 * s;
     if (host) {
         Label(GAME_FONT_ARIAL, 24 * s, ImVec2(right, ry), kInk, "Listed for:");
-        if (Choice("##sFriends", "FRIENDS", c1, ry + 30 * s, s, s_public == 0)) SetChoice(&s_public, 0, "game_public");
-        if (Choice("##sPublic", "EVERYONE", c2, ry + 30 * s, s, s_public == 1)) SetChoice(&s_public, 1, "game_public");
+        if (Choice("##sFriends", "FRIENDS", c1 - 40 * s, ry + 30 * s, s, s_public == 0)) SetChoice(&s_public, 0, "game_public");
+        if (Choice("##sPublic", "EVERYONE", c2 - 50 * s, ry + 30 * s, s, s_public == 1)) SetChoice(&s_public, 1, "game_public");
+        if (Choice("##sLan", "LAN / IP", c2 + 120 * s, ry + 30 * s, s, s_public == 2)) SetChoice(&s_public, 2, "game_public");
         ry += 100 * s;
-        if (unsigned long long id = NetworkSteamId()) {
+        if (s_public == 2) {
+            LocalAddresses(right, ry, s, "##sCopyIp");
+            ry += 90 * s;
+        } else if (unsigned long long id = NetworkSteamId()) {
             char idText[32];
             snprintf(idText, sizeof(idText), "%llu", id);
             Label(GAME_FONT_ARIAL, 22 * s, ImVec2(right, ry), kInk, "Your SteamID64:");

@@ -4,6 +4,10 @@
 
 Protocol 51 - every player needs this build.
 
+- **Hosting by LAN / IP** - the HOST tab and the SESSION view have a third
+  choice next to FRIENDS and EVERYONE: LAN / IP. The game is not listed on
+  Steam and the page shows this PC's IP with a Copy button, for players who
+  join over the LAN or a VPN (TCP ports 5556 and 5560).
 - **Host DLC check** - expose the existing remembered DLC check on the HOST
   page, below the player count, for both Co-op and Republics.
 
