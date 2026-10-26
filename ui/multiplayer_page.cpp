@@ -257,8 +257,8 @@ static void SetChoice(int* value, int chosen, const char* key)
     Profile_SetInt("profile", key, chosen);
 }
 
-// LAN / IP: this PC's first address (and how many more) with a Copy button.
-// The list is read again every few seconds (a VPN may come up later).
+// LAN / IP: this PC's LAN address with a Copy button (one: a list of every
+// adapter ran past the panel). Read again every few seconds.
 static void LocalAddresses(float x, float y, float s, const char* copyId)
 {
     static char addresses[4][16];
@@ -274,9 +274,7 @@ static void LocalAddresses(float x, float y, float s, const char* copyId)
         Raw(GAME_FONT_ARIAL, 22 * s, ImVec2(x, y + 30 * s), kInk, T("No network address found."));
         return;
     }
-    std::string all = addresses[0];
-    for (int i = 1; i < count; i++) all += std::string("  ") + addresses[i];
-    Raw(GAME_FONT_ARIAL, count > 1 ? 22 * s : 28 * s, ImVec2(x, y + 30 * s), kInk, all.c_str());
+    Raw(GAME_FONT_ARIAL, 28 * s, ImVec2(x, y + 30 * s), kInk, addresses[0]);
     if (Row(copyId, "COPY", x + 380 * s, y + 28 * s, s)) ImGui::SetClipboardText(addresses[0]);
 }
 
@@ -665,13 +663,14 @@ void MultiplayerPage_Draw()
     if (Row("##back", "BACK", left, pMax.y - 70 * s, s) ||
         (ImGui::IsKeyPressed(ImGuiKey_Escape) && !bindingAtStart && !ImGui::GetIO().WantTextInput))
         Close();
-    // The build belongs to this card, below the action rows, in the menu's
-    // plain player-list font and ink. The window clips it with the parchment.
+    // The build belongs to this card, bottom left under BACK, in the menu's
+    // plain player-list font and ink (bottom right it ran into the errors the
+    // page shows there). The window clips it with the parchment.
     char build[96];
     snprintf(build, sizeof(build), "RepublicMP %s  build %08X", SaveSync_GetLocalVersion(), SaveSync_GetLocalDllCrc());
     float buildHeight = 18 * s;
     ImVec2 buildSize = GameText_Size(GAME_FONT_ARIAL, buildHeight, build);
-    ImVec2 buildAt(pMax.x - buildSize.x - 40 * s, pMax.y - buildSize.y - 14 * s);
+    ImVec2 buildAt(left - 225 * s, pMax.y - buildSize.y - 14 * s);
     Raw(GAME_FONT_ARIAL, buildHeight, buildAt, kInk, build);
     ImGui::End();
 }

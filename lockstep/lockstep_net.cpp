@@ -249,13 +249,27 @@ static void Locks()
     g_locksReady = true;
 }
 
+// A message goes out as one buffer - header and parts together - in one send:
+// one TCP segment or one Steam reliable message instead of two or three.
+#define SEND_STACK_BYTES 2048
+
 static bool Send(Peer& p, unsigned type, const void* a, size_t na, const void* b = nullptr, size_t nb = 0)
 {
     if (!p.connected) return false;
     LsHeader h = { type, (unsigned)(na + nb) };
+    size_t total = sizeof(h) + na + nb;
+    unsigned char stack[SEND_STACK_BYTES];
+    std::vector<unsigned char> heap;
+    unsigned char* buf = stack;
+    if (total > sizeof(stack)) {
+        heap.resize(total);
+        buf = heap.data();
+    }
+    memcpy(buf, &h, sizeof(h));
+    if (na) memcpy(buf + sizeof(h), a, na);
+    if (nb) memcpy(buf + sizeof(h) + na, b, nb);
     EnterCriticalSection(&p.sendLock);
-    bool ok = NetworkSendExact(p.sock, &h, sizeof(h)) && (!na || NetworkSendExact(p.sock, a, na)) &&
-              (!nb || NetworkSendExact(p.sock, b, nb));
+    bool ok = NetworkSendExact(p.sock, buf, total);
     LeaveCriticalSection(&p.sendLock);
     if (!ok && p.connected) {
         p.connected = false;
@@ -392,9 +406,14 @@ static void ResetState()
     g_grantBacklog = 0;
 }
 
+// A send that cannot leave within this (a player whose link stalled) drops
+// that player instead of holding the game thread and the other players.
+#define LS_SEND_TIMEOUT_MS 15000
+
 static void StartPeer(NetLink s, const char* nick, const char* ip)
 {
     Peer& p = g_peers[g_peerSlots];
+    NetworkSetMessageLink(s, LS_SEND_TIMEOUT_MS);
     p.sock = s;
     strncpy_s(p.nick, nick && nick[0] ? nick : "Player", _TRUNCATE);
     strncpy_s(p.ip, ip ? ip : "", _TRUNCATE);
@@ -471,11 +490,14 @@ bool LockstepNet_Join(const char* hostIp, DWORD timeoutMs, volatile bool* cancel
         if (s != NET_NO_LINK) {
             ResetState();
             g_isHost = false;
-            LsHeader h = { LS_HELLO, sizeof(LsHello) };
-            LsHello hello = {};
-            memcpy(hello.magic, kHelloMagic, sizeof(kHelloMagic));
-            strncpy_s(hello.nick, Profile_GetNick(), _TRUNCATE);
-            if (!NetworkSendExact(s, &h, sizeof(h)) || !NetworkSendExact(s, &hello, sizeof(hello))) {
+            struct {
+                LsHeader h;
+                LsHello hello;
+            } first = {};
+            first.h = { LS_HELLO, sizeof(LsHello) };
+            memcpy(first.hello.magic, kHelloMagic, sizeof(kHelloMagic));
+            strncpy_s(first.hello.nick, Profile_GetNick(), _TRUNCATE);
+            if (!NetworkSendExact(s, &first, sizeof(first))) {
                 NetworkClose(s);
                 return false;
             }
@@ -502,7 +524,14 @@ void LockstepNet_Close()
             p.sock = NET_NO_LINK;
         }
         if (p.thread) {
-            WaitForSingleObject(p.thread, 5000);
+            // The socket is closed, so its receive returns; the slot is used
+            // again only once that thread has left (it reads the slot).
+            DWORD r = WaitForSingleObject(p.thread, 5000);
+            if (r != WAIT_OBJECT_0) {
+                Logf("republicmp  LOCKSTEP: %s's receive thread has not ended after 5 s - waiting for it", p.nick);
+                r = WaitForSingleObject(p.thread, 25000);
+                if (r != WAIT_OBJECT_0) Logf("republicmp  LOCKSTEP: %s's receive thread still runs after 30 s", p.nick);
+            }
             CloseHandle(p.thread);
             p.thread = nullptr;
         }

@@ -29,6 +29,11 @@ NetLink NetworkListen(unsigned short port, int backlog);
 NetLink NetworkAcceptReady(NetLink listenSock, DWORD waitMs, DWORD ioTimeoutMs);
 // The send/recv timeout of a connection (0 = none).
 void NetworkSetTimeouts(NetLink sock, DWORD timeoutMs);
+// A connection that carries small messages often: TCP sends each at once
+// (TCP_NODELAY, no waiting to merge it with the next), and a send that cannot
+// go out within sendTimeoutMs fails instead of blocking (0 = no limit). Steam
+// links send without delay already and queue their sends: nothing to set.
+void NetworkSetMessageLink(NetLink sock, DWORD sendTimeoutMs);
 // The remote address of a connection, "" when unknown.
 void NetworkPeerAddress(NetLink sock, char* out, size_t outSize);
 
@@ -67,8 +72,9 @@ void NetworkClose(NetLink sock);
 
 // Our SteamID64, for players to connect to; 0 without Steam.
 unsigned long long NetworkSteamId();
-// This PC's IPv4 addresses (loopback left out), for players on the LAN or a
-// VPN to connect to; how many were written. Any thread.
+// This PC's LAN IPv4 addresses (192.168.x.x first, then 10.x.x.x and
+// 172.16-31.x.x; loopback, link-local and VPN ranges such as Tailscale's
+// 100.64/10 left out), for players on the LAN; how many were written. Any thread.
 int NetworkLocalAddresses(char (*out)[16], int max);
 // A friend's Steam "Join Game" or accepted invite while we are idle: the host
 // to connect to ("steam:<id>"), once; false when there is none. Friends see

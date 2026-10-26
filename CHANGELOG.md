@@ -4,10 +4,16 @@
 
 Protocol 51 - every player needs this build.
 
+- **Lockstep messages** - each message leaves as one buffer in one send (one
+  TCP segment or one Steam message instead of two or three), TCP sends small
+  messages at once (TCP_NODELAY), and a send to a player whose link stalls
+  fails after 15 s and drops that player instead of holding the game and the
+  others. Closing waits for each receive thread before its slot is reused.
 - **Hosting by LAN / IP** - the HOST tab and the SESSION view have a third
   choice next to FRIENDS and EVERYONE: LAN / IP. The game is not listed on
-  Steam and the page shows this PC's IP with a Copy button, for players who
-  join over the LAN or a VPN (TCP ports 5556 and 5560).
+  Steam and the page shows this PC's LAN IP with a Copy button, for players
+  who join over the LAN (TCP ports 5556 and 5560); VPN adapters are not
+  shown.
 - **Host DLC check** - expose the existing remembered DLC check on the HOST
   page, below the player count, for both Co-op and Republics.
 
@@ -18,7 +24,7 @@ Protocol 51 - every player needs this build.
 - **In-game session controls** - add host re-sync, the existing desync delay
   choices and countdown to the multiplayer page. Add map-ping key rebinding
   with Escape cancellation, and show the version and DLL build checksum at
-  the card's bottom-right corner. Both interfaces use the same session settings.
+  the card's bottom-left corner, clear of the error text. Both interfaces use the same session settings.
 
 - **Held vehicle rendering guard** - follow +4a0 links throughout the parent
   and child closure used by the native render builders, including objects

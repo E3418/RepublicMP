@@ -45,16 +45,24 @@ int NetworkLocalAddresses(char (*out)[16], int max)
     addrinfo hints = {}, *list = nullptr;
     hints.ai_family = AF_INET;
     if (getaddrinfo(name, nullptr, &hints, &list) != 0) return 0;
+    // Only the private LAN ranges, the home network's first: VPN adapters
+    // (Tailscale 100.64/10, Hamachi 25/8, Radmin 26/8) are left out.
     int n = 0;
-    for (addrinfo* a = list; a && n < max; a = a->ai_next) {
-        const sockaddr_in* in = (const sockaddr_in*)a->ai_addr;
-        if ((ntohl(in->sin_addr.s_addr) >> 24) == 127) continue;
-        char text[16] = {};
-        if (!inet_ntop(AF_INET, &in->sin_addr, text, sizeof(text))) continue;
-        bool seen = false;
-        for (int i = 0; i < n; i++) seen |= strcmp(out[i], text) == 0;
-        if (!seen) strcpy_s(out[n++], 16, text);
-    }
+    for (int rank = 0; rank < 3; rank++)
+        for (addrinfo* a = list; a && n < max; a = a->ai_next) {
+            const sockaddr_in* in = (const sockaddr_in*)a->ai_addr;
+            unsigned ip = ntohl(in->sin_addr.s_addr);
+            int r = (ip >> 16) == 0xC0A8                            ? 0  // 192.168/16
+                    : (ip >> 24) == 10                              ? 1  // 10/8
+                    : (ip >> 24) == 172 && ((ip >> 16) & 0xF0) == 16 ? 2 // 172.16/12
+                                                                    : -1;
+            if (r != rank) continue;
+            char text[16] = {};
+            if (!inet_ntop(AF_INET, &in->sin_addr, text, sizeof(text))) continue;
+            bool seen = false;
+            for (int i = 0; i < n; i++) seen |= strcmp(out[i], text) == 0;
+            if (!seen) strcpy_s(out[n++], 16, text);
+        }
     freeaddrinfo(list);
     return n;
 }
@@ -151,6 +159,16 @@ void NetworkSetTimeouts(NetLink sock, DWORD timeoutMs)
 {
     if (SteamNet_IsLink(sock)) return SteamNet_SetTimeouts(sock, timeoutMs);
     NetworkSetSocketTimeouts(sock, timeoutMs);
+}
+
+void NetworkSetMessageLink(NetLink sock, DWORD sendTimeoutMs)
+{
+    if (SteamNet_IsLink(sock) || sock == INVALID_SOCKET) return;
+    BOOL noDelay = TRUE;
+    if (setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (const char*)&noDelay, sizeof(noDelay)) == SOCKET_ERROR)
+        Logf("republicmp  NETWORK: setsockopt(TCP_NODELAY) failed, WSAGetLastError=%d", WSAGetLastError());
+    if (setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char*)&sendTimeoutMs, sizeof(sendTimeoutMs)) == SOCKET_ERROR)
+        Logf("republicmp  NETWORK: setsockopt(SO_SNDTIMEO) failed, WSAGetLastError=%d", WSAGetLastError());
 }
 
 void NetworkPeerAddress(NetLink sock, char* out, size_t outSize)
