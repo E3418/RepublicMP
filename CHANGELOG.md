@@ -4,6 +4,9 @@
 
 Protocol 51 - every player needs this build.
 
+- **Host DLC check** - expose the existing remembered DLC check on the HOST
+  page, below the player count, for both Co-op and Republics.
+
 - **Storage trace preference** - remember the storage resource trace in
   RepublicMP.profile.ini as debug/storage_trace, alongside the existing money
   trace and construction drawing/logging preferences. Missing keys stay off.

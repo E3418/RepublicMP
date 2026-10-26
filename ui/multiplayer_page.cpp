@@ -277,6 +277,15 @@ static void HostTab(float cx, float left, float right, float s)
     }
     }
 
+    // Use the same join policy and remembered preference as the debug UI.
+    // This row stays below the player count in both Co-op and Republics.
+    Label(GAME_FONT_ARIAL, 24 * s, ImVec2(left - 225 * s, 845 * s), kInk, "Check DLCs:");
+    bool dlcCheck = SaveSync_GetDlcCheck();
+    if (Choice("##dlcOn", "ON", left - 110 * s, 875 * s, s, dlcCheck)) SaveSync_SetDlcCheck(true);
+    if (Choice("##dlcOff", "OFF", left + 110 * s, 875 * s, s, !dlcCheck)) SaveSync_SetDlcCheck(false);
+    WrappedLabel(GAME_FONT_ARIAL, 20 * s, ImVec2(left - 225 * s, 915 * s), 470 * s, 1, kInk,
+                 SaveSync_GetDlcCheck() ? "Refuse players with different DLCs." : "Allow players with different DLCs.");
+
     bool idle = SaveSync_GetState() == SESSION_IDLE;
     if (!s_menuOn) {
         // Over a loaded city: that city is the game.
