@@ -207,7 +207,7 @@ static void MakeHello(SessionHello* h)
 static bool HelloMatches(const SessionHello& peer, char* why, size_t whySize)
 {
     if (memcmp(peer.magic, "RPMPSES", 8) != 0) {
-        _snprintf_s(why, whySize, _TRUNCATE, "the other side is not a compatible RepublicMP (old build?)");
+        _snprintf_s(why, whySize, _TRUNCATE, "not a compatible RepublicMP - an old build?");
         return false;
     }
     char peerVersion[17] = {};
@@ -215,10 +215,9 @@ static bool HelloMatches(const SessionHello& peer, char* why, size_t whySize)
     if (peer.protocol != REPUBLICMP_PROTOCOL || strcmp(peerVersion, REPUBLICMP_VERSION) != 0 ||
         peer.dllCrc != SaveSync_GetLocalDllCrc()) {
         _snprintf_s(why, whySize, _TRUNCATE,
-                    "different RepublicMP builds - yours %s (protocol %d, crc %08X), theirs %s (protocol %d, crc %08X). "
-                    "Both players need the same RepublicMP.dll",
-                    REPUBLICMP_VERSION, REPUBLICMP_PROTOCOL, SaveSync_GetLocalDllCrc(),
-                    peerVersion, peer.protocol, peer.dllCrc);
+                    "different builds: yours %s (%08X, protocol %d), theirs %s (%08X, protocol %d). Use the same RepublicMP.dll",
+                    REPUBLICMP_VERSION, SaveSync_GetLocalDllCrc(), REPUBLICMP_PROTOCOL,
+                    peerVersion, peer.dllCrc, peer.protocol);
         return false;
     }
     return true;
@@ -406,10 +405,9 @@ static bool DlcsMatch(const SessionDlcs& mine, const SessionDlcs& theirs, bool h
     if (strcmp(mine.list, peer) == 0) return true;
     bool refuse = mine.check && theirs.check;
     _snprintf_s(why, whySize, _TRUNCATE,
-                "the DLCs differ - host [%s], player [%s]. DLC maps, buildings and vehicles cannot be shown without the DLC%s",
+                "different DLCs: host [%s], player [%s]. %s",
                 hostList[0] ? hostList : "none", playerList[0] ? playerList : "none",
-                refuse ? "; install the same DLCs, or untick \"Check DLCs\" on either PC to play a map that needs none"
-                       : " (the DLC check is off - playing anyway)");
+                refuse ? "Install the same DLCs, or set Check DLCs to OFF" : "The DLC check is off - playing anyway");
     if (!refuse) {
         Logf("republicmp  SESSION: %s", why);
         SaveStatus("%s %s", host ? "[HOST]" : "[CLIENT]", why);
@@ -795,7 +793,7 @@ static int RunHostJoin(std::vector<Joiner>& js)
         HostStep(7, ready > 1 ? "Waiting for the players' lockstep connections" : "Waiting for the player's lockstep connection");
         joined = LockstepNet_HostAccept(ready, LOCKSTEP_CONNECT_TIMEOUT_MS, &g_disconnectRequested, JoinersStillThere, &js);
         if (!joined) {
-            if (!g_disconnectRequested) SetSessionError("the lockstep connection didn't arrive - TCP port %d must reach the host", LOCKSTEP_PORT);
+            if (!g_disconnectRequested) SetSessionError("the player's game link didn't arrive - TCP port %d must reach this PC", LOCKSTEP_PORT);
             CloseLockstep();
         } else if (joined < ready) {
             SaveStatus("[HOST] %d of %d player(s) opened the lockstep connection - going on without the rest", joined, ready);
@@ -1095,7 +1093,7 @@ static bool RunClientJoin(bool rejoin)
         }
         if (sock == NET_NO_LINK) {
             if (!g_disconnectRequested)
-                SetSessionError("couldn't reach %s:%d - is the host hosting, with room for you? is the IP right? (while players are loading in, the host takes no one else - try again in a minute)", g_targetIp, SAVE_SYNC_PORT);
+                SetSessionError("can't reach %s - check the address and that the host is hosting with a free slot. Try again in a minute", g_targetIp);
             break;
         }
         g_activeSock = sock;
@@ -1105,7 +1103,7 @@ static bool RunClientJoin(bool rejoin)
         SessionHello mine, theirs;
         MakeHello(&mine);
         if (!NetworkSendExact(sock, &mine, sizeof(mine))) {
-            SetSessionError("the host dropped during the version check (old build?)");
+            SetSessionError("the host closed the link at the version check - another build?");
             break;
         }
         // The host answers once it takes this player in: right away, or after
@@ -1116,11 +1114,11 @@ static bool RunClientJoin(bool rejoin)
         }
         if (!NetworkWaitReadable(sock, HELLO_ANSWER_TIMEOUT_MS, &g_disconnectRequested)) {
             if (!g_disconnectRequested)
-                SetSessionError("the host didn't answer - it may be busy with other players joining; try again in a minute");
+                SetSessionError("the host didn't answer - it may be letting others in. Try again in a minute");
             break;
         }
         if (!NetworkRecvExact(sock, &theirs, sizeof(theirs))) {
-            SetSessionError("the host dropped during the version check (old build, or the session is full?)");
+            SetSessionError("the host closed the link - the game may be full, or on another build");
             break;
         }
         char why[256];
@@ -1237,8 +1235,8 @@ static bool RunClientJoin(bool rejoin)
             }
         }
         if (!lockstepUp) {
-            if (hostGone) SetSessionError("the host dropped while the players were loading the shared world");
-            else if (!g_disconnectRequested) SetSessionError("couldn't open the lockstep connection to %s:%d", g_targetIp, LOCKSTEP_PORT);
+            if (hostGone) SetSessionError("the host left while the players were loading");
+            else if (!g_disconnectRequested) SetSessionError("couldn't open the game link to %s (port %d)", g_targetIp, LOCKSTEP_PORT);
             break;
         }
         // The game starts once every player is connected (the host's
