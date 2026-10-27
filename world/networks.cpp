@@ -81,6 +81,8 @@ static const unsigned int kHoverPtrRvas[] = { 0x9E45E8, 0x9E4560, 0x9E4558, 0x9E
 #define MGR_HOVER_SEGMENT_COPY_OFFSET 0x3b8
 #define MGR_ROAD_LINK_OFFSET 0x360        // footpath tool: road segment the path joins (fc040 copies 0x9E4590)
 #define MGR_ROAD_LINK_EXTRA_OFFSET 0x370  // ... and 0x9E45A0
+#define MGR_SNAP_PORT_BUILDING_OFFSET 0x350  // fc040 copies the hovered port building (0x9E45B0)
+#define MGR_SNAP_PORT_INDEX_OFFSET 0x358     // ... and that port's index (0x9E45B8)
 #define MGR_ROUTE_BEGIN_OFFSET 0x410      // interior route records (24 bytes each)
 #define MGR_ROUTE_END_OFFSET 0x418
 #define MGR_START_NODE_OFFSET 0x428
@@ -620,6 +622,13 @@ static bool ApplySegmentImplInner(const NetSegment& seg, bool* outEngineAccepted
     long long savedSnapTarget = 0;
     float savedContinuingY = 0.0f, savedCurve = 0.0f, savedRelax = 0.0f;
     int savedPresetCurveMode = -1;
+    // The local player's in-progress attach snap on the shared manager: port
+    // building (+0x350/+0x358) and road-link node/edge (+0x360/+0x368/+0x370),
+    // which fc040 overwrites below. Saved/restored so replaying a command does
+    // not wipe a local drag's attach to a building port or a map border
+    // connection (free roads keep these 0, so only attaching roads were hit).
+    long long savedSnapPortBld = 0, savedRoadLink = 0, savedRoadNode = 0;
+    int savedSnapPortIdx = 0, savedRoadPoint = 0;
     bool threw = false;
 
     __try {
@@ -641,6 +650,11 @@ static bool ApplySegmentImplInner(const NetSegment& seg, bool* outEngineAccepted
             savedCurve = *(float*)(manager + MGR_CURVE_OFFSET);
             savedRelax = *(float*)(manager + MGR_RELAX_TIMER_OFFSET);
             savedPresetCurveMode = *presetCurveMode;
+            savedSnapPortBld = *(long long*)(manager + MGR_SNAP_PORT_BUILDING_OFFSET);
+            savedSnapPortIdx = *(int*)(manager + MGR_SNAP_PORT_INDEX_OFFSET);
+            savedRoadLink = *(long long*)(manager + MGR_ROAD_LINK_OFFSET);
+            savedRoadPoint = *(int*)(manager + MGR_ROAD_LINK_POINT_OFFSET);
+            savedRoadNode = *(long long*)(manager + MGR_ROAD_LINK_EXTRA_OFFSET);
             saved = true;
 
             *(long long*)(thisPtr + SNAP_TARGET_PTR_OFFSET) = 0;
@@ -735,6 +749,11 @@ static bool ApplySegmentImplInner(const NetSegment& seg, bool* outEngineAccepted
                 *presetCurveMode = savedPresetCurveMode;
                 *(float*)(manager + MGR_CURVE_OFFSET) = savedCurve;
                 *(float*)(manager + MGR_RELAX_TIMER_OFFSET) = savedRelax;
+                *(long long*)(manager + MGR_SNAP_PORT_BUILDING_OFFSET) = savedSnapPortBld;
+                *(int*)(manager + MGR_SNAP_PORT_INDEX_OFFSET) = savedSnapPortIdx;
+                *(long long*)(manager + MGR_ROAD_LINK_OFFSET) = savedRoadLink;
+                *(int*)(manager + MGR_ROAD_LINK_POINT_OFFSET) = savedRoadPoint;
+                *(long long*)(manager + MGR_ROAD_LINK_EXTRA_OFFSET) = savedRoadNode;
             }
             ClearHoveredPort();
             if (seg.category == NET_CATEGORY_PEDESTRIAN) HoverGlobals_Clear();
