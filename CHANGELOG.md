@@ -4,13 +4,20 @@
 
 Protocol 51 - every player needs this build.
 
+- **Shorter join errors** - the errors a join or a host shows (can't reach
+  the host, no answer, another build, other DLCs) are shorter and fit the
+  MULTIPLAYER page; the log keeps the versions, checksums and DLC lists.
+- **Fix: crash when leaving the game after Steam networking** - the Steam
+  service thread kept calling Steam after the game shut it down and unloaded
+  its client library; it now stops before SteamAPI_Shutdown.
 - **Fix: closing the MULTIPLAYER page** (#53) - the Escape that closed the
   page (and its key repeats) also reached the game through its own Escape
   latch, which the mod's key capture did not cover: with the build menu open
   or a tool in hand the game closed and reopened them several times, with
   the window sound each time. The latch is now cleared while the keys are the
   page's. The left button that clicked BACK also stays the page's until it is
-  released.
+  released, and the game's own button bytes, which Late reads directly (the
+  build menu's tabs), are cleared before Late as well.
 - **Lockstep messages** - each message leaves as one buffer in one send (one
   TCP segment or one Steam message instead of two or three), TCP sends small
   messages at once (TCP_NODELAY), and a send to a player whose link stalls

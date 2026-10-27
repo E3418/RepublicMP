@@ -151,18 +151,22 @@ bool InstallInputBlockHooks()
     return ok == total;
 }
 
-void InputBlock_ClearGameEscape()
+void InputBlock_ClearGameLatches()
 {
-    if (!KeysTaken()) return;
     __try {
-        *(unsigned char*)(g_exeBase + ESCAPE_LATCH_RVA) = 0;
+        if (KeysTaken()) *(unsigned char*)(g_exeBase + ESCAPE_LATCH_RVA) = 0;
+        // A command being made (Neutral) reads the button bytes as the clicking PC's.
+        if (MouseTaken() && !Neutral()) {
+            *(unsigned char*)(g_exeBase + LMB_HELD_RVA) = 0;
+            *(unsigned char*)(g_exeBase + LMB_JUST_PRESSED_RVA) = 0;
+        }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
 }
 
 void InputBlock_Tick()
 {
-    InputBlock_ClearGameEscape(); // the windows' code reads it outside Late too
+    InputBlock_ClearGameLatches(); // the windows' code reads them outside Late too
     static bool s_wasBlocked = false;
     bool blocked = Blocked();
     if (blocked != s_wasBlocked) {

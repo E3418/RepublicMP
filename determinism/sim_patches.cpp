@@ -609,7 +609,7 @@ static void PrivateLate(__int64 world)
 
 static void HookedLate(__int64 world)
 {
-    InputBlock_ClearGameEscape(); // an Escape for the MULTIPLAYER page is not the game's too
+    InputBlock_ClearGameLatches(); // an Escape or a click for the MULTIPLAYER page is not the game's too
     bool active = g_on && Determinism_IsActive() && world == (__int64)(g_exeBase + WORLD_RVA);
     if (!active) { o_late(world); return; }
     Determinism_BeforeLate();

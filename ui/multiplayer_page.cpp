@@ -527,9 +527,10 @@ static void SessionTab(float left, float right, float bottom, float s)
     float ry = 540 * s;
     if (host) {
         Label(GAME_FONT_ARIAL, 24 * s, ImVec2(right, ry), kInk, "Listed for:");
-        if (Choice("##sFriends", "FRIENDS", c1 - 40 * s, ry + 30 * s, s, s_public == 0)) SetChoice(&s_public, 0, "game_public");
-        if (Choice("##sPublic", "EVERYONE", c2 - 50 * s, ry + 30 * s, s, s_public == 1)) SetChoice(&s_public, 1, "game_public");
-        if (Choice("##sLan", "LAN / IP", c2 + 120 * s, ry + 30 * s, s, s_public == 2)) SetChoice(&s_public, 2, "game_public");
+        // Three in the column's width: centred at 60, 205 and 350 from its left edge.
+        if (Choice("##sFriends", "FRIENDS", right + 60 * s, ry + 30 * s, s, s_public == 0)) SetChoice(&s_public, 0, "game_public");
+        if (Choice("##sPublic", "EVERYONE", right + 205 * s, ry + 30 * s, s, s_public == 1)) SetChoice(&s_public, 1, "game_public");
+        if (Choice("##sLan", "LAN / IP", right + 350 * s, ry + 30 * s, s, s_public == 2)) SetChoice(&s_public, 2, "game_public");
         ry += 100 * s;
         if (s_public == 2) {
             LocalAddresses(right, ry, s, "##sCopyIp");
