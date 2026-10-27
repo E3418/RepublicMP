@@ -292,13 +292,35 @@ static void AdjustRates()
     }
 }
 
+// The service thread runs until the game shuts Steam down: SteamAPI_Shutdown
+// unloads steamclient64.dll, and a RunCallbacks after it ran code that was no
+// longer there (the crash when leaving the game after hosting over Steam).
+static volatile LONG g_serviceStop = 0;
+static HANDLE g_serviceThread = nullptr;
+
 static DWORD WINAPI ServiceThread(LPVOID)
 {
-    for (;;) {
+    while (!InterlockedCompareExchange(&g_serviceStop, 0, 0)) {
         g_sockets->RunCallbacks();
         AdjustRates();
         Sleep(5);
     }
+    return 0;
+}
+
+typedef void (*Fn_Shutdown)();
+static Fn_Shutdown o_SteamShutdown = nullptr;
+
+static void H_SteamShutdown()
+{
+    InterlockedExchange(&g_serviceStop, 1);
+    if (g_serviceThread) {
+        if (WaitForSingleObject(g_serviceThread, 2000) != WAIT_OBJECT_0)
+            Logf("republicmp  NETWORK: the Steam service thread did not stop before Steam's shutdown");
+        CloseHandle(g_serviceThread);
+        g_serviceThread = nullptr;
+    }
+    if (o_SteamShutdown) o_SteamShutdown();
 }
 
 void SteamNet_Bind(const TsmHost* host)
@@ -316,6 +338,10 @@ void SteamNet_Bind(const TsmHost* host)
         reg(&g_lobbyJoinCallback, STEAM_LOBBY_JOIN_REQUESTED_CALLBACK);
     }
     else Logf("republicmp  NETWORK: no steam_api64.dll - Steam Join Game off");
+    // Our service thread stops before Steam unloads (see ServiceThread).
+    if (api && !PatchIat(g_exe, "steam_api64.dll", "SteamAPI_Shutdown", (void*)H_SteamShutdown, (void**)&o_SteamShutdown,
+                         "steam shutdown"))
+        Logf("republicmp  NETWORK: SteamAPI_Shutdown not hooked - leaving the game after a Steam session may crash");
 }
 
 static bool InitOnce()
@@ -352,12 +378,11 @@ static bool InitOnce()
     // The blocking reads poll Steam with Sleep(1), which is ~15.6 ms at the
     // default timer resolution; the game's XAudio2 asks for 1 ms too.
     timeBeginPeriod(1);
-    HANDLE t = CreateThread(nullptr, 0, ServiceThread, nullptr, 0, nullptr);
-    if (!t) {
+    g_serviceThread = CreateThread(nullptr, 0, ServiceThread, nullptr, 0, nullptr);
+    if (!g_serviceThread) {
         Logf("republicmp  NETWORK: no Steam service thread - TCP only");
         return false;
     }
-    CloseHandle(t);
     Logf("republicmp  NETWORK: Steam links ready, SteamID64 %llu, send rate up to %d KiB/s", g_localId, g_maxRate / 1024);
     return true;
 }
