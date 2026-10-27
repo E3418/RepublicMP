@@ -4,6 +4,12 @@
 
 Protocol 51 - every player needs this build.
 
+- **Diagnostics that do not run out** - the construction recipe report had
+  one budget of 512 lines for the whole game run, so a desync in a later or
+  longer session had none left. It now has no total: each command reports up
+  to 256 lines, so one command that starts hundreds of sites cannot flood the
+  log. The storage UI report's budget comes back with every world load (a
+  session's start, a re-sync).
 - **Shorter join errors** - the errors a join or a host shows (can't reach
   the host, no answer, another build, other DLCs) are shorter and fit the
   MULTIPLAYER page; the log keeps the versions, checksums and DLC lists.

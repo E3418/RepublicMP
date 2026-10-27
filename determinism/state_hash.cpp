@@ -2,6 +2,7 @@
 // See state_hash.h.
 #include "state_hash.h"
 #include "../core/profile.h"
+#include "determinism.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -301,7 +302,19 @@ unsigned long long StateHash_All(const StateSummary& s)
 static volatile LONG g_storageTrace = 0;
 static volatile LONG g_storageUiLogs = 0;
 static volatile LONG g_recipeLogs = 0;
+static volatile LONG g_reportLoads = -1; // Determinism_WorldLoads() the report budgets belong to
 #define MAX_STORAGE_RECORDS 131072
+#define RECIPE_LOG_LINES 256 // per command: a placement writes about a dozen, a group tool can write thousands
+
+// The report budgets are a session's: every world load (a session's start, a
+// re-sync) gives them back, so a desync late in a long game still has its lines.
+static void ReportBudgetsForThisWorld()
+{
+    LONG loads = (LONG)Determinism_WorldLoads();
+    if (InterlockedExchange(&g_reportLoads, loads) == loads) return;
+    InterlockedExchange(&g_storageUiLogs, 0);
+    InterlockedExchange(&g_recipeLogs, 0);
+}
 
 // Read once at bind, like the money and construction diagnostics. A missing
 // key keeps the expensive resource trace off; only an explicit toggle saves it.
@@ -426,7 +439,9 @@ bool StateHash_StorageRecords(std::vector<StorageRecord>& out)
 
 void StateHash_LogStorageUi(const std::vector<StorageRecord>& before, unsigned long long tick)
 {
-    if (!StateHash_GetStorageTrace() || InterlockedCompareExchange(&g_storageUiLogs, 0, 0) >= 32) return;
+    if (!StateHash_GetStorageTrace()) return;
+    ReportBudgetsForThisWorld();
+    if (InterlockedCompareExchange(&g_storageUiLogs, 0, 0) >= 32) return;
     std::vector<StorageRecord> after;
     if (!StateHash_StorageRecords(after)) return;
     if (before.size() != after.size()) {
@@ -480,7 +495,10 @@ static RecipeIdentity RecipeKey(const StorageRecord& r)
 
 void StateHash_LogRecipeChanges(const std::vector<StorageRecord>& before, unsigned seq, unsigned long long tick)
 {
-    if (!StateHash_GetStorageTrace() || InterlockedCompareExchange(&g_recipeLogs, 0, 0) >= 512) return;
+    if (!StateHash_GetStorageTrace()) return;
+    // The budget is one command's: no session ever runs out of it, and one
+    // command that starts hundreds of sites cannot flood the log.
+    InterlockedExchange(&g_recipeLogs, 0);
     std::vector<StorageRecord> after;
     if (!StateHash_RecipeRecords(after)) return;
     std::map<RecipeIdentity, const StorageRecord*> old;
@@ -494,9 +512,9 @@ void StateHash_LogRecipeChanges(const std::vector<StorageRecord>& before, unsign
         if (was) memcpy(&oldBits, &was->required, 4);
         if (was && bits == oldBits) continue;
         LONG line = InterlockedIncrement(&g_recipeLogs);
-        if (line > 512) return;
+        if (line > RECIPE_LOG_LINES) return;
         Logf("republicmp  CONSTRUCTION_RECIPE: command #%u after tick %llu building %d list #%d stage %d entry %d [%s] required %.9g (%08X), %s %.9g (%08X)%s",
              seq, tick, r.building, r.ordinal, r.slot, r.entry, r.resource, r.required, bits, was ? "previous" : "new entry; previous",
-             was ? was->required : 0.0f, oldBits, line == 512 ? " - recipe report limit reached" : "");
+             was ? was->required : 0.0f, oldBits, line == RECIPE_LOG_LINES ? " - the rest of this command's recipes left out" : "");
     }
 }
