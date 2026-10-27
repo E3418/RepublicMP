@@ -69,6 +69,12 @@ static const DetPatch kPatches[] = {
     // jne camera branch -> nop6
     { 0x6af131, 6, { 0x0f, 0x85, 0x0d, 0x01, 0x00, 0x00 }, { NOP6 }, "road vehicle placement (6af0c0)" },
     { 0x6ada40, 6, { 0x0f, 0x85, 0x16, 0x01, 0x00, 0x00 }, { NOP6 }, "rail vehicle placement (6ad960)" },
+    // field work (66ade0): the speed is measured only for a vehicle on this PC's camera,
+    // closer than 500 m (+13d8, +13dc) -> as off the camera, on every PC (#55)
+    { 0x66b255, 2, { 0x74, 0x27 }, { 0xeb, 0x27 }, "field vehicle speed (66ade0)" },
+    // a wagon in a building follows its head (6a7520) only when the head is on this
+    // PC's camera -> as off the camera; the wagon is still drawn (#55)
+    { 0x66ea22, 5, { 0xe8, 0xf9, 0x8a, 0x03, 0x00 }, { NOP5 }, "wagon in a building follows a head on the camera (66d530)" },
     // movzx eax,byte [rbx+13d8] -> xor eax,eax; nop5
     { 0x66e74c, 7, { 0x0f, 0xb6, 0x83, 0xd8, 0x13, 0x00, 0x00 }, { 0x31, 0xc0, NOP5 }, "vehicle checked flag" },
     // jne (piece on the camera) -> nop
@@ -106,6 +112,7 @@ static const DetPatch kPatches[] = {
     { 0x3fadbc, 2, { 0x75, 0x29 }, { NOP2 }, "follow camera: worker list" },
     // debug keys: je -> jmp (same target), jne -> nop
     { 0x13d81e, 2, { 0x74, 0x6a }, { 0xeb, 0x6a }, "building pass: Ctrl+N" },
+    { 0x199143, 2, { 0x74, 0x13 }, { 0xeb, 0x13 }, "1990c0: Ctrl+Numpad5 (raw key state)" },
     { 0x13d89e, 6, { 0x0f, 0x84, 0xe2, 0x00, 0x00, 0x00 }, { 0xe9, 0xe3, 0x00, 0x00, 0x00, 0x90 }, "building pass: Ctrl+M" },
     { 0x69e256, 6, { 0x0f, 0x85, 0x5c, 0x38, 0x00, 0x00 }, { NOP6 }, "vehicle routine: T" },
     { 0x31603a, 6, { 0x0f, 0x84, 0x06, 0x01, 0x00, 0x00 }, { 0xe9, 0x07, 0x01, 0x00, 0x00, 0x90 }, "Late body: H (networks)" },

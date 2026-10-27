@@ -109,6 +109,7 @@ function.
 | window button call sites (`kSites`) | call sites | `lockstep/game_calls` |
 | `0x28AF60` root main menu builder | inline | `game/main_menu_hook` |
 | `0x4BDE80` minimap map and border | inline | `game/minimap` |
+| `0x831120` boarding, `0x824860` job search, `0x835D70` citizen removal (read only) | inline | `determinism/citizen_trace` |
 | `IDXGISwapChain::Present` | vtable | `game/present_hook` |
 | the game window's `WndProc` | subclass | `game/imgui_hook` |
 

@@ -97,6 +97,19 @@ Protocol 51 - every player needs this build.
   Found while investigating building/citizen desyncs; awaiting an in-game
   comparison of both players' logs.
 
+- **Fix: field vehicles desynced** (#55) - a farm vehicle working a field
+  had its speed measured only while it was on this PC's camera and under
+  500 m away, so the PCs disagreed on it. It now runs as off the camera on
+  every PC, like the other vehicle placements already did; on camera its
+  wheels may look still while it works.
+  A wagon inside a building was moved behind its locomotive only while the
+  locomotive was on this PC's camera; it now does as off the camera too.
+  A debug key (Ctrl+Numpad5) the game read straight from the keyboard is
+  switched off in a session.
+- **Desync reports list the citizens' events** (#55) - who boarded a vehicle,
+  got a workplace or left the game in the two hash intervals before a
+  desync (`CITIZEN_EVENT` lines), so the two logs show the first one that
+  happened at another tick or on one PC only.
 - **Republics, first part** - the HOST tab now hosts Republics (2 players);
   a player who joins gets the host's mode. The map is cut along one of its
   diagonals, moved so both halves get the same playable area whatever the
