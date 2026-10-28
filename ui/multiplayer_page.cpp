@@ -12,6 +12,7 @@
 #include "../game/system_menu.h"
 #include "../core/profile.h"
 #include "../modes/mode.h"
+#include "../modes/republics/republics.h"
 #include "../session/save_sync.h"
 #include "../transport/network.h" // NetworkSteamId
 #include "../transport/steam_lobby.h"
@@ -44,6 +45,8 @@ static ULONGLONG s_loadedSince = 0;  // the world has been loaded since (0: not 
 static std::string s_target;
 static bool s_targetInit = false;
 static int s_mode = -1; // 0 co-op, 1 republics (remembered in the profile); -1 not read yet
+static int s_variant = -1; // Republics: SESSION_REPUBLICS_* (profile "republics_variant"); -1 not read yet
+static int s_side = -1;    // Republics: the host's half, 0 or 1 (profile "republics_side"); -1 not read yet
 static int s_public = -1; // a hosted game is listed for everyone (1), for friends (0) or not at all (2: LAN / IP)
 static int s_tab = 0;     // 0 host, 1 join
 static int s_selected = -1;
@@ -104,6 +107,10 @@ void MultiplayerPage_Tick()
     // A hosted session is listed in the game list (Steam lobby) while it runs,
     // whether it was started here or from the RepublicMP window.
     if (s_mode < 0) s_mode = Profile_GetInt("profile", "game_mode", 0) == 1 ? 1 : 0;
+    if (s_variant < 0)
+        s_variant = Profile_GetInt("profile", "republics_variant", 0) == SESSION_REPUBLICS_EQUAL ? SESSION_REPUBLICS_EQUAL
+                                                                                                 : SESSION_REPUBLICS_EAST_WEST;
+    if (s_side < 0) s_side = Profile_GetInt("profile", "republics_side", 0) == 1 ? 1 : 0;
     if (s_public < 0) {
         int v = Profile_GetInt("profile", "game_public", 0);
         s_public = v == 1 || v == 2 ? v : 0;
@@ -305,16 +312,19 @@ static void HostTab(float cx, float left, float right, float s)
         snprintf(label, sizeof(label), "%d", n);
         if (Choice(id, label, left + (n - 3) * 110 * s, 795 * s, s, players == n)) Profile_SetMaxPlayers(n);
     }
+    } else {
+    // Republics (always 2 players): one republic of each bloc, or two equal ones.
+    Label(GAME_FONT_ARIAL, 24 * s, ImVec2(left - 225 * s, 765 * s), kInk, "Republics:");
+    if (Choice("##eastWest", "EAST VS WEST", left - 110 * s, 795 * s, s, s_variant == SESSION_REPUBLICS_EAST_WEST))
+        SetChoice(&s_variant, SESSION_REPUBLICS_EAST_WEST, "republics_variant");
+    if (Choice("##equal", "EQUAL", left + 110 * s, 795 * s, s, s_variant == SESSION_REPUBLICS_EQUAL))
+        SetChoice(&s_variant, SESSION_REPUBLICS_EQUAL, "republics_variant");
+    // Which half the host plays; the player gets the other.
+    bool blocs = s_variant == SESSION_REPUBLICS_EAST_WEST;
+    Label(GAME_FONT_ARIAL, 24 * s, ImVec2(left - 225 * s, 845 * s), kInk, "Your side:");
+    if (Choice("##side0", blocs ? "EAST" : "SIDE 1", left - 110 * s, 875 * s, s, s_side == 0)) SetChoice(&s_side, 0, "republics_side");
+    if (Choice("##side1", blocs ? "WEST" : "SIDE 2", left + 110 * s, 875 * s, s, s_side == 1)) SetChoice(&s_side, 1, "republics_side");
     }
-
-    // Use the same join policy and remembered preference as the debug UI.
-    // This row stays below the player count in both Co-op and Republics.
-    Label(GAME_FONT_ARIAL, 24 * s, ImVec2(left - 225 * s, 845 * s), kInk, "Check DLCs:");
-    bool dlcCheck = SaveSync_GetDlcCheck();
-    if (Choice("##dlcOn", "ON", left - 110 * s, 875 * s, s, dlcCheck)) SaveSync_SetDlcCheck(true);
-    if (Choice("##dlcOff", "OFF", left + 110 * s, 875 * s, s, !dlcCheck)) SaveSync_SetDlcCheck(false);
-    WrappedLabel(GAME_FONT_ARIAL, 20 * s, ImVec2(left - 225 * s, 915 * s), 470 * s, 1, kInk,
-                 SaveSync_GetDlcCheck() ? "Refuse players with different DLCs." : "Allow players with different DLCs.");
 
     bool idle = SaveSync_GetState() == SESSION_IDLE;
     if (!s_menuOn) {
@@ -342,6 +352,13 @@ static void HostTab(float cx, float left, float right, float s)
         Raw(GAME_FONT_ARIAL, 28 * s, ImVec2(right, 770 * s), kInk, idText);
         if (Row("##copy", "COPY", right + 380 * s, 768 * s, s)) ImGui::SetClipboardText(idText);
     }
+    // Right, under the address: the join policy, the same remembered preference as the debug UI.
+    Label(GAME_FONT_ARIAL, 24 * s, ImVec2(right, 840 * s), kInk, "Check DLCs:");
+    bool dlcCheck = SaveSync_GetDlcCheck();
+    if (Choice("##dlcOn", "ON", right + 120 * s, 870 * s, s, dlcCheck)) SaveSync_SetDlcCheck(true);
+    if (Choice("##dlcOff", "OFF", right + 340 * s, 870 * s, s, !dlcCheck)) SaveSync_SetDlcCheck(false);
+    WrappedLabel(GAME_FONT_ARIAL, 20 * s, ImVec2(right, 910 * s), 460 * s, 1, kInk,
+                 SaveSync_GetDlcCheck() ? "Refuse players with different DLCs." : "Allow players with different DLCs.");
 }
 
 // JOIN: the game list (friends' games and public ones of this version), and a
@@ -563,6 +580,14 @@ static void SessionTab(float left, float right, float bottom, float s)
     bool cursors = Presence_GetShowCursors();
     if (Choice("##sShow", "SHOW", c1, ry + 30 * s, s, cursors)) Presence_SetShowCursors(true);
     if (Choice("##sHide", "HIDE", c2, ry + 30 * s, s, !cursors)) Presence_SetShowCursors(false);
+    // Republics: the stars along the border, the same way.
+    if (SaveSync_GetGameMode() == SESSION_MODE_REPUBLICS) {
+        ry += 90 * s;
+        Label(GAME_FONT_ARIAL, 24 * s, ImVec2(right, ry), kInk, "Border stars:");
+        bool signs = Republics_GetShowSigns();
+        if (Choice("##sSigns", "SHOW", c1, ry + 30 * s, s, signs)) Republics_SetShowSigns(true);
+        if (Choice("##sNoSigns", "HIDE", c2, ry + 30 * s, s, !signs)) Republics_SetShowSigns(false);
+    }
 
     SessionKeys(right, ry + 90 * s, s);
 

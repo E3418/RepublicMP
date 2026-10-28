@@ -4,6 +4,7 @@
 #include "../../api/republicmp_api.h"
 #include "imgui.h"
 #include <math.h>
+#include <string.h>
 #include <algorithm>
 
 // The live C3D_TERRAIN's size in metres, x and z: the map is [-x/2, x/2] by
@@ -30,8 +31,8 @@ typedef bool (*OutOfPlayableFn)(void* world, const float* xyz);
 // (100 m on a stock map).
 #define CUT_GRID 200
 
-// The cut: the points with p.x*nx + p.z*nz < offset are half 0 (the host's),
-// above it half 1 (the player's). n is one of the map's two diagonals'
+// The cut: the points with p.x*nx + p.z*nz < offset are half 0, above it
+// half 1; the host plays the one it chose (SaveSync_GetHostSide). n is one of the map's two diagonals'
 // normals, offset moves the line so both halves get the same playable area.
 struct Cut {
     float nx, nz, offset;
@@ -42,6 +43,27 @@ static bool g_cutReady = false; // main thread
 static unsigned g_cutLoads = 0; // Determinism_WorldLoads() when it was measured
 static float g_border[BORDER_POINTS][3];
 static volatile int g_borderCount = 0; // 0 until drawn points are ready
+// The same cut inside the playable border, in pieces of at most STRIP_STEP_M
+// as the game cuts its own border line (40f3f0), for the game's strip.
+#define STRIP_STEP_M 500.0f
+#define STRIP_POINTS 128
+static float g_strip[STRIP_POINTS][3];
+static volatile int g_stripCount = 0;
+// The game's border signs on each half, as it sets its own (410080): one a
+// piece, SIGN_INSET_M inside, SIGN_LIFT_M above the ground - without its
+// random +-20 m, so every PC shows them alike. East vs West: half 0 (the
+// East) has the red star, half 1 the blue one; on equal terms both
+// alternate. A sign shrinks away as the camera comes near (from
+// SIGN_HIDE_FAR_M to SIGN_HIDE_NEAR_M of view depth): it is 120 m wide and
+// the shader has no partial transparency (BumpBorderPixel clips at alpha 0.5).
+#define SIGN_INSET_M 350.0f
+#define SIGN_LIFT_M 5.0f
+#define SIGN_HIDE_FAR_M 1200.0f
+#define SIGN_HIDE_NEAR_M 700.0f
+static float g_signs[2][STRIP_POINTS][3];
+static volatile int g_signCount[2] = { 0, 0 };
+static BorderSign g_drawnSigns[2 * STRIP_POINTS]; // render thread
+static bool g_showSigns = true; // profile "overlay" "border_signs"
 static ULONGLONG g_borderAt = 0;
 static unsigned g_borderLoads = 0; // the world the drawn points were read on
 static volatile ULONGLONG g_refusedAt = 0; // this PC's player was refused (main thread), shown by the overlay
@@ -142,7 +164,7 @@ static int LocalPlayer()
     return SaveSync_IsHostRole() ? 0 : 1;
 }
 
-// 0 the host's half, 1 the player's; -1 in the band along the cut, which
+// 0 the first half, 1 the second; -1 in the band along the cut, which
 // belongs to both.
 static int HalfOf(const float p[3], const Cut& c)
 {
@@ -164,7 +186,8 @@ static bool AreaRule(int player, const float pos[3])
     if (local) player = LocalPlayer();
     if (!isfinite(pos[0]) || !isfinite(pos[2])) return false;
     int half = HalfOf(pos, *c);
-    bool ok = half < 0 || half == (player == 0 ? 0 : 1);
+    int hostHalf = SaveSync_GetHostSide(); // the host's choice: the player has the other half
+    bool ok = half < 0 || half == (player == 0 ? hostHalf : 1 - hostHalf);
     if (!ok && player == LocalPlayer()) g_refusedAt = GetTickCount64();
     return ok;
 }
@@ -178,6 +201,7 @@ static void SampleBorder()
     const Cut* c = CurrentCut();
     if (!c) {
         g_borderCount = 0;
+        g_stripCount = g_signCount[0] = g_signCount[1] = 0;
         return;
     }
     ULONGLONG now = GetTickCount64();
@@ -202,36 +226,138 @@ static void SampleBorder()
     }
     g_borderAt = now;
     g_borderCount = n;
+    // The strip: from the first point inside the playable border to the last.
+    int first = -1, last = -1;
+    g_measureFault = false;
+    for (int i = 0; i < n; i++)
+        if (!OutOfPlayable(g_border[i])) {
+            if (first < 0) first = i;
+            last = i;
+        }
+    if (first < 0 || last <= first || g_measureFault) {
+        g_stripCount = g_signCount[0] = g_signCount[1] = 0;
+        return;
+    }
+    const float* a = g_border[first];
+    const float* b = g_border[last];
+    float dx = b[0] - a[0], dz = b[2] - a[2];
+    int pieces = (int)ceilf(sqrtf(dx * dx + dz * dz) / STRIP_STEP_M);
+    if (pieces < 1) pieces = 1;
+    if (pieces > STRIP_POINTS - 1) pieces = STRIP_POINTS - 1;
+    g_stripCount = 0; // the render thread draws none while they change
+    for (int i = 0; i <= pieces; i++) {
+        float t = (float)i / pieces;
+        float* p = g_strip[i];
+        p[0] = a[0] + dx * t;
+        p[1] = 0;
+        p[2] = a[2] + dz * t;
+        float y;
+        if (TerrainHook_HeightAt(p, &y)) p[1] = y; // as the game's: on the ground, drawn over it
+    }
+    g_stripCount = pieces + 1;
+    // The signs: across from each piece's middle, on both sides, inside the map.
+    for (int half = 0; half < 2; half++) {
+        float k = half == 0 ? -SIGN_INSET_M : SIGN_INSET_M; // half 0 lies below the cut's normal
+        int m = 0;
+        g_signCount[half] = 0;
+        for (int i = 0; i < pieces; i++) {
+            float* p = g_signs[half][m];
+            p[0] = a[0] + dx * (i + 0.5f) / pieces + c->nx * k;
+            p[1] = 0;
+            p[2] = a[2] + dz * (i + 0.5f) / pieces + c->nz * k;
+            if (OutOfPlayable(p)) continue;
+            float y;
+            p[1] = (TerrainHook_HeightAt(p, &y) ? fmaxf(y, 0.0f) : 0.0f) + SIGN_LIFT_M;
+            m++;
+        }
+        g_signCount[half] = g_measureFault ? 0 : m;
+    }
 }
 
 static const float kRed[4] = { 0.82f, 0.12f, 0.12f, 0.9f };
-static float g_segments[BORDER_POINTS * 4]; // render thread
+// On the terrain the line is dimmer, and fades out with its distance from the
+// camera (metres of view depth): full up to NEAR, gone from FAR on. It is
+// drawn in FADE_STEPS batches of one alpha each (the panel takes one colour
+// per call).
+static const float kTerrainRed[4] = { 0.72f, 0.16f, 0.14f, 0.55f };
+#define BORDER_FADE_NEAR_M 300.0f
+#define BORDER_FADE_FAR_M 1500.0f
+#define FADE_STEPS 8
+static float g_segments[FADE_STEPS][BORDER_POINTS * 4]; // render thread
+static int g_segmentCount[FADE_STEPS];
+
+// Render thread, right after the game's own border line (BorderDraw_SetAfter):
+// the cut drawn the same way, the game's dash-and-dot strip on the ground.
+static void DrawAfterBorder()
+{
+    int count = g_stripCount;
+    if (!Active() || count < 2) return;
+    BorderDraw_Strip(g_strip, count);
+    if (!g_showSigns) return;
+    bool equal = SaveSync_GetGameVariant() == SESSION_REPUBLICS_EQUAL;
+    int n = 0;
+    for (int half = 0; half < 2; half++)
+        for (int i = 0, m = g_signCount[half]; i < m; i++) {
+            BorderSign& s = g_drawnSigns[n++];
+            memcpy(s.pos, g_signs[half][i], sizeof(s.pos));
+            s.sign = (equal ? (i + half) % 2 : half) == 0 ? BORDER_SIGN_EAST : BORDER_SIGN_WEST;
+            float clip[4];
+            float depth = Camera_Clip(s.pos, clip) ? clip[3] : SIGN_HIDE_FAR_M;
+            float t = (depth - SIGN_HIDE_NEAR_M) / (SIGN_HIDE_FAR_M - SIGN_HIDE_NEAR_M);
+            t = t < 0 ? 0 : t > 1 ? 1 : t;
+            s.size = t * t * (3 - 2 * t); // smooth
+        }
+    BorderDraw_Signs(g_drawnSigns, n);
+}
+
+bool Republics_GetShowSigns() { return g_showSigns; }
+
+void Republics_SetShowSigns(bool on)
+{
+    g_showSigns = on;
+    Profile_SetInt("overlay", "border_signs", on ? 1 : 0);
+}
 
 // Render thread, right before the interface draws (SimPatches_SetUnderUi):
-// the border on the terrain, with the game's 2D panel, under the HUD.
+// where the game's strip cannot be drawn, a line with the game's 2D panel,
+// under the HUD.
 static void DrawUnderUi()
 {
     int count = g_borderCount;
     float w, h;
-    if (!Active() || count < 2 || !Panel2D_ScreenSize(&w, &h)) return;
-    int n = 0;
-    float prev[2];
+    if (BorderDraw_Ready() || !Active() || count < 2 || !Panel2D_ScreenSize(&w, &h)) return;
+    memset(g_segmentCount, 0, sizeof(g_segmentCount));
+    float prev[2], prevDepth = 0;
     bool prevInFront = false;
     for (int i = 0; i < count; i++) {
-        float q[2];
-        bool inFront = Camera_Project(g_border[i], w, h, &q[0], &q[1]) == 1;
+        float clip[4];
+        bool inFront = Camera_Clip(g_border[i], clip) && clip[3] > 1e-4f;
+        float q[2] = { 0, 0 };
+        if (inFront) {
+            q[0] = (clip[0] / clip[3] + 1) * 0.5f * w;
+            q[1] = (1 - clip[1] / clip[3]) * 0.5f * h;
+        }
         if (inFront && prevInFront) {
-            float* s = g_segments + n++ * 4;
-            s[0] = prev[0];
-            s[1] = prev[1];
-            s[2] = q[0];
-            s[3] = q[1];
+            float depth = (clip[3] + prevDepth) * 0.5f;
+            float fade = (BORDER_FADE_FAR_M - depth) / (BORDER_FADE_FAR_M - BORDER_FADE_NEAR_M);
+            int step = (int)(fminf(fade, 1.0f) * FADE_STEPS + 0.5f); // 0: not drawn
+            if (step > 0) {
+                float* s = g_segments[step - 1] + g_segmentCount[step - 1]++ * 4;
+                s[0] = prev[0];
+                s[1] = prev[1];
+                s[2] = q[0];
+                s[3] = q[1];
+            }
         }
         prev[0] = q[0];
         prev[1] = q[1];
+        prevDepth = clip[3];
         prevInFront = inFront;
     }
-    Panel2D_ScreenSegments(g_segments, n, 3.0f, kRed);
+    for (int k = 0; k < FADE_STEPS; k++) {
+        float rgba[4] = { kTerrainRed[0], kTerrainRed[1], kTerrainRed[2], kTerrainRed[3] * (k + 1) / FADE_STEPS };
+        Panel2D_ScreenSegments(g_segments[k], g_segmentCount[k], 2.5f, rgba);
+    }
 }
 
 // Render thread, right after the minimap's border (Minimap_SetDraw): the cut
@@ -249,7 +375,7 @@ static void DrawOnMinimap()
 
 static bool WantsOverlay()
 {
-    if (!Active()) g_borderCount = 0; // the next session's map is read again
+    if (!Active()) g_borderCount = g_stripCount = g_signCount[0] = g_signCount[1] = 0; // the next session's map is read again
     ULONGLONG refused = g_refusedAt;
     return refused && GetTickCount64() - refused < REFUSED_NOTICE_MS;
 }
@@ -292,10 +418,12 @@ static const RmpMode kRepublics = {
 void Republics_Bind(const TsmHost* host)
 {
     TsmBind(host);
+    g_showSigns = Profile_GetInt("overlay", "border_signs", 1) != 0;
     Commands_SetAreaRule(AreaRule);
     Determinism_AddFrameObserver(SampleBorder);
     Determinism_AddStepObserver(SampleBorder);
     SimPatches_SetUnderUi(DrawUnderUi);
+    BorderDraw_SetAfter(DrawAfterBorder);
     Minimap_SetDraw(DrawOnMinimap);
     Modes_SetRepublics(&kRepublics);
 }

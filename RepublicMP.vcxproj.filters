@@ -303,6 +303,9 @@
     <ClCompile Include="game\panel2d.cpp">
       <Filter>game</Filter>
     </ClCompile>
+    <ClCompile Include="game\border_draw.cpp">
+      <Filter>game</Filter>
+    </ClCompile>
     <ClCompile Include="modes\mode.cpp">
       <Filter>modes</Filter>
     </ClCompile>
@@ -573,6 +576,9 @@
       <Filter>game</Filter>
     </ClInclude>
     <ClInclude Include="game\panel2d.h">
+      <Filter>game</Filter>
+    </ClInclude>
+    <ClInclude Include="game\border_draw.h">
       <Filter>game</Filter>
     </ClInclude>
     <ClInclude Include="modes\mode.h">

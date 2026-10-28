@@ -33,6 +33,7 @@
 #include "../game/camera.h"
 #include "../game/panel2d.h"
 #include "../game/minimap.h"
+#include "../game/border_draw.h"
 #include "../modes/republics/republics.h"
 #include "version.h"
 #include "profile.h"
@@ -51,6 +52,7 @@ extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPlugi
     Camera_Bind(host);
     Panel2D_Bind(host);
     Minimap_Bind(host);
+    BorderDraw_Bind(host);
     LocalBuilds_Bind(host);
     PresentHook_Bind(host);
     GameSpeed_Bind(host);

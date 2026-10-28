@@ -2,8 +2,14 @@
 
 ## Unreleased
 
-Protocol 52 - every player needs this build.
+Protocol 53 - every player needs this build.
 
+- **Republics: East vs West or equal** - the host chooses the kind of
+  Republics on the HOST page: East vs West (the East has the red stars of
+  the Soviet border, the West the blue western ones) or two republics on
+  equal terms (the stars alternate on both sides), and the side it plays -
+  the East or the West, side 1 or 2 - the player getting the other. The
+  choices go to the players with the game mode.
 - **Chat** - a session has a chat: a small window in the MULTIPLAYER page's
   look over the game and its windows, that stops nothing - the game gets
   only the keys of a line being typed and the clicks on the window. Its bar
@@ -12,6 +18,15 @@ Protocol 52 - every player needs this build.
   ping key) brings it back and starts a line; Enter sends it, Esc stops
   typing. The lines go beside the commands, like the cursors: the
   simulation never sees them.
+- **Republics: the border drawn as the game's own** - the cut between the
+  republics is drawn on the ground the way the game draws the map's border:
+  its dash-and-dot strip, in pieces of 500 m, inside the playable area (the
+  game's border routine and its strip found by Sohn). Each side has the
+  game's border stars 350 m inside it, as along the map's borders; they
+  shrink away as the camera comes within about a kilometre, and the
+  SESSION page shows or hides them on this PC. Where that cannot be
+  drawn, a dimmer red line that fades with the distance stays instead; the
+  minimap keeps its red line.
 - **Fix: border connections in a pause** - while a session was paused,
   a road could not be attached to a border connection (or another building's
   port) that had been off the camera when the pause began: the game's cursor

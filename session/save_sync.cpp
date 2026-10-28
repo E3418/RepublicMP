@@ -45,6 +45,8 @@ void SaveSync_Bind(const TsmHost* host)
 static volatile SessionState g_state = SESSION_IDLE;
 static volatile bool g_isHost = false;
 static volatile int g_gameMode = SESSION_MODE_COOP; // SaveSync_GetGameMode
+static volatile int g_gameVariant = SESSION_REPUBLICS_EAST_WEST; // SaveSync_GetGameVariant
+static volatile int g_hostSide = 0; // SaveSync_GetHostSide
 static char g_targetIp[64] = SAVE_SYNC_TEST_HOST_IP; // client target - overridable from the UI
 static char g_peerIp[64] = "";
 static char g_lastError[256] = "";
@@ -159,7 +161,7 @@ struct SessionHello {
     int protocol;      // REPUBLICMP_PROTOCOL
     char version[16];  // REPUBLICMP_VERSION
     unsigned int dllCrc;
-    int gameMode;      // the host's SESSION_MODE_*; a player's is not read
+    int gameMode;      // the host's SESSION_MODE_*, its variant << 8, its side << 16; a player's is not read
 };
 
 // Step reports in both directions after the hello.
@@ -200,7 +202,7 @@ static void MakeHello(SessionHello* h)
     h->protocol = REPUBLICMP_PROTOCOL;
     strncpy_s(h->version, REPUBLICMP_VERSION, _TRUNCATE);
     h->dllCrc = SaveSync_GetLocalDllCrc();
-    h->gameMode = g_gameMode;
+    h->gameMode = g_gameMode | g_gameVariant << 8 | g_hostSide << 16;
 }
 
 // Compares the peer's hello with ours; fills why on a mismatch.
@@ -1127,8 +1129,13 @@ static bool RunClientJoin(bool rejoin)
             SaveStatus("[CLIENT] join refused: %s", why);
             break;
         }
-        g_gameMode = theirs.gameMode == SESSION_MODE_REPUBLICS ? SESSION_MODE_REPUBLICS : SESSION_MODE_COOP;
-        SaveStatus("[CLIENT] the host plays %s", g_gameMode == SESSION_MODE_REPUBLICS ? "Republics" : "co-op");
+        g_gameMode = (theirs.gameMode & 0xFF) == SESSION_MODE_REPUBLICS ? SESSION_MODE_REPUBLICS : SESSION_MODE_COOP;
+        g_gameVariant = (theirs.gameMode >> 8 & 0xFF) == SESSION_REPUBLICS_EQUAL ? SESSION_REPUBLICS_EQUAL
+                                                                                 : SESSION_REPUBLICS_EAST_WEST;
+        g_hostSide = (theirs.gameMode >> 16 & 0xFF) == 1 ? 1 : 0;
+        SaveStatus("[CLIENT] the host plays %s", g_gameMode != SESSION_MODE_REPUBLICS ? "co-op"
+                                                 : g_gameVariant == SESSION_REPUBLICS_EQUAL ? "Republics, equal"
+                                                                                            : "Republics, East vs West");
         SessionDlcs myDlcs, theirDlcs;
         MakeDlcs(&myDlcs);
         if (!NetworkSendExact(sock, &myDlcs, sizeof(myDlcs)) || !NetworkRecvExact(sock, &theirDlcs, sizeof(theirDlcs)) ||
@@ -1333,6 +1340,8 @@ bool SaveSync_IsWorldLoaded()
 }
 
 int SaveSync_GetGameMode() { return g_gameMode; }
+int SaveSync_GetGameVariant() { return g_gameVariant; }
+int SaveSync_GetHostSide() { return g_hostSide; }
 
 int SaveSync_MaxPlayers()
 {
@@ -1351,6 +1360,10 @@ void SaveSync_StartHost(int gameMode)
     g_disconnectRequested = false;
     g_isHost = true;
     g_gameMode = gameMode;
+    g_gameVariant = Profile_GetInt("profile", "republics_variant", 0) == SESSION_REPUBLICS_EQUAL
+                        ? SESSION_REPUBLICS_EQUAL
+                        : SESSION_REPUBLICS_EAST_WEST;
+    g_hostSide = Profile_GetInt("profile", "republics_side", 0) == 1 ? 1 : 0;
     g_resyncRequested = false;
     g_resyncing = false;
     g_sessionStartTick = GetTickCount64();
