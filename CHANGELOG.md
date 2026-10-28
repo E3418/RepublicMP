@@ -25,8 +25,9 @@ Protocol 53 - every player needs this build.
   game's border stars 350 m inside it, as along the map's borders; they
   shrink away as the camera comes within about a kilometre, and the
   SESSION page shows or hides them on this PC. Where that cannot be
-  drawn, a dimmer red line that fades with the distance stays instead; the
-  minimap keeps its red line.
+  drawn, a dimmer red line that fades with the distance stays instead. On
+  the minimap the cut is a muted, dusty red line inside the playable area,
+  darker than the game's own borders.
 - **Fix: border connections in a pause** - while a session was paused,
   a road could not be attached to a border connection (or another building's
   port) that had been off the camera when the pause began: the game's cursor

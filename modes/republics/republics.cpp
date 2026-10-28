@@ -274,7 +274,6 @@ static void SampleBorder()
     }
 }
 
-static const float kRed[4] = { 0.82f, 0.12f, 0.12f, 0.9f };
 // On the terrain the line is dimmer, and fades out with its distance from the
 // camera (metres of view depth): full up to NEAR, gone from FAR on. It is
 // drawn in FADE_STEPS batches of one alpha each (the panel takes one colour
@@ -360,17 +359,22 @@ static void DrawUnderUi()
     }
 }
 
+// A muted, dusty red on the minimap (the menu strip's #953C37): it stands out
+// on the map without glaring, and is darker than the game's bright red border.
+static const float kMinimapRed[4] = { 0.584f, 0.235f, 0.216f, 0.85f };
+
 // Render thread, right after the minimap's border (Minimap_SetDraw): the cut
-// across the map, as wide as the game's border (S * 0.004).
+// across the playable area (the strip's ends; the map's when there is no
+// strip), as wide as the game's border (S * 0.004).
 static void DrawOnMinimap()
 {
-    int count = g_borderCount;
+    int strip = g_stripCount, count = g_borderCount;
     float cx, cy, k;
-    if (!Active() || count < 2 || !Minimap_Frame(&cx, &cy, &k)) return;
-    const float* a = g_border[0];
-    const float* b = g_border[count - 1];
+    if (!Active() || (strip < 2 && count < 2) || !Minimap_Frame(&cx, &cy, &k)) return;
+    const float* a = strip >= 2 ? g_strip[0] : g_border[0];
+    const float* b = strip >= 2 ? g_strip[strip - 1] : g_border[count - 1];
     float seg[4] = { cx + a[0] * k, cy - a[2] * k, cx + b[0] * k, cy - b[2] * k };
-    Minimap_DrawSegments(seg, 1, fmaxf(2.0f, k * 80.0f), kRed);
+    Minimap_DrawSegments(seg, 1, fmaxf(2.0f, k * 80.0f), kMinimapRed);
 }
 
 static bool WantsOverlay()
