@@ -26,6 +26,12 @@ Protocol 54 - every player needs this build.
 - **Debug: frame timing** - a switch (off by default) that logs every 2 s
   the main thread's frames and the ms per frame of the game's phases and
   this plugin's work in them, to find what makes a PC slow in a session.
+- **Debug: added latency** - off by default: what a PC receives in a session
+  is held 50-400 ms, in order (pings too), so a LAN test plays as with a
+  high ping. Set on both PCs, the round trip grows by twice the value.
+- **Debug: long holds in the probe** - with the fuzz on, run 2 can hold
+  4-35 frames before one tick in four and run the rest back to back, as the
+  frames go when a high ping makes the host wait for the player.
 - **Fix: a second player joining at the same time** - the host closes its
   port while it takes a player in, and a player who connected then (or
   while the host was still loading its city) got "can't reach" at once. A

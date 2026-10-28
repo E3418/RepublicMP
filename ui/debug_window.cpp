@@ -66,6 +66,7 @@ void DebugWindow::Draw()
         static int s_probeLength = 1;
         static bool s_probeFuzz = false;
         static bool s_probeRecord = false;
+    static bool s_probeLongHolds = false;
         static const int kProbeSteps[] = { 600, 1800, 3600, 10800 };
         static const char* const kProbeLabels[] = { "600 ticks", "1800 ticks", "3600 ticks", "10800 ticks" };
         ImGui::BeginDisabled(Probe_IsRunning() || SaveSync_IsBusy());
@@ -73,14 +74,34 @@ void DebugWindow::Draw()
         ImGui::Combo("##probeLength", &s_probeLength, kProbeLabels, IM_ARRAYSIZE(kProbeLabels));
         ImGui::SameLine();
         if (ImGui::Button("Run probe"))
-            Probe_Start(kProbeSteps[s_probeLength], 30, s_probeFuzz, s_probeRecord);
+            Probe_Start(kProbeSteps[s_probeLength], 30, s_probeFuzz, s_probeRecord, s_probeLongHolds);
         ImGui::Checkbox("Fuzz held frames and speed", &s_probeFuzz);
+        ImGui::BeginDisabled(!s_probeFuzz);
+        ImGui::Checkbox("Long holds (as with a high ping)", &s_probeLongHolds);
+        ImGui::EndDisabled();
         ImGui::Checkbox("Build during run 1 (lockstep commands)", &s_probeRecord);
         ImGui::EndDisabled();
         ImGui::TextWrapped("Saves the game as 'mp_probe', then loads and simulates it twice and compares the "
-                           "state after complete ticks. Fuzz holds 0-3 frames in run 2 and changes speed every 300 ticks. "
+                           "state after complete ticks. Fuzz holds 0-3 frames in run 2 (long holds: 4-35 frames "
+                           "before one tick in four) and changes speed every 300 ticks. "
                            "Space may pause; avoid other actions. Not during a multiplayer session.");
         ImGui::TextWrapped("Result: %s", Probe_Status());
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // --- Latency emulation (lockstep/lockstep_net) ---
+        static const int kDelays[] = { 0, 50, 100, 150, 250, 400 };
+        static const char* const kDelayLabels[] = { "Off", "50 ms", "100 ms", "150 ms", "250 ms", "400 ms" };
+        int delay = 0;
+        for (int i = 0; i < IM_ARRAYSIZE(kDelays); i++)
+            if (kDelays[i] == LockstepNet_GetAddedDelay()) delay = i;
+        ImGui::SetNextItemWidth(130);
+        if (ImGui::Combo("Added latency", &delay, kDelayLabels, IM_ARRAYSIZE(kDelayLabels)))
+            LockstepNet_SetAddedDelay(kDelays[delay]);
+        ImGui::TextWrapped("Off by default, for LAN tests: what this PC receives in a session is held this long. "
+                           "Set it on both PCs - the round trip grows by twice the value.");
 
         ImGui::Spacing();
         ImGui::Separator();

@@ -100,7 +100,9 @@ float Determinism_CommandRandFloat(unsigned site, float a, float b);
 // Fuzz: run 2 inserts held frames; both runs change speed every 300 ticks.
 // recordCommands: the player builds during run 1; the actions become commands
 // (lockstep/commands), and run 2 makes the recorded ones after the same ticks.
-bool Probe_Start(int steps, int interval, bool fuzzFrames = false, bool recordCommands = false);
+// longHolds (with fuzz): run 2 holds 4..35 frames before one tick in four
+// and none before the rest, as a high ping makes the frames go.
+bool Probe_Start(int steps, int interval, bool fuzzFrames = false, bool recordCommands = false, bool longHolds = false);
 bool Probe_IsRunning();
 // Current state / last result, for the Debug window.
 const char* Probe_Status();

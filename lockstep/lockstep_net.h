@@ -69,6 +69,12 @@ unsigned long long LockstepNet_LastMatchedTick();
 // Game thread, start of a frame: handles everything received.
 void LockstepNet_Poll();
 
+// Debug: latency emulation - what this PC receives is handed on ms later, in
+// order (0 = off, the default; not remembered). Set on both PCs it adds 2 x ms
+// to the round trip.
+void LockstepNet_SetAddedDelay(int ms);
+int LockstepNet_GetAddedDelay();
+
 // Host (game thread).
 bool LockstepNet_MayRun(unsigned long long tick);
 void LockstepNet_Grant(unsigned long long tick, int speed);

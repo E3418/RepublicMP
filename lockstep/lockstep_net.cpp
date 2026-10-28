@@ -85,6 +85,8 @@ static volatile LONG g_commandsReady = 0;
 static int g_peerSlots = 0; // slots used this session
 static bool g_isHost = false;
 static CRITICAL_SECTION g_inLock, g_listLock;
+static CRITICAL_SECTION g_delayLock; // the latency emulation's queue
+static HANDLE g_delayWake = nullptr;
 static bool g_locksReady = false;
 static std::deque<LsMessage> g_inbox;
 
@@ -246,6 +248,8 @@ static void Locks()
     if (g_locksReady) return;
     InitializeCriticalSection(&g_inLock);
     InitializeCriticalSection(&g_listLock);
+    InitializeCriticalSection(&g_delayLock);
+    g_delayWake = CreateEventA(nullptr, FALSE, FALSE, nullptr);
     for (Peer& p : g_peers) {
         InitializeCriticalSection(&p.sendLock);
         p.sock = NET_NO_LINK;
@@ -290,6 +294,147 @@ static void Broadcast(unsigned type, const void* a, size_t na, const void* b = n
     for (int i = 0; i < g_peerSlots; i++) Send(g_peers[i], type, a, na, b, nb);
 }
 
+// A received message (receive thread, or the latency emulation's thread):
+// pings, the desync report, the player list, marks and chat are handled
+// here, the rest is queued for the game thread.
+static void Dispatch(LsMessage& m)
+{
+    int index = m.peer;
+    Peer& peer = g_peers[index];
+    if (m.type == LS_PING) {
+        if (m.data.size() == sizeof(LsPing)) {
+            LsPing p = *(const LsPing*)m.data.data();
+            if (p.reply) {
+                ULONGLONG now = GetTickCount64();
+                peer.rttMs = now >= p.sentMs ? now - p.sentMs : 0;
+                peer.rttKnown = true;
+            } else {
+                p.reply = 1;
+                Send(peer, LS_PING, &p, sizeof(p));
+            }
+        }
+        return;
+    }
+    if (m.type == LS_DESYNC) {
+        size_t n = m.data.size() < sizeof(g_desync) - 1 ? m.data.size() : sizeof(g_desync) - 1;
+        memcpy(g_desync, m.data.data(), n);
+        g_desync[n] = 0;
+        Logf("republicmp  LOCKSTEP: the host reports - %s", g_desync);
+        unsigned long long tick = 0;
+        if (sscanf_s(g_desync, "the games differ after tick %llu", &tick) == 1) {
+            Determinism_DumpMoneyTrace(tick);
+            DumpRecords(tick, g_desync);
+        }
+        return;
+    }
+    if (m.type == LS_PLAYERS) {
+        if (m.data.size() == sizeof(LsPlayers)) {
+            EnterCriticalSection(&g_listLock);
+            memcpy(&g_list, m.data.data(), sizeof(g_list));
+            LeaveCriticalSection(&g_listLock);
+        }
+        return;
+    }
+    if (m.type == LS_MARK) {
+        if (m.data.size() == sizeof(LsMark)) {
+            LsMark k = *(const LsMark*)m.data.data();
+            if (g_isHost) {
+                // A player's: numbered and named by the host, passed on to the others.
+                k.player = index + 1;
+                strncpy_s(k.nick, peer.nick, _TRUNCATE);
+                for (int i = 0; i < g_peerSlots; i++)
+                    if (i != index) Send(g_peers[i], LS_MARK, &k, sizeof(k));
+            }
+            k.nick[PROFILE_NICK_BYTES - 1] = 0;
+            Presence_Receive(k.player, k.kind, k.pos, k.nick);
+        }
+        return;
+    }
+    if (m.type == LS_CHAT) {
+        if (m.data.size() == sizeof(LsChat)) {
+            LsChat c = *(const LsChat*)m.data.data();
+            if (g_isHost) {
+                // A player's: numbered and named by the host, passed on to the others.
+                c.player = index + 1;
+                strncpy_s(c.nick, peer.nick, _TRUNCATE);
+                for (int i = 0; i < g_peerSlots; i++)
+                    if (i != index) Send(g_peers[i], LS_CHAT, &c, sizeof(c));
+            }
+            c.nick[PROFILE_NICK_BYTES - 1] = 0;
+            c.text[CHAT_TEXT_BYTES - 1] = 0;
+            Chat_Receive(c.player, c.nick, c.text);
+        }
+        return;
+    }
+    EnterCriticalSection(&g_inLock);
+    g_inbox.push_back(std::move(m));
+    LeaveCriticalSection(&g_inLock);
+}
+
+// ---------------------------------------------------------------------------
+// Latency emulation (Debug window; off by default, not remembered)
+// ---------------------------------------------------------------------------
+//
+// To test on a LAN what a high ping does: what this PC receives is handed on
+// g_delayMs later, in the order it came - grants, commands, acks, hashes and
+// the pings too, so the shown ping grows. Set on both PCs it adds twice that
+// to the round trip. A leave and a re-sync are not held.
+
+struct DelayedMessage {
+    ULONGLONG due;
+    LsMessage m;
+};
+static volatile LONG g_delayMs = 0;
+static std::deque<DelayedMessage> g_delayed; // g_delayLock
+static HANDLE g_delayThread = nullptr;
+
+// Hands on what is due; the lock is held while a message is handled, so a
+// message that comes meanwhile queues behind it and the order is kept.
+static DWORD WINAPI DelayThread(LPVOID)
+{
+    for (;;) {
+        DWORD wait = INFINITE;
+        EnterCriticalSection(&g_delayLock);
+        ULONGLONG now = GetTickCount64();
+        while (!g_delayed.empty() && g_delayed.front().due <= now) {
+            LsMessage m = std::move(g_delayed.front().m);
+            g_delayed.pop_front();
+            Dispatch(m);
+        }
+        if (!g_delayed.empty()) wait = (DWORD)(g_delayed.front().due - now);
+        LeaveCriticalSection(&g_delayLock);
+        WaitForSingleObject(g_delayWake, wait);
+    }
+}
+
+// Receive thread: true when the message was queued (the delay is on, or
+// earlier ones still wait - they go first).
+static bool Delay(LsMessage& m)
+{
+    LONG ms = g_delayMs;
+    EnterCriticalSection(&g_delayLock);
+    bool queued = ms > 0 || !g_delayed.empty();
+    if (queued) {
+        ULONGLONG due = GetTickCount64() + (ULONGLONG)ms;
+        if (!g_delayed.empty() && g_delayed.back().due > due) due = g_delayed.back().due;
+        g_delayed.push_back({ due, std::move(m) });
+        if (!g_delayThread) g_delayThread = CreateThread(nullptr, 0, DelayThread, nullptr, 0, nullptr);
+        SetEvent(g_delayWake);
+    }
+    LeaveCriticalSection(&g_delayLock);
+    return queued;
+}
+
+void LockstepNet_SetAddedDelay(int ms)
+{
+    if (ms < 0) ms = 0;
+    InterlockedExchange(&g_delayMs, ms);
+    if (ms) Logf("republicmp  LOCKSTEP: latency emulation on - what this PC receives is handed on %d ms later", ms);
+    else Logf("republicmp  LOCKSTEP: latency emulation off");
+}
+
+int LockstepNet_GetAddedDelay() { return (int)g_delayMs; }
+
 static DWORD WINAPI RecvThread(LPVOID param)
 {
     int index = (int)(intptr_t)param;
@@ -303,71 +448,6 @@ static DWORD WINAPI RecvThread(LPVOID param)
         m.data.resize(h.size);
         if (h.size && !NetworkRecvExact(peer.sock, m.data.data(), h.size)) break;
         peer.lastReceived = GetTickCount64();
-        if (h.type == LS_PING) {
-            if (m.data.size() == sizeof(LsPing)) {
-                LsPing p = *(const LsPing*)m.data.data();
-                if (p.reply) {
-                    ULONGLONG now = GetTickCount64();
-                    peer.rttMs = now >= p.sentMs ? now - p.sentMs : 0;
-                    peer.rttKnown = true;
-                } else {
-                    p.reply = 1;
-                    Send(peer, LS_PING, &p, sizeof(p));
-                }
-            }
-            continue;
-        }
-        if (h.type == LS_DESYNC) {
-            size_t n = m.data.size() < sizeof(g_desync) - 1 ? m.data.size() : sizeof(g_desync) - 1;
-            memcpy(g_desync, m.data.data(), n);
-            g_desync[n] = 0;
-            Logf("republicmp  LOCKSTEP: the host reports - %s", g_desync);
-            unsigned long long tick = 0;
-            if (sscanf_s(g_desync, "the games differ after tick %llu", &tick) == 1) {
-                Determinism_DumpMoneyTrace(tick);
-                DumpRecords(tick, g_desync);
-            }
-            continue;
-        }
-        if (h.type == LS_PLAYERS) {
-            if (m.data.size() == sizeof(LsPlayers)) {
-                EnterCriticalSection(&g_listLock);
-                memcpy(&g_list, m.data.data(), sizeof(g_list));
-                LeaveCriticalSection(&g_listLock);
-            }
-            continue;
-        }
-        if (h.type == LS_MARK) {
-            if (m.data.size() == sizeof(LsMark)) {
-                LsMark k = *(const LsMark*)m.data.data();
-                if (g_isHost) {
-                    // A player's: numbered and named by the host, passed on to the others.
-                    k.player = index + 1;
-                    strncpy_s(k.nick, peer.nick, _TRUNCATE);
-                    for (int i = 0; i < g_peerSlots; i++)
-                        if (i != index) Send(g_peers[i], LS_MARK, &k, sizeof(k));
-                }
-                k.nick[PROFILE_NICK_BYTES - 1] = 0;
-                Presence_Receive(k.player, k.kind, k.pos, k.nick);
-            }
-            continue;
-        }
-        if (h.type == LS_CHAT) {
-            if (m.data.size() == sizeof(LsChat)) {
-                LsChat c = *(const LsChat*)m.data.data();
-                if (g_isHost) {
-                    // A player's: numbered and named by the host, passed on to the others.
-                    c.player = index + 1;
-                    strncpy_s(c.nick, peer.nick, _TRUNCATE);
-                    for (int i = 0; i < g_peerSlots; i++)
-                        if (i != index) Send(g_peers[i], LS_CHAT, &c, sizeof(c));
-                }
-                c.nick[PROFILE_NICK_BYTES - 1] = 0;
-                c.text[CHAT_TEXT_BYTES - 1] = 0;
-                Chat_Receive(c.player, c.nick, c.text);
-            }
-            continue;
-        }
         if (h.type == LS_BYE) {
             Logf(g_isHost ? "republicmp  LOCKSTEP: %s left" : "republicmp  LOCKSTEP: the host left", peer.nick);
             break;
@@ -378,9 +458,7 @@ static DWORD WINAPI RecvThread(LPVOID param)
             g_resyncReceived = true;
             continue;
         }
-        EnterCriticalSection(&g_inLock);
-        g_inbox.push_back(std::move(m));
-        LeaveCriticalSection(&g_inLock);
+        if (!Delay(m)) Dispatch(m);
     }
     if (peer.connected)
         Logf(g_isHost ? "republicmp  LOCKSTEP: the connection to %s is closed" : "republicmp  LOCKSTEP: the connection is closed", peer.nick);
@@ -391,6 +469,9 @@ static DWORD WINAPI RecvThread(LPVOID param)
 static void ResetState()
 {
     InterlockedExchange(&g_commandsReady, 0);
+    EnterCriticalSection(&g_delayLock); // the last session's held messages are dropped
+    g_delayed.clear();
+    LeaveCriticalSection(&g_delayLock);
     EnterCriticalSection(&g_inLock);
     g_inbox.clear();
     LeaveCriticalSection(&g_inLock);
