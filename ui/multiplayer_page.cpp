@@ -48,7 +48,8 @@ static int s_mode = -1; // 0 co-op, 1 republics (remembered in the profile); -1 
 static int s_variant = -1; // Republics: SESSION_REPUBLICS_* (profile "republics_variant"); -1 not read yet
 static int s_side = -1;    // Republics: the host's half, 0 or 1 (profile "republics_side"); -1 not read yet
 static int s_public = -1; // a hosted game is listed for everyone (1), for friends (0) or not at all (2: LAN / IP)
-static int s_tab = 0;     // 0 host, 1 join
+static int s_tab = 0;     // 0 host, 1 join, 2 settings
+static int s_sessionTab = 0; // while a session runs: 0 the session, 1 settings
 static int s_selected = -1;
 static int s_keyWaiting = 0; // a key being chosen: 1 the ping key, 2 the chat key
 static bool s_keyDown[256] = {};
@@ -352,13 +353,6 @@ static void HostTab(float cx, float left, float right, float s)
         Raw(GAME_FONT_ARIAL, 28 * s, ImVec2(right, 770 * s), kInk, idText);
         if (Row("##copy", "COPY", right + 380 * s, 768 * s, s)) ImGui::SetClipboardText(idText);
     }
-    // Right, under the address: the join policy, the same remembered preference as the debug UI.
-    Label(GAME_FONT_ARIAL, 24 * s, ImVec2(right, 840 * s), kInk, "Check DLCs:");
-    bool dlcCheck = SaveSync_GetDlcCheck();
-    if (Choice("##dlcOn", "ON", right + 120 * s, 870 * s, s, dlcCheck)) SaveSync_SetDlcCheck(true);
-    if (Choice("##dlcOff", "OFF", right + 340 * s, 870 * s, s, !dlcCheck)) SaveSync_SetDlcCheck(false);
-    WrappedLabel(GAME_FONT_ARIAL, 20 * s, ImVec2(right, 910 * s), 460 * s, 1, kInk,
-                 SaveSync_GetDlcCheck() ? "Refuse players with different DLCs." : "Allow players with different DLCs.");
 }
 
 // JOIN: the game list (friends' games and public ones of this version), and a
@@ -478,29 +472,60 @@ static void SessionResync(float x, float y, float s, bool host, bool ready)
                      "The host controls re-sync.");
         return;
     }
-    Label(GAME_FONT_ARIAL, 22 * s, ImVec2(x, y + 48 * s), kInk, "After a desync:");
-    static const int seconds[] = { -1, 0, 60, 120, 300 };
-    static const char* const labels[] = { "OFF", "NOW", "1 MIN", "2 MIN", "5 MIN" };
-    for (int i = 0; i < IM_ARRAYSIZE(seconds); ++i) {
-        ImGui::PushID(i);
-        if (Choice("##resyncDelay", labels[i], x + (47 + 94 * i) * s, y + 78 * s, s * 0.8f,
-                   SaveSync_GetDesyncResyncSeconds() == seconds[i])) SaveSync_SetDesyncResyncSeconds(seconds[i]);
-        ImGui::PopID();
-    }
     ULONGLONG left = SaveSync_GetMsUntilDesyncResync();
     if (left) {
         char countdown[128];
         ULONGLONG secondsLeft = (left + 999) / 1000;
         snprintf(countdown, sizeof(countdown), "%s %llu:%02llu", T("Re-sync in:"), secondsLeft / 60, secondsLeft % 60);
-        Raw(GAME_FONT_ARIAL, 22 * s, ImVec2(x, y + 116 * s), kRowRed, countdown);
+        Raw(GAME_FONT_ARIAL, 22 * s, ImVec2(x, y + 48 * s), kRowRed, countdown);
     } else {
-        WrappedLabel(GAME_FONT_ARIAL, 22 * s, ImVec2(x, y + 116 * s), 470 * s, 2, kInk,
+        WrappedLabel(GAME_FONT_ARIAL, 22 * s, ImVec2(x, y + 48 * s), 470 * s, 2, kInk,
                      LockstepNet_Desync()[0] ? "No automatic re-sync pending." : "No desync detected.");
     }
 }
 
+// SETTINGS: what is set once and kept (the profile), out of the way of HOST,
+// JOIN and SESSION. Left: the host's join and re-sync policies; right: what
+// this PC shows of the others and its keys.
+static void SettingsTab(float left, float right, float s)
+{
+    float x = left - 225 * s, y = 540 * s;
+    Label(GAME_FONT_ARIAL, 24 * s, ImVec2(x, y), kInk, "Check DLCs:");
+    bool dlcCheck = SaveSync_GetDlcCheck();
+    if (Choice("##dlcOn", "ON", x + 115 * s, y + 30 * s, s, dlcCheck)) SaveSync_SetDlcCheck(true);
+    if (Choice("##dlcOff", "OFF", x + 335 * s, y + 30 * s, s, !dlcCheck)) SaveSync_SetDlcCheck(false);
+    WrappedLabel(GAME_FONT_ARIAL, 20 * s, ImVec2(x, y + 70 * s), 470 * s, 1, kInk,
+                 dlcCheck ? "Refuse players with different DLCs." : "Allow players with different DLCs.");
+    // The host's: a player's session follows the host.
+    y += 130 * s;
+    Label(GAME_FONT_ARIAL, 24 * s, ImVec2(x, y), kInk, "After a desync:");
+    static const int seconds[] = { -1, 0, 60, 120, 300 };
+    static const char* const labels[] = { "OFF", "NOW", "1 MIN", "2 MIN", "5 MIN" };
+    for (int i = 0; i < IM_ARRAYSIZE(seconds); ++i) {
+        ImGui::PushID(i);
+        if (Choice("##resyncDelay", labels[i], x + (47 + 94 * i) * s, y + 30 * s, s * 0.8f,
+                   SaveSync_GetDesyncResyncSeconds() == seconds[i])) SaveSync_SetDesyncResyncSeconds(seconds[i]);
+        ImGui::PopID();
+    }
+    WrappedLabel(GAME_FONT_ARIAL, 20 * s, ImVec2(x, y + 70 * s), 470 * s, 2, kInk,
+                 "When you host: the world is sent again this long after the games differ.");
+
+    float c1 = right + 120 * s, c2 = right + 340 * s;
+    float ry = 540 * s;
+    Label(GAME_FONT_ARIAL, 24 * s, ImVec2(right, ry), kInk, "Players' cursors:");
+    bool cursors = Presence_GetShowCursors();
+    if (Choice("##sShow", "SHOW", c1, ry + 30 * s, s, cursors)) Presence_SetShowCursors(true);
+    if (Choice("##sHide", "HIDE", c2, ry + 30 * s, s, !cursors)) Presence_SetShowCursors(false);
+    ry += 80 * s;
+    Label(GAME_FONT_ARIAL, 24 * s, ImVec2(right, ry), kInk, "Border stars:");
+    bool signs = Republics_GetShowSigns();
+    if (Choice("##sSigns", "SHOW", c1, ry + 30 * s, s, signs)) Republics_SetShowSigns(true);
+    if (Choice("##sNoSigns", "HIDE", c2, ry + 30 * s, s, !signs)) Republics_SetShowSigns(false);
+    SessionKeys(right, ry + 100 * s, s);
+}
+
 // SESSION: what the session is doing and who is in it on the left; who sees
-// the game, our SteamID64, the cursors and Stop / Disconnect on the right.
+// the game, our SteamID64 and Stop / Disconnect on the right.
 static void SessionTab(float left, float right, float bottom, float s)
 {
     SessionState st = SaveSync_GetState();
@@ -555,7 +580,6 @@ static void SessionTab(float left, float right, float bottom, float s)
     SessionResync(x, resyncY, s, host, st == SESSION_HOST_IN_GAME && !resync);
 
     // Right: the host chooses who sees the game in the list, and gives out its SteamID64.
-    float c1 = right + 120 * s, c2 = right + 340 * s;
     float ry = 540 * s;
     if (host) {
         Label(GAME_FONT_ARIAL, 24 * s, ImVec2(right, ry), kInk, "Listed for:");
@@ -576,21 +600,6 @@ static void SessionTab(float left, float right, float bottom, float s)
             ry += 90 * s;
         }
     }
-    Label(GAME_FONT_ARIAL, 24 * s, ImVec2(right, ry), kInk, "Players' cursors:");
-    bool cursors = Presence_GetShowCursors();
-    if (Choice("##sShow", "SHOW", c1, ry + 30 * s, s, cursors)) Presence_SetShowCursors(true);
-    if (Choice("##sHide", "HIDE", c2, ry + 30 * s, s, !cursors)) Presence_SetShowCursors(false);
-    // Republics: the stars along the border, the same way.
-    if (SaveSync_GetGameMode() == SESSION_MODE_REPUBLICS) {
-        ry += 90 * s;
-        Label(GAME_FONT_ARIAL, 24 * s, ImVec2(right, ry), kInk, "Border stars:");
-        bool signs = Republics_GetShowSigns();
-        if (Choice("##sSigns", "SHOW", c1, ry + 30 * s, s, signs)) Republics_SetShowSigns(true);
-        if (Choice("##sNoSigns", "HIDE", c2, ry + 30 * s, s, !signs)) Republics_SetShowSigns(false);
-    }
-
-    SessionKeys(right, ry + 90 * s, s);
-
     // The game is left (Stop hosting / Disconnect) only after the session's first moments.
     bool canStop = SaveSync_GetSessionAgeMs() >= SAVE_SYNC_STOP_BUTTON_DELAY_MS;
     if (Row("##stop", host ? "STOP HOSTING" : "DISCONNECT", right + 230 * s, bottom, s, canStop))
@@ -676,24 +685,26 @@ void MultiplayerPage_Draw()
     float right = cx + 20 * s;
     bool session = SaveSync_GetState() != SESSION_IDLE;
     if (session) {
-        // While a session runs the page is the session; HOST and JOIN come back after it.
-        Choice("##tabSession", "SESSION", cx, 478 * s, s, true);
+        // While a session runs the page is the session (and the settings); HOST and JOIN come back after it.
+        if (Choice("##tabSession", "SESSION", cx - 150 * s, 478 * s, s, s_sessionTab == 0)) s_sessionTab = 0;
+        if (Choice("##tabSettings", "SETTINGS", cx + 150 * s, 478 * s, s, s_sessionTab == 1)) s_sessionTab = 1;
     } else {
         // The tabs under the bar; JOIN asks for the list the first time it shows.
         int tab = s_tab;
-        if (Choice("##tabHost", "HOST", cx - 150 * s, 478 * s, s, tab == 0)) tab = 0;
-        if (Choice("##tabJoin", "JOIN", cx + 150 * s, 478 * s, s, tab == 1)) tab = 1;
+        if (Choice("##tabHost", "HOST", cx - 250 * s, 478 * s, s, tab == 0)) tab = 0;
+        if (Choice("##tabJoin", "JOIN", cx, 478 * s, s, tab == 1)) tab = 1;
+        if (Choice("##tabSettings", "SETTINGS", cx + 250 * s, 478 * s, s, tab == 2)) tab = 2;
         if (tab == 1 && s_tab != 1) SteamLobby_Refresh();
         s_tab = tab;
     }
     ImGui::GetWindowDrawList()->AddLine(ImVec2(pMin.x + 40 * s, 520 * s), ImVec2(pMax.x - 40 * s, 520 * s), kRowRed);
 
-    if (session) SessionTab(left, right, pMax.y - 70 * s, s);
-    else {
-        s_keyWaiting = 0;
-        if (s_tab == 0) HostTab(cx, left, right, s);
-        else JoinTab(cx, pMin.x + 50 * s, pMax.x - 50 * s, s);
-    }
+    bool settings = session ? s_sessionTab == 1 : s_tab == 2;
+    if (!settings) s_keyWaiting = 0; // a key is bound on the settings only
+    if (settings) SettingsTab(left, right, s);
+    else if (session) SessionTab(left, right, pMax.y - 70 * s, s);
+    else if (s_tab == 0) HostTab(cx, left, right, s);
+    else JoinTab(cx, pMin.x + 50 * s, pMax.x - 50 * s, s);
 
     const char* status = SaveSync_GetLastError(); // why the last session ended or failed
     if (!session && status && status[0])

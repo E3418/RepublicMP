@@ -4,6 +4,10 @@
 
 Protocol 53 - every player needs this build.
 
+- **SETTINGS on the MULTIPLAYER page** - a tab beside HOST and JOIN (and
+  beside SESSION while one runs) with what is set once and kept: the DLC
+  check, the re-sync after a desync, the players' cursors, the border stars
+  and the ping and chat keys. HOST and SESSION keep only what a game needs.
 - **Republics: East vs West or equal** - the host chooses the kind of
   Republics on the HOST page: East vs West (the East has the red stars of
   the Soviet border, the West the blue western ones) or two republics on
