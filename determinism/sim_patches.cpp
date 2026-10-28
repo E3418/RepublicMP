@@ -1084,6 +1084,34 @@ static void DetPrepare(__int64 world)
     PrivateViewOut(kept);
 }
 
+// The game's cursor pick (2f0f10, called by the frame loop at 105f39 right
+// before Late) finds what the mouse points at - among it the hovered building
+// and its connection port (3b6510: world+f6a0), from the visible list. It runs
+// outside Late, so on a held frame it read the list the last tick's Early
+// left: in a pause the ports of the buildings that were off the camera then
+// could not be picked, and a road from a border connection was refused. A
+// held frame's pick gets this PC's view, as its Late does.
+#define CURSOR_PICK_RVA 0x2F0F10
+#define CURSOR_PICK_CALL 0x105F39
+static const unsigned char kCursorPickCallOriginal[5] = { 0xe8, 0xd2, 0xaf, 0x1e, 0x00 };
+
+static void DetCursorPick(__int64 world, __int64 a2, __int64 a3, __int64 a4)
+{
+    typedef void (*PickFn)(__int64, __int64, __int64, __int64);
+    PickFn original = (PickFn)(g_exeBase + CURSOR_PICK_RVA);
+    if (!g_on || !Determinism_IsActive() || Determinism_IsStepFrame() || world != (__int64)(g_exeBase + WORLD_RVA)) {
+        original(world, a2, a3, a4);
+        return;
+    }
+    PrivateView kept;
+    PrivateViewIn(kept);
+    {
+        Determinism_PrivateScope privateRng(true);
+        original(world, a2, a3, a4);
+    }
+    PrivateViewOut(kept);
+}
+
 // Late runs even at speed 0: 547ef0 clamps road speeds without time passing;
 // 333bd0 can roll weather with a zero timer, and 5cfea0 changes road wetness.
 // Only the admitted tick may run these calls; loading paths stay native.
@@ -1346,7 +1374,7 @@ static bool VerifyStepCalls()
 
 // A relay page near the exe: one `jmp [rip+0]` per target, 16 bytes apart.
 static BYTE* g_relay = nullptr;
-#define RELAY_SLOTS 23
+#define RELAY_SLOTS 24
 
 static bool CallTo(unsigned int site, BYTE* target, unsigned char out[5])
 {
@@ -1383,7 +1411,7 @@ bool SimPatches_Install()
                               (void*)&DetBuildingLinks, (void*)&DetConnectionChecks, (void*)&DetGroundPaint, (void*)&DetDisplayCost,
                               (void*)&DetPlacePress, (void*)&DetBuyPress, (void*)&DetStopPickVehicle, (void*)&DetStopPickLine,
                               (void*)&DetLineMark, (void*)&DetDepotMark, (void*)&DetPickRay, (void*)&DetSiteUpdate,
-                              (void*)&DetLinkMark, (void*)&DetSiteDraw };
+                              (void*)&DetLinkMark, (void*)&DetSiteDraw, (void*)&DetCursorPick };
         for (int i = 0; i < RELAY_SLOTS; i++) {
             BYTE* r = g_relay + i * 16;
             r[0] = 0xff; r[1] = 0x25; r[2] = r[3] = r[4] = r[5] = 0;
@@ -1418,6 +1446,11 @@ bool SimPatches_Install()
             for (int i = 0; i < PICK_RAY_SITES; i++) Write(g_exeBase + kPickRaySites[i], pickRay[i], 6);
             unsigned char siteUpdate[5];
             if (CallTo(SITE_UPDATE_CALL, g_relay + 20 * 16, siteUpdate)) Write(g_exeBase + SITE_UPDATE_CALL, siteUpdate, 5);
+            unsigned char cursorPick[5];
+            if (memcmp(g_exeBase + CURSOR_PICK_CALL, kCursorPickCallOriginal, 5) != 0)
+                Logf("republicmp  SIM_PATCHES: the cursor pick call differs - in a pause, ports off the camera at the time stay unpickable");
+            else if (CallTo(CURSOR_PICK_CALL, g_relay + 23 * 16, cursorPick))
+                Write(g_exeBase + CURSOR_PICK_CALL, cursorPick, 5);
             relays = true;
             for (int i = 0; i < STEP_CALL_COUNT; i++) {
                 unsigned char call[5];

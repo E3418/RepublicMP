@@ -4,6 +4,11 @@
 
 Protocol 51 - every player needs this build.
 
+- **Fix: border connections in a pause** - while a session was paused,
+  a road could not be attached to a border connection (or another building's
+  port) that had been off the camera when the pause began: the game's cursor
+  pick runs outside the tools' frame and still saw the camera of the last
+  tick. It sees this player's view now.
 - **Diagnostics that do not run out** - the construction recipe report had
   one budget of 512 lines for the whole game run, so a desync in a later or
   longer session had none left. It now has no total: each command reports up
