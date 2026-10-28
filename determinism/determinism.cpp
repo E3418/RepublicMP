@@ -9,6 +9,7 @@
 #include "../lockstep/commands.h"
 #include "../lockstep/lockstep_net.h"
 #include "../game/save_load.h"
+#include "../game/weather.h"
 #include "../session/game_speed.h"
 #include "../session/save_sync.h" // SaveSync_IsBusy - no probe during a session
 #include "../core/profile.h"
@@ -794,6 +795,8 @@ static void HookedLoadWorld(void)
         ResetFrames();
         g_paused = true;
         g_stepCount = 0;
+        // Not in the save: every PC starts it alike, from the date and the shared draws.
+        Weather_StartShared();
         g_sessionLoadPending = false;
         g_sessionRunning = true;
         Commands_SetSession(g_sessionHost ? COMMANDS_HOST : COMMANDS_PLAYER);

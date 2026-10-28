@@ -34,6 +34,7 @@
 #include "../game/panel2d.h"
 #include "../game/minimap.h"
 #include "../game/border_draw.h"
+#include "../game/weather.h"
 #include "../modes/republics/republics.h"
 #include "version.h"
 #include "profile.h"
@@ -53,6 +54,7 @@ extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPlugi
     Panel2D_Bind(host);
     Minimap_Bind(host);
     BorderDraw_Bind(host);
+    Weather_Bind(host);
     LocalBuilds_Bind(host);
     PresentHook_Bind(host);
     GameSpeed_Bind(host);

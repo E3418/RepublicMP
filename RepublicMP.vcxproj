@@ -209,6 +209,7 @@
     <ClCompile Include="game\minimap.cpp" />
     <ClCompile Include="game\panel2d.cpp" />
     <ClCompile Include="game\border_draw.cpp" />
+    <ClCompile Include="game\weather.cpp" />
     <ClCompile Include="modes\mode.cpp" />
     <ClCompile Include="modes\republics\republics.cpp" />
     <ClCompile Include="lockstep\rename.cpp" />
@@ -294,6 +295,7 @@
     <ClInclude Include="game\minimap.h" />
     <ClInclude Include="game\panel2d.h" />
     <ClInclude Include="game\border_draw.h" />
+    <ClInclude Include="game\weather.h" />
     <ClInclude Include="modes\mode.h" />
     <ClInclude Include="modes\republics\republics.h" />
     <ClInclude Include="api\republicmp_api.h" />
