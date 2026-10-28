@@ -177,6 +177,7 @@
     <ClCompile Include="game\save_load.cpp" />
     <ClCompile Include="core\main.cpp" />
     <ClCompile Include="core\profile.cpp" />
+    <ClCompile Include="core\frame_timing.cpp" />
     <ClCompile Include="world\local_builds.cpp" />
     <ClCompile Include="game\present_hook.cpp" />
     <ClCompile Include="session\game_speed.cpp" />
@@ -208,12 +209,15 @@
     <ClCompile Include="determinism\citizen_trace.cpp" />
     <ClCompile Include="game\minimap.cpp" />
     <ClCompile Include="game\panel2d.cpp" />
+    <ClCompile Include="game\border_draw.cpp" />
+    <ClCompile Include="game\weather.cpp" />
     <ClCompile Include="modes\mode.cpp" />
     <ClCompile Include="modes\republics\republics.cpp" />
     <ClCompile Include="lockstep\rename.cpp" />
     <ClCompile Include="lockstep\lockstep_net.cpp" />
     <ClCompile Include="determinism\determinism.cpp" />
     <ClCompile Include="determinism\sim_patches.cpp" />
+    <ClCompile Include="determinism\office_guard.cpp" />
     <ClCompile Include="determinism\construction_view.cpp" />
     <ClCompile Include="determinism\probe_trace.cpp" />
     <ClCompile Include="determinism\probe_watch.cpp" />
@@ -221,6 +225,7 @@
     <ClCompile Include="game\imgui_hook.cpp" />
     <ClCompile Include="ui\game_assets.cpp" />
     <ClCompile Include="ui\multiplayer_page.cpp" />
+    <ClCompile Include="ui\chat.cpp" />
     <ClCompile Include="ui\ui_text.cpp" />
     <ClCompile Include="game\main_menu_hook.cpp" />
     <ClCompile Include="game\system_menu.cpp" />
@@ -290,6 +295,8 @@
     <ClInclude Include="determinism\citizen_trace.h" />
     <ClInclude Include="game\minimap.h" />
     <ClInclude Include="game\panel2d.h" />
+    <ClInclude Include="game\border_draw.h" />
+    <ClInclude Include="game\weather.h" />
     <ClInclude Include="modes\mode.h" />
     <ClInclude Include="modes\republics\republics.h" />
     <ClInclude Include="api\republicmp_api.h" />
@@ -297,6 +304,7 @@
     <ClInclude Include="lockstep\lockstep_net.h" />
     <ClInclude Include="determinism\determinism.h" />
     <ClInclude Include="determinism\sim_patches.h" />
+    <ClInclude Include="determinism\office_guard.h" />
     <ClInclude Include="determinism\construction_view.h" />
     <ClInclude Include="determinism\probe_trace.h" />
     <ClInclude Include="determinism\probe_watch.h" />
@@ -306,6 +314,7 @@
     <ClInclude Include="game\imgui_hook.h" />
     <ClInclude Include="ui\game_assets.h" />
     <ClInclude Include="ui\multiplayer_page.h" />
+    <ClInclude Include="ui\chat.h" />
     <ClInclude Include="ui\ui_text.h" />
     <ClInclude Include="game\main_menu_hook.h" />
     <ClInclude Include="game\system_menu.h" />
@@ -318,6 +327,7 @@
     <ClInclude Include="game\input_block.h" />
     <ClInclude Include="core\version.h" />
     <ClInclude Include="core\profile.h" />
+    <ClInclude Include="core\frame_timing.h" />
     <ClInclude Include="world\buildings.h" />
     <ClInclude Include="world\networks.h" />
     <ClInclude Include="world\build_mode.h" />

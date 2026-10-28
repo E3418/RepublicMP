@@ -121,6 +121,11 @@ bool BrushTools_Ready(int kind)
 static DWORD g_forcedThread = 0;
 static bool g_forced[2];
 
+bool BrushTools_Applying()
+{
+    return g_forcedThread && g_forcedThread == GetCurrentThreadId();
+}
+
 static bool Answer(int getter, void* input)
 {
     if (g_forcedThread && g_forcedThread == GetCurrentThreadId()) return g_forced[getter];

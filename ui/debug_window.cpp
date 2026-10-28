@@ -8,9 +8,11 @@
 #include "../session/save_sync.h"
 #include "../determinism/determinism.h"
 #include "../determinism/construction_view.h"
+#include "../determinism/state_hash.h"
 #include "../lockstep/building_settings.h"
 #include "debug_log.h"
 #include "../lockstep/lockstep_net.h"
+#include "../core/frame_timing.h"
 #include <vector>
 #include <string>
 
@@ -64,6 +66,7 @@ void DebugWindow::Draw()
         static int s_probeLength = 1;
         static bool s_probeFuzz = false;
         static bool s_probeRecord = false;
+    static bool s_probeLongHolds = false;
         static const int kProbeSteps[] = { 600, 1800, 3600, 10800 };
         static const char* const kProbeLabels[] = { "600 ticks", "1800 ticks", "3600 ticks", "10800 ticks" };
         ImGui::BeginDisabled(Probe_IsRunning() || SaveSync_IsBusy());
@@ -71,14 +74,44 @@ void DebugWindow::Draw()
         ImGui::Combo("##probeLength", &s_probeLength, kProbeLabels, IM_ARRAYSIZE(kProbeLabels));
         ImGui::SameLine();
         if (ImGui::Button("Run probe"))
-            Probe_Start(kProbeSteps[s_probeLength], 30, s_probeFuzz, s_probeRecord);
+            Probe_Start(kProbeSteps[s_probeLength], 30, s_probeFuzz, s_probeRecord, s_probeLongHolds);
         ImGui::Checkbox("Fuzz held frames and speed", &s_probeFuzz);
+        ImGui::BeginDisabled(!s_probeFuzz);
+        ImGui::Checkbox("Long holds (as with a high ping)", &s_probeLongHolds);
+        ImGui::EndDisabled();
         ImGui::Checkbox("Build during run 1 (lockstep commands)", &s_probeRecord);
         ImGui::EndDisabled();
         ImGui::TextWrapped("Saves the game as 'mp_probe', then loads and simulates it twice and compares the "
-                           "state after complete ticks. Fuzz holds 0-3 frames in run 2 and changes speed every 300 ticks. "
+                           "state after complete ticks. Fuzz holds 0-3 frames in run 2 (long holds: 4-35 frames "
+                           "before one tick in four) and changes speed every 300 ticks. "
                            "Space may pause; avoid other actions. Not during a multiplayer session.");
         ImGui::TextWrapped("Result: %s", Probe_Status());
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // --- Latency emulation (lockstep/lockstep_net) ---
+        static const int kDelays[] = { 0, 50, 100, 150, 250, 400 };
+        static const char* const kDelayLabels[] = { "Off", "50 ms", "100 ms", "150 ms", "250 ms", "400 ms" };
+        int delay = 0;
+        for (int i = 0; i < IM_ARRAYSIZE(kDelays); i++)
+            if (kDelays[i] == LockstepNet_GetAddedDelay()) delay = i;
+        ImGui::SetNextItemWidth(130);
+        if (ImGui::Combo("Added latency", &delay, kDelayLabels, IM_ARRAYSIZE(kDelayLabels)))
+            LockstepNet_SetAddedDelay(kDelays[delay]);
+        ImGui::TextWrapped("Off by default, for LAN tests: what this PC receives in a session is held this long. "
+                           "Set it on both PCs - the round trip grows by twice the value.");
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // --- Frame timing (core/frame_timing) ---
+        bool frameTiming = FrameTiming_GetOn();
+        if (ImGui::Checkbox("Frame timing (every 2 s)", &frameTiming)) FrameTiming_SetOn(frameTiming);
+        ImGui::TextWrapped("Off by default: logs the main thread's frames and the ms per frame of the game's "
+                           "phases and this plugin's work in them, to find what makes a PC slow.");
 
         ImGui::Spacing();
         ImGui::Separator();
@@ -101,12 +134,18 @@ void DebugWindow::Draw()
                            "of the ticks before it, and every command that changed the money.");
         ImGui::Spacing();
 
+        bool storageTrace = StateHash_GetStorageTrace();
+        if (ImGui::Checkbox("Storage resource trace (lockstep desyncs)", &storageTrace)) StateHash_SetStorageTrace(storageTrace);
+        ImGui::TextWrapped("Off by default: enable on both PCs before the test. Desync records include resource names "
+                           "and exact amounts for every slot; up to 32 stock changes left by the UI are logged as STORAGE_UI. "
+                           "Command-created or changed material requirements are logged as CONSTRUCTION_RECIPE (up to 512 lines). "
+                           "This adds per-frame reads while enabled.");
+        ImGui::Spacing();
+
         // --- Construction sites (determinism/construction_view) ---
-        bool siteDraw = ConstructionView_GetDraw();
-        if (ImGui::Checkbox("Draw construction stages in a session", &siteDraw)) ConstructionView_SetDraw(siteDraw);
         bool siteLog = ConstructionView_GetLog();
         if (ImGui::Checkbox("Log construction sites (every 2 s)", &siteLog)) ConstructionView_SetLog(siteLog);
-        ImGui::TextWrapped("The stages are drawn with this PC's view; the log shows the sites the drawer sees, "
+        ImGui::TextWrapped("The stages are always drawn with this PC's view; the log shows the sites the drawer sees, "
                            "with the simulation's and this PC's camera fields.");
         ImGui::Spacing();
 

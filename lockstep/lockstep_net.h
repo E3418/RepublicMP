@@ -55,6 +55,9 @@ bool LockstepNet_SessionStarted();
 void LockstepNet_Close();
 // Host: at least one player is connected; player: connected to the host.
 bool LockstepNet_IsConnected();
+// Commands/ticks wait until the host has finished accepting its roster.
+// A player is ready after its own connection and hello have been set up.
+bool LockstepNet_CommandsReady();
 bool LockstepNet_IsHost();
 // Host: the players connected now.
 int LockstepNet_PeerCount();
@@ -65,6 +68,12 @@ unsigned long long LockstepNet_LastMatchedTick();
 
 // Game thread, start of a frame: handles everything received.
 void LockstepNet_Poll();
+
+// Debug: latency emulation - what this PC receives is handed on ms later, in
+// order (0 = off, the default; not remembered). Set on both PCs it adds 2 x ms
+// to the round trip.
+void LockstepNet_SetAddedDelay(int ms);
+int LockstepNet_GetAddedDelay();
 
 // Host (game thread).
 bool LockstepNet_MayRun(unsigned long long tick);
@@ -118,6 +127,8 @@ bool LockstepNet_HostState(bool* paused, int* speed);
 // Both, any thread: this PC's cursor or ping (lockstep/presence) - not a
 // command, the simulation never sees it.
 void LockstepNet_SendMark(int kind, const float pos[3]);
+// Game thread: a line of the chat (ui/chat), to every other player.
+void LockstepNet_SendChat(const char* text);
 
 // Both: commands (host: `player`'s, made after `afterTick`, to every player;
 // player: to the host, which stamps who sent it).

@@ -14,6 +14,7 @@
 #include "../game/session_patches.h"
 #include "../world/view_list_scope.h"
 #include "../game/input_block.h"
+#include "../ui/chat.h"
 #include "../determinism/state_hash.h"
 #include "../determinism/determinism.h"
 #include "../determinism/sim_patches.h"
@@ -32,9 +33,12 @@
 #include "../game/camera.h"
 #include "../game/panel2d.h"
 #include "../game/minimap.h"
+#include "../game/border_draw.h"
+#include "../game/weather.h"
 #include "../modes/republics/republics.h"
 #include "version.h"
 #include "profile.h"
+#include "frame_timing.h"
 
 extern "C" __declspec(dllexport) unsigned TsmPluginApiVersion(void)
 {
@@ -46,10 +50,13 @@ extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPlugi
 {
     TsmBind(host);
     Profile_Bind(host);
+    FrameTiming_Bind(host);
     World_Bind(host);
     Camera_Bind(host);
     Panel2D_Bind(host);
     Minimap_Bind(host);
+    BorderDraw_Bind(host);
+    Weather_Bind(host);
     LocalBuilds_Bind(host);
     PresentHook_Bind(host);
     GameSpeed_Bind(host);
@@ -60,6 +67,7 @@ extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPlugi
     Buildings_Bind(host);
     Networks_Bind(host);
     ImGuiHook_Bind(host);
+    Chat_Bind(host);
     MainMenuHook_Bind(host);
     SystemMenu_Bind(host);
     TerrainHook_Bind(host);

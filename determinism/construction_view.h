@@ -13,7 +13,7 @@
 // building off the camera (+115a 0, +115c 100000.0 - the building
 // visibility patch, by SoylentGreed), so no site showed its stages.
 //
-// With this on, the drawer runs inside this PC's view (sim_patches'
+// In a session the drawer always runs inside this PC's view (sim_patches'
 // VisibleIn, as the interface routine does): +115a/+115c of the buildings on
 // this PC's camera are set for the call and put back after. The render and
 // the simulation never overlap while the layer is on (the frame waits for the
@@ -21,7 +21,11 @@
 // writes into the listed buildings - the shipyard timer +fc0 and the stage
 // records' slot data (+20b0..+21b8 of each 0x21b8-byte record, the bytes
 // the scaffold generator 167540 writes too) - is kept before the call and
-// put back after, so the simulation reads the same values on every PC.
+// put back after. Worker target vectors +6b8/+6d0 are detached during the
+// drawer and replaced with private scratch vectors: Late 137b20 reads them
+// and re-targets citizens when their count changes. All listed buildings,
+// including untyped sites, are guarded. Rendering never publishes those
+// local targets into the shared simulation.
 //
 // The log (Debug window) writes, every two seconds, the drawer's list and up
 // to six construction sites on it: progress, flags, the simulation's and this
@@ -33,9 +37,6 @@
 
 void ConstructionView_Bind(const TsmHost* host);
 
-// Draw the sites' stages with this PC's view in a session (remembered; on by default).
-bool ConstructionView_GetDraw();
-void ConstructionView_SetDraw(bool on);
 // The diagnostic log (remembered; off by default).
 bool ConstructionView_GetLog();
 void ConstructionView_SetLog(bool on);

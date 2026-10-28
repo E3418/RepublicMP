@@ -5,6 +5,7 @@
 
 #define LMB_HELD_RVA 0xA54E90         // byte: left mouse button held
 #define LMB_JUST_PRESSED_RVA 0xA54E91 // byte: left mouse button pressed this frame
+#define ESCAPE_LATCH_RVA 0xA54C91     // byte: Escape pressed, set by the window message handler
 
 void InputBlock_Bind(const TsmHost* host)
 {
@@ -150,8 +151,22 @@ bool InstallInputBlockHooks()
     return ok == total;
 }
 
+void InputBlock_ClearGameLatches()
+{
+    __try {
+        if (KeysTaken()) *(unsigned char*)(g_exeBase + ESCAPE_LATCH_RVA) = 0;
+        // A command being made (Neutral) reads the button bytes as the clicking PC's.
+        if (MouseTaken() && !Neutral()) {
+            *(unsigned char*)(g_exeBase + LMB_HELD_RVA) = 0;
+            *(unsigned char*)(g_exeBase + LMB_JUST_PRESSED_RVA) = 0;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
 void InputBlock_Tick()
 {
+    InputBlock_ClearGameLatches(); // the windows' code reads them outside Late too
     static bool s_wasBlocked = false;
     bool blocked = Blocked();
     if (blocked != s_wasBlocked) {

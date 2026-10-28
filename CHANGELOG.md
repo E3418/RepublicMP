@@ -1,71 +1,127 @@
 # Changelog
 
-## Unreleased
+## 0.7.3
 
-Protocol 50 - every player needs this build.
+Fewer desyncs, the Republics border, a chat and hosting over a LAN.
+Protocol 54 - every player needs this build.
 
-- **Fix: field vehicles desynced** (#55) - a farm vehicle working a field
-  had its speed measured only while it was on this PC's camera and under
-  500 m away, so the PCs disagreed on it. It now runs as off the camera on
-  every PC, like the other vehicle placements already did; on camera its
-  wheels may look still while it works.
-  A wagon inside a building was moved behind its locomotive only while the
-  locomotive was on this PC's camera; it now does as off the camera too.
-  A debug key (Ctrl+Numpad5) the game read straight from the keyboard is
-  switched off in a session.
-- **Desync reports list the citizens' events** (#55) - who boarded a vehicle,
-  got a workplace or left the game in the two hash intervals before a
-  desync (`CITIZEN_EVENT` lines), so the two logs show the first one that
-  happened at another tick or on one PC only.
-- **Republics, first part** - the HOST tab now hosts Republics (2 players);
-  a player who joins gets the host's mode. The map is cut along one of its
-  diagonals, moved so both halves get the same playable area whatever the
-  map's border, and drawn as a red line on the map and the minimap. Each
-  player builds, lays and demolishes buildings and networks on their own
-  half only; a click on the other half is refused on both PCs with a notice,
-  the host's too while it waits alone for the player. A 50 m band along the
-  line is open to both, so roads and rails can join the halves. Money is
-  still shared, and terrain tools and windows are not limited yet. A command
-  now carries the player who made it.
-- **Desync reports name the objects** (#55) - at a desync each PC writes to
-  its log one `DESYNC_RECORD` line per object of the lists that differ
-  (buildings, vehicles or citizens) at the tick that differed, so the two
-  logs show which object split. Kept for the last hashed ticks in every
-  session, as the money trace is.
-  After a desync the host goes on comparing and logs when the games match
-  again, which tells a difference of one moment from games that split.
-- **Fix: building settings and freed buildings** (#55) - the window settings
-  capture read, and wrote back into, buildings demolished since its last
-  record; it now only reads buildings still listed. A setting command whose
-  building is not found no longer gives up on one unreadable entry, and logs
-  the nearest building of that kind.
-- **Fix: the bulldozer on networks** - a piece the bulldozer removed on one
-  PC was often left on the other, planned (white) pieces most of all: the
-  other PC looked for it under the cursor and by position, and silently did
-  nothing when it found none. The piece now also travels as its place in the
-  network's segment list with a check (by SoylentGreed), and is armed
-  directly where the cursor picks another piece or none; a hovered node
-  travels the same way. A demolition that is not made logs why.
-- **Fix: the offices assign tool's selection at a session's start** - the
-  host sent the selection it saw before the session's load as a change, and
-  made it alone. The start is now taken after every world load.
-- **Logs for road and pipe desyncs** - a segment command logs how many
-  buildings (construction sites) it made on this PC, and a segment the game
-  refuses on one PC logs the buildings in its way.
-- **Join tool** - the tool that makes the two pieces of a road, rail or pipe
-  at a node one piece works in a session (by SoylentGreed); it was put away
-  before. The node the clicking player picked is joined on every PC.
-- **Fix: the bulldozer on a network node** - a removal through a hovered node
-  found the node by its exact position; a node whose height differed in its
-  last bits was missed, and the PC then cut whatever piece its own cursor
-  picked. The node is now matched by its place in the network and its x and
-  z, and when the sender's node is not found nothing is cut.
-- **Logs for construction sites made on one PC** - a segment command logs
-  the pieces at its ends and whether they are planned: a new piece joined to
-  a planned one starts that one's construction.
-- **Desync records show the storage** - a building's desync record now lists
-  each storage slot's entries and amount, so two logs show which slot split
-  and by how much.
+**Fewer desyncs**
+
+- **Weather** - the weather (temperature, wind, snow, rain, wet roads) is not
+  in the save, so a load kept each PC's own and the games drifted apart
+  within minutes: heating plants burned by another temperature, vehicles
+  drove at other speeds on wet or snowy roads. At a session's load every PC
+  now starts the weather as the game does for a new world - the season and
+  the temperature from the date, the rest from the shared random numbers
+  (from Sohn's notes on the weather).
+- **Paying for a construction with money** - the "pay with rubles / dollars"
+  buttons ran the funding routine on the clicking PC at once and the command
+  ran it again on every PC, so that PC's construction sites went their own
+  way. The click now only becomes the command, made once on every PC.
+- **The bulldozer on networks** - a piece removed on one PC was often left on
+  the other, planned (white) pieces most of all. The piece now travels as its
+  place in the network's segment list with a check (by SoylentGreed), and a
+  node is matched by its place in the network and its x and z, not its exact
+  position; when the sender's piece is not found nothing is cut, and the log
+  says why.
+- **Field vehicles and wagons** - a farm vehicle working a field and a wagon
+  inside a building were measured only while on this PC's camera; they now
+  run as off the camera on every PC. A debug key (Ctrl+Numpad5) the game read
+  straight from the keyboard is off in a session.
+- **Construction** - the site drawer no longer rebuilds the workers' target
+  vectors on each PC's render frames (stages are always drawn in a session
+  now), the Late site update is skipped on held frames, and a construction
+  recipe is compared by object identity.
+- **Terrain brushes** - the obstacle queries of a shared brush run against the
+  full network, not the local camera lists.
+- **Building settings** - the window settings capture no longer reads or
+  writes buildings demolished since its record, and a setting whose building
+  is not found logs the nearest building of that kind.
+- **Offices assign tool** - its selection at a session's start is taken after
+  every world load, not sent as a change by the host alone.
+- **Commands during setup** - queued commands wait until the lockstep
+  connection is ready, so the host no longer applies them at tick zero and
+  sends them to nobody.
+- **Held vehicle guard and office lookup** - the held render pass follows all
+  of the native links and refuses a changed pointer; a linked-office lookup
+  that would read a freed object is refused with an OFFICE_GUARD line instead
+  of crashing.
+
+**New in a session**
+
+- **Chat** - a small window over the game and its windows that stops nothing
+  (the game gets only the keys of a line being typed). Its bar moves it,
+  shrinks it to an icon with the count of new lines, or hides it; the chat
+  key (Enter by default, set on the SESSION page) starts a line.
+- **Hosting by LAN / IP** - a third choice next to FRIENDS and EVERYONE: the
+  game is not listed on Steam and the page shows this PC's LAN IP with a Copy
+  button (TCP ports 5556 and 5560).
+- **A join that waits** - a first join keeps trying for up to 3 minutes
+  ("Waiting for the host") when the host is loading its city or taking
+  another player in; Cancel joining stops it.
+- **SETTINGS on the MULTIPLAYER page** - a tab with what is set once and kept:
+  the DLC check, the re-sync after a desync, the players' cursors, the border
+  stars and the ping and chat keys. The SESSION page also controls the host's
+  re-sync, shows each player's ping to the host and the build's version and
+  checksum.
+- **Join tool, load onto flatbed** - both work in a session (by SoylentGreed);
+  they were put away before.
+- **Shorter join errors** - they fit the MULTIPLAYER page; the log keeps the
+  versions, checksums and DLC lists.
+
+**Republics**
+
+- **East vs West or equal** - the host chooses on the HOST page: East vs West
+  (red stars of the Soviet border for the East, blue western ones for the
+  West) or two republics on equal terms, and the side it plays.
+- **The border drawn as the game's own** - the cut between the republics is
+  the game's dash-and-dot border strip inside the playable area, with the
+  game's border stars 350 m inside each side (hidden near the camera; shown
+  or hidden on the SESSION page) and a muted red line on the minimap (the
+  game's border routine and strip found by Sohn).
+- **First part** - a map cut along one diagonal into two halves of equal
+  playable area; each player builds, lays and demolishes on their own half
+  only, a 50 m band along the line is open to both. Money is shared and
+  terrain tools and windows are not limited yet.
+
+**Fixes**
+
+- Border connections in a pause: a road could not be attached to a border
+  connection or a port that had been off the camera when the pause began.
+- Closing the MULTIPLAYER page with Escape no longer reaches the game's own
+  Escape latch (the build menu closing and reopening with its sound) (#53),
+  and the page's clicks stay the page's until released.
+- The pings and the chat icon's count on the SESSION page show whole.
+- A crash when leaving the game after Steam networking (the Steam service
+  thread now stops before SteamAPI_Shutdown).
+- Lockstep messages leave in one send with TCP_NODELAY, and a send that stalls
+  for 15 s drops that player instead of holding the game.
+
+**Debug tools** (all off by default)
+
+- **Frame timing** logs every 2 s the main thread's frames and the ms per
+  frame of the game's phases and this plugin's work in them.
+- **Added latency** (50-400 ms) holds what a PC receives in order, pings too,
+  so a LAN test plays as with a high ping; **long holds** in the probe fuzz
+  hold 4-35 frames before one tick in four.
+- **Desync reports** name the objects (a `DESYNC_RECORD` line per building,
+  vehicle or citizen with its storage slots), list the citizens' events
+  (`CITIZEN_EVENT`), keep comparing after a desync, log how many sites a
+  segment command made, and the optional storage resource trace records
+  resource names, amounts and recipes (#55). Their budgets are per command or
+  per world load, not per game run.
+
+Known issues:
+
+- A planned road (`type -1`) can lay a different number of construction sites
+  on the PCs, and a command that arrives during the other player's road drag
+  is sometimes made differently; both show up more with a high ping (#55).
+- A player whose game does not actually load a DLC the host's save uses
+  (a `dlcN` folder alone is not enough) loses those buildings and vehicles at
+  the load and the game crashes; turning the DLC check off does not help.
+- A high round trip slows the game down: the host runs at most 10 ticks ahead
+  of the slowest player, so above ~330 ms the speed is about 10 ticks per
+  round trip.
 
 ## 0.7.2
 

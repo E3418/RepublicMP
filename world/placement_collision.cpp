@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // See placement_collision.h.
 #include "placement_collision.h"
+#include "../lockstep/brush_tools.h"
 #include <intrin.h>
 #pragma intrinsic(_ReturnAddress)
 
@@ -32,11 +33,24 @@ void PlacementCollision_Bind(const TsmHost* host)
     TsmBind(host);
 }
 
+// The brush's per-point obstacle test 3a5930 reaches the same camera-based
+// query at these eleven sites. A different accepted cell count changes both
+// terrain edits and the worker-price charge (3aaaad..3aac98). Ordered brush
+// samples must test the full network, with no local shortlist, just as ordered
+// building placements do. Local brush previews keep their native queries.
+static const unsigned kBrushReturnRvas[] = {
+    0x3A5A32, 0x3A5AE3, 0x3A5B98, 0x3A5C42, 0x3A5CEC, 0x3A5D97,
+    0x3A5E42, 0x3A5EEC, 0x3A5F97, 0x3A6045, 0x3A60EF
+};
+
 static bool IsToolCall(void* ret)
 {
     unsigned long long rva = (unsigned long long)((BYTE*)ret - g_exeBase);
     for (int i = 0; i < 19; i++)
         if (rva == kToolReturnRvas[i]) return true;
+    if (BrushTools_Applying())
+        for (unsigned site : kBrushReturnRvas)
+            if (rva == site) return true;
     return false;
 }
 

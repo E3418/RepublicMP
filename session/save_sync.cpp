@@ -45,6 +45,8 @@ void SaveSync_Bind(const TsmHost* host)
 static volatile SessionState g_state = SESSION_IDLE;
 static volatile bool g_isHost = false;
 static volatile int g_gameMode = SESSION_MODE_COOP; // SaveSync_GetGameMode
+static volatile int g_gameVariant = SESSION_REPUBLICS_EAST_WEST; // SaveSync_GetGameVariant
+static volatile int g_hostSide = 0; // SaveSync_GetHostSide
 static char g_targetIp[64] = SAVE_SYNC_TEST_HOST_IP; // client target - overridable from the UI
 static char g_peerIp[64] = "";
 static char g_lastError[256] = "";
@@ -62,6 +64,8 @@ static volatile ULONGLONG g_sessionStartTick = 0;
 #define RESYNC_ANNOUNCE_FLUSH_MS 500    // host: lets the announcement leave before the channels close
 #define RESYNC_REJOIN_TIMEOUT_MS 30000  // host: how long the players have to come back; client: how long it retries
 #define RESYNC_RETRY_MS 500
+#define JOIN_RETRY_TIMEOUT_MS 180000 // client, first join: how long a refused connect is retried (the host
+                                     // loads its city, or takes another player in with its port closed)
 static volatile bool g_resyncRequested = false; // host: the button
 static volatile bool g_resyncing = false;
 static volatile int g_desyncResyncSeconds = 60;    // re-sync this long after a desync (-1 off)
@@ -159,7 +163,7 @@ struct SessionHello {
     int protocol;      // REPUBLICMP_PROTOCOL
     char version[16];  // REPUBLICMP_VERSION
     unsigned int dllCrc;
-    int gameMode;      // the host's SESSION_MODE_*; a player's is not read
+    int gameMode;      // the host's SESSION_MODE_*, its variant << 8, its side << 16; a player's is not read
 };
 
 // Step reports in both directions after the hello.
@@ -200,14 +204,14 @@ static void MakeHello(SessionHello* h)
     h->protocol = REPUBLICMP_PROTOCOL;
     strncpy_s(h->version, REPUBLICMP_VERSION, _TRUNCATE);
     h->dllCrc = SaveSync_GetLocalDllCrc();
-    h->gameMode = g_gameMode;
+    h->gameMode = g_gameMode | g_gameVariant << 8 | g_hostSide << 16;
 }
 
 // Compares the peer's hello with ours; fills why on a mismatch.
 static bool HelloMatches(const SessionHello& peer, char* why, size_t whySize)
 {
     if (memcmp(peer.magic, "RPMPSES", 8) != 0) {
-        _snprintf_s(why, whySize, _TRUNCATE, "the other side is not a compatible RepublicMP (old build?)");
+        _snprintf_s(why, whySize, _TRUNCATE, "not a compatible RepublicMP - an old build?");
         return false;
     }
     char peerVersion[17] = {};
@@ -215,10 +219,9 @@ static bool HelloMatches(const SessionHello& peer, char* why, size_t whySize)
     if (peer.protocol != REPUBLICMP_PROTOCOL || strcmp(peerVersion, REPUBLICMP_VERSION) != 0 ||
         peer.dllCrc != SaveSync_GetLocalDllCrc()) {
         _snprintf_s(why, whySize, _TRUNCATE,
-                    "different RepublicMP builds - yours %s (protocol %d, crc %08X), theirs %s (protocol %d, crc %08X). "
-                    "Both players need the same RepublicMP.dll",
-                    REPUBLICMP_VERSION, REPUBLICMP_PROTOCOL, SaveSync_GetLocalDllCrc(),
-                    peerVersion, peer.protocol, peer.dllCrc);
+                    "different builds: yours %s (%08X, protocol %d), theirs %s (%08X, protocol %d). Use the same RepublicMP.dll",
+                    REPUBLICMP_VERSION, SaveSync_GetLocalDllCrc(), REPUBLICMP_PROTOCOL,
+                    peerVersion, peer.dllCrc, peer.protocol);
         return false;
     }
     return true;
@@ -406,10 +409,9 @@ static bool DlcsMatch(const SessionDlcs& mine, const SessionDlcs& theirs, bool h
     if (strcmp(mine.list, peer) == 0) return true;
     bool refuse = mine.check && theirs.check;
     _snprintf_s(why, whySize, _TRUNCATE,
-                "the DLCs differ - host [%s], player [%s]. DLC maps, buildings and vehicles cannot be shown without the DLC%s",
+                "different DLCs: host [%s], player [%s]. %s",
                 hostList[0] ? hostList : "none", playerList[0] ? playerList : "none",
-                refuse ? "; install the same DLCs, or untick \"Check DLCs\" on either PC to play a map that needs none"
-                       : " (the DLC check is off - playing anyway)");
+                refuse ? "Install the same DLCs, or set Check DLCs to OFF" : "The DLC check is off - playing anyway");
     if (!refuse) {
         Logf("republicmp  SESSION: %s", why);
         SaveStatus("%s %s", host ? "[HOST]" : "[CLIENT]", why);
@@ -795,7 +797,7 @@ static int RunHostJoin(std::vector<Joiner>& js)
         HostStep(7, ready > 1 ? "Waiting for the players' lockstep connections" : "Waiting for the player's lockstep connection");
         joined = LockstepNet_HostAccept(ready, LOCKSTEP_CONNECT_TIMEOUT_MS, &g_disconnectRequested, JoinersStillThere, &js);
         if (!joined) {
-            if (!g_disconnectRequested) SetSessionError("the lockstep connection didn't arrive - TCP port %d must reach the host", LOCKSTEP_PORT);
+            if (!g_disconnectRequested) SetSessionError("the player's game link didn't arrive - TCP port %d must reach this PC", LOCKSTEP_PORT);
             CloseLockstep();
         } else if (joined < ready) {
             SaveStatus("[HOST] %d of %d player(s) opened the lockstep connection - going on without the rest", joined, ready);
@@ -1085,17 +1087,24 @@ static bool RunClientJoin(bool rejoin)
             SetSessionError("network init failed");
             break;
         }
+        // Refused connects are retried: for a re-sync the host opens again in a
+        // moment; for a first join it may still be loading its city, or taking
+        // another player in (its port is closed until that player is in).
         ULONGLONG connectStart = GetTickCount64();
+        ULONGLONG retryFor = rejoin ? RESYNC_REJOIN_TIMEOUT_MS : JOIN_RETRY_TIMEOUT_MS;
         for (;;) {
             sock = NetworkConnect(g_targetIp, SAVE_SYNC_PORT, 15000, 0, &g_disconnectRequested);
-            if (sock != NET_NO_LINK || !rejoin || g_disconnectRequested) break;
-            if (GetTickCount64() - connectStart > RESYNC_REJOIN_TIMEOUT_MS) break;
-            SyncBlock_SetStep(1, JOIN_STEPS, "Re-sync: waiting for the host to open for the players again", -1);
+            if (sock != NET_NO_LINK || g_disconnectRequested) break;
+            if (GetTickCount64() - connectStart > retryFor) break;
+            SyncBlock_SetStep(1, JOIN_STEPS,
+                              rejoin ? "Re-sync: waiting for the host to open for the players again"
+                                     : "Waiting for the host - it is loading, or letting another player in",
+                              -1);
             Sleep(RESYNC_RETRY_MS);
         }
         if (sock == NET_NO_LINK) {
             if (!g_disconnectRequested)
-                SetSessionError("couldn't reach %s:%d - is the host hosting, with room for you? is the IP right? (while players are loading in, the host takes no one else - try again in a minute)", g_targetIp, SAVE_SYNC_PORT);
+                SetSessionError("can't reach %s - check the address and that the host is hosting with a free slot. Try again in a minute", g_targetIp);
             break;
         }
         g_activeSock = sock;
@@ -1105,7 +1114,7 @@ static bool RunClientJoin(bool rejoin)
         SessionHello mine, theirs;
         MakeHello(&mine);
         if (!NetworkSendExact(sock, &mine, sizeof(mine))) {
-            SetSessionError("the host dropped during the version check (old build?)");
+            SetSessionError("the host closed the link at the version check - another build?");
             break;
         }
         // The host answers once it takes this player in: right away, or after
@@ -1116,11 +1125,11 @@ static bool RunClientJoin(bool rejoin)
         }
         if (!NetworkWaitReadable(sock, HELLO_ANSWER_TIMEOUT_MS, &g_disconnectRequested)) {
             if (!g_disconnectRequested)
-                SetSessionError("the host didn't answer - it may be busy with other players joining; try again in a minute");
+                SetSessionError("the host didn't answer - it may be letting others in. Try again in a minute");
             break;
         }
         if (!NetworkRecvExact(sock, &theirs, sizeof(theirs))) {
-            SetSessionError("the host dropped during the version check (old build, or the session is full?)");
+            SetSessionError("the host closed the link - the game may be full, or on another build");
             break;
         }
         char why[256];
@@ -1129,8 +1138,13 @@ static bool RunClientJoin(bool rejoin)
             SaveStatus("[CLIENT] join refused: %s", why);
             break;
         }
-        g_gameMode = theirs.gameMode == SESSION_MODE_REPUBLICS ? SESSION_MODE_REPUBLICS : SESSION_MODE_COOP;
-        SaveStatus("[CLIENT] the host plays %s", g_gameMode == SESSION_MODE_REPUBLICS ? "Republics" : "co-op");
+        g_gameMode = (theirs.gameMode & 0xFF) == SESSION_MODE_REPUBLICS ? SESSION_MODE_REPUBLICS : SESSION_MODE_COOP;
+        g_gameVariant = (theirs.gameMode >> 8 & 0xFF) == SESSION_REPUBLICS_EQUAL ? SESSION_REPUBLICS_EQUAL
+                                                                                 : SESSION_REPUBLICS_EAST_WEST;
+        g_hostSide = (theirs.gameMode >> 16 & 0xFF) == 1 ? 1 : 0;
+        SaveStatus("[CLIENT] the host plays %s", g_gameMode != SESSION_MODE_REPUBLICS ? "co-op"
+                                                 : g_gameVariant == SESSION_REPUBLICS_EQUAL ? "Republics, equal"
+                                                                                            : "Republics, East vs West");
         SessionDlcs myDlcs, theirDlcs;
         MakeDlcs(&myDlcs);
         if (!NetworkSendExact(sock, &myDlcs, sizeof(myDlcs)) || !NetworkRecvExact(sock, &theirDlcs, sizeof(theirDlcs)) ||
@@ -1237,8 +1251,8 @@ static bool RunClientJoin(bool rejoin)
             }
         }
         if (!lockstepUp) {
-            if (hostGone) SetSessionError("the host dropped while the players were loading the shared world");
-            else if (!g_disconnectRequested) SetSessionError("couldn't open the lockstep connection to %s:%d", g_targetIp, LOCKSTEP_PORT);
+            if (hostGone) SetSessionError("the host left while the players were loading");
+            else if (!g_disconnectRequested) SetSessionError("couldn't open the game link to %s (port %d)", g_targetIp, LOCKSTEP_PORT);
             break;
         }
         // The game starts once every player is connected (the host's
@@ -1335,6 +1349,8 @@ bool SaveSync_IsWorldLoaded()
 }
 
 int SaveSync_GetGameMode() { return g_gameMode; }
+int SaveSync_GetGameVariant() { return g_gameVariant; }
+int SaveSync_GetHostSide() { return g_hostSide; }
 
 int SaveSync_MaxPlayers()
 {
@@ -1353,6 +1369,10 @@ void SaveSync_StartHost(int gameMode)
     g_disconnectRequested = false;
     g_isHost = true;
     g_gameMode = gameMode;
+    g_gameVariant = Profile_GetInt("profile", "republics_variant", 0) == SESSION_REPUBLICS_EQUAL
+                        ? SESSION_REPUBLICS_EQUAL
+                        : SESSION_REPUBLICS_EAST_WEST;
+    g_hostSide = Profile_GetInt("profile", "republics_side", 0) == 1 ? 1 : 0;
     g_resyncRequested = false;
     g_resyncing = false;
     g_sessionStartTick = GetTickCount64();

@@ -264,6 +264,9 @@ static void Apply(const Command& c)
              KindName(c.kind), c.player, c.afterTick);
         return;
     }
+    std::vector<StorageRecord> recipes;
+    bool recipeAudit = StateHash_GetStorageTrace() && StateHash_RecipeRecords(recipes);
+    unsigned recipeLoad = Determinism_WorldLoads();
     const void* p = c.data.data();
     size_t n = c.data.size();
     bool ok = false;
@@ -387,6 +390,7 @@ static void Apply(const Command& c)
         break;
     }
     InputBlock_EndNeutral();
+    if (recipeAudit && recipeLoad == Determinism_WorldLoads()) StateHash_LogRecipeChanges(recipes, c.seq, c.afterTick);
     InterlockedDecrement(&g_applying);
     g_madeThisFrame = true;
     // What the command paid or got: compared between the PCs' logs when the money differs.
@@ -439,6 +443,11 @@ static void PlayerBoundary(unsigned long long completed)
 
 void Commands_Boundary(unsigned long long completed)
 {
+    // Loading the shared world enables capture before the lockstep sockets
+    // are ready. Applying here earlier loses commands: the host changes its
+    // world and broadcasts to nobody; the player drains requests into no link.
+    // Keep both queues intact until the transport has finished its setup.
+    if ((g_session == COMMANDS_HOST || g_session == COMMANDS_PLAYER) && !LockstepNet_CommandsReady()) return;
     if (g_session == COMMANDS_PLAYER) {
         PlayerBoundary(completed);
         return;
@@ -531,6 +540,7 @@ static void PutAwayUncarriedTool()
     if ((strcmp(name, "building_copyweights") == 0 || strcmp(name, "firestation_addfire") == 0) && LinkTools_PickReady())
         return; // link_tools.cpp
     if (strcmp(name, "join_hub_all") == 0 && JoinTool_Ready()) return; // join_tool.cpp
+    if (strcmp(name, "vehicle_tovehicle") == 0) return; // its click is a game call (game_calls.cpp)
     bool trees = false;
     for (const char* prefix : kTreeTools) trees |= strncmp(name, prefix, strlen(prefix)) == 0;
     if ((trees && !BrushTools_Ready(3)) || (strcmp(name, "terrain_demolish_trees") == 0 && !BrushTools_Ready(1))) {

@@ -20,8 +20,12 @@
 #include "../lockstep/office_selection.h"
 #include "../world/networks.h"
 #include "determinism.h"
+#include "../game/input_block.h"
 #include "held_frame.h"
+#include "state_hash.h"
 #include "construction_view.h"
+#include "office_guard.h"
+#include "../core/frame_timing.h"
 #include <string.h>
 #include <intrin.h>
 #include <limits.h>
@@ -33,6 +37,7 @@
 void SimPatches_Bind(const TsmHost* host)
 {
     TsmBind(host);
+    OfficeGuard_Bind(host);
 }
 
 // ---------------------------------------------------------------------------
@@ -481,6 +486,7 @@ static bool VisibleIn()
         if (!g_visibleIn) g_visibleFresh = false;
         return false;
     }
+    FrameTimingScope timing(FRAME_VISIBLE);
     if (!g_visibleFresh) {
         FillPrivateVisible();
         g_visibleFresh = true;
@@ -501,6 +507,7 @@ static bool VisibleIn()
 static void VisibleOut(bool swapped)
 {
     if (!swapped) return;
+    FrameTimingScope timing(FRAME_VISIBLE);
     BYTE* world = g_exeBase + WORLD_RVA;
     // Put the simulation's values back on every building that still exists
     // (one the phase removed is gone). The visible list itself is no guide:
@@ -612,8 +619,14 @@ static void PrivateLate(__int64 world)
 
 static void HookedLate(__int64 world)
 {
+    InputBlock_ClearGameLatches(); // an Escape or a click for the MULTIPLAYER page is not the game's too
+    if (world == (__int64)(g_exeBase + WORLD_RVA)) FrameTiming_MainFrame();
     bool active = g_on && Determinism_IsActive() && world == (__int64)(g_exeBase + WORLD_RVA);
-    if (!active) { o_late(world); return; }
+    if (!active) {
+        FrameTimingScope timing(FRAME_LATE);
+        o_late(world);
+        return;
+    }
     Determinism_BeforeLate();
     g_simThread = GetCurrentThreadId();
     // No save on one PC alone in a lockstep session: a save writes every
@@ -628,16 +641,20 @@ static void HookedLate(__int64 world)
     // The tool stays selected on every frame. A tick's Late runs its handlers
     // through the tool stubs below; a held Late is this PC's own altogether.
     // The render thread has finished here (105eb8). (by SoylentGreed)
-    if (step) {
-        bool visible = VisibleIn();
-        g_inPhase = true;
-        o_late(world);
-        g_inPhase = false;
-        VisibleOut(visible);
-    } else {
-        PrivateLate(world);
+    {
+        FrameTimingScope timing(FRAME_LATE);
+        if (step) {
+            bool visible = VisibleIn();
+            g_inPhase = true;
+            o_late(world);
+            g_inPhase = false;
+            VisibleOut(visible);
+        } else {
+            PrivateLate(world);
+        }
     }
     *(float*)(world + AUTOSAVE_TIMER_OFFSET) = 0.0f;
+    FrameTimingScope timing(FRAME_AFTER_LATE);
     Determinism_AfterLate();
 }
 
@@ -853,6 +870,7 @@ static bool InstallToolStubs()
 
 void SimPatches_BeforeEarly(__int64 world)
 {
+    OfficeGuard_BeginStep();
     g_simThread = GetCurrentThreadId();
     if (g_on) RecountPopulation(world);
     g_inPhase = true;
@@ -860,6 +878,7 @@ void SimPatches_BeforeEarly(__int64 world)
 
 void SimPatches_AfterEarly()
 {
+    OfficeGuard_EndStep();
     g_inPhase = false;
     if (g_on) HeldFrame_AfterEarly(); // the pass left every building off the camera
     g_visibleFresh = false; // the native pass may have removed buildings
@@ -956,6 +975,7 @@ static __int64 DetUiRoutine(void* world)
 {
     typedef __int64 (*UiFn)(void*);
     UiFn original = (UiFn)(g_exeBase + UI_ROUTINE_RVA);
+    FrameTimingScope timing(FRAME_UI);
     if (g_underUi) g_underUi();
     if (!g_on || (BYTE*)world != g_exeBase + WORLD_RVA) return original(world);
     BYTE* shared = (BYTE*)world + SEARCH_WORKSPACE_OFFSET;
@@ -973,6 +993,12 @@ static __int64 DetUiRoutine(void* world)
     CargoSettings_Before(g_inPhase);
     SourceSlots_Before(g_inPhase);
     Research_Before(g_inPhase);
+    std::vector<StorageRecord> storageBefore;
+    bool storageAudit = StateHash_GetStorageTrace() && Determinism_SessionRunning() &&
+                        !g_inPhase && StateHash_StorageRecords(storageBefore);
+    unsigned storageLoad = Determinism_WorldLoads();
+    unsigned long long storageEpoch = Commands_ApplyEpoch();
+    unsigned long long storageTick = Determinism_StepCount();
     __int64 r = original(world);
     // The cargo settings first: a half they put back is the same again for the switches.
     CargoSettings_After(g_inPhase);
@@ -981,6 +1007,8 @@ static __int64 DetUiRoutine(void* world)
     BuildingSwitches_After(g_inPhase);
     VehicleSwitches_After(g_inPhase);
     Commands_GuardSettings();
+    if (storageAudit && storageLoad == Determinism_WorldLoads() && storageEpoch == Commands_ApplyEpoch())
+        StateHash_LogStorageUi(storageBefore, storageTick);
     Determinism_UiSpeedEnd();
     VisibleOut(view);
     memcpy(g_privateSearch, shared, sizeof(saved));
@@ -1030,10 +1058,12 @@ static void DetPrepare(__int64 world)
 {
     typedef void (*PrepareFn)(__int64);
     PrepareFn original = (PrepareFn)(g_exeBase + PREPARE_RVA);
+    FrameTimingScope timing(FRAME_PREPARE);
     if (!g_on || world != (__int64)(g_exeBase + WORLD_RVA)) {
         original(world);
         return;
     }
+    long long commandsBegin = FrameTiming_Begin();
     OfficeSelection_Poll(); // a change of the assign tool's selection becomes a command at this boundary
     BYTE** buildingsBegin = *(BYTE***)(g_exeBase + BUILDINGS_BEGIN_RVA);
     BYTE** buildingsEnd = *(BYTE***)(g_exeBase + BUILDINGS_END_RVA);
@@ -1042,6 +1072,7 @@ static void DetPrepare(__int64 world)
     Determinism_BeforePrepare();
     g_commandFrame = false;
     CommandViewOut(emptied, buildingsBegin, buildingsEnd);
+    FrameTiming_End(FRAME_COMMANDS, commandsBegin);
     // Keep the native tool for previews. Held frames have no Early pass,
     // so refresh the local preview list before Prepare.
     g_visibleFresh = false;
@@ -1066,6 +1097,34 @@ static void DetPrepare(__int64 world)
     }
     memcpy(timer, tickTimer, sizeof(tickTimer));
     if (scope) Determinism_ToolScopeEnd();
+    PrivateViewOut(kept);
+}
+
+// The game's cursor pick (2f0f10, called by the frame loop at 105f39 right
+// before Late) finds what the mouse points at - among it the hovered building
+// and its connection port (3b6510: world+f6a0), from the visible list. It runs
+// outside Late, so on a held frame it read the list the last tick's Early
+// left: in a pause the ports of the buildings that were off the camera then
+// could not be picked, and a road from a border connection was refused. A
+// held frame's pick gets this PC's view, as its Late does.
+#define CURSOR_PICK_RVA 0x2F0F10
+#define CURSOR_PICK_CALL 0x105F39
+static const unsigned char kCursorPickCallOriginal[5] = { 0xe8, 0xd2, 0xaf, 0x1e, 0x00 };
+
+static void DetCursorPick(__int64 world, __int64 a2, __int64 a3, __int64 a4)
+{
+    typedef void (*PickFn)(__int64, __int64, __int64, __int64);
+    PickFn original = (PickFn)(g_exeBase + CURSOR_PICK_RVA);
+    if (!g_on || !Determinism_IsActive() || Determinism_IsStepFrame() || world != (__int64)(g_exeBase + WORLD_RVA)) {
+        original(world, a2, a3, a4);
+        return;
+    }
+    PrivateView kept;
+    PrivateViewIn(kept);
+    {
+        Determinism_PrivateScope privateRng(true);
+        original(world, a2, a3, a4);
+    }
     PrivateViewOut(kept);
 }
 
@@ -1254,6 +1313,13 @@ typedef U64 (*SiteUpdateFn)(U64 world, U64 building, float a3, U64 a4);
 static U64 DetSiteUpdate(U64 world, U64 building, float a3, U64 a4)
 {
     SiteUpdateFn original = (SiteUpdateFn)(g_exeBase + SITE_UPDATE_RVA);
+    // 159070 writes +ddc = 0 at 15921c BEFORE its pause test at 159234,
+    // then +898/+fc0 on the paused return. Held Late therefore changed the
+    // last productivity even with zero time. The next tick compares it while
+    // choosing worker targets (15b8d8..15ba4c, 82e590): extra local frames
+    // must not change that input. Ordered commands may still update sites.
+    if (g_on && Determinism_IsActive() && !Commands_Applying() &&
+        (GetCurrentThreadId() != g_simThread || !Determinism_InStepFrame())) return 0;
     if (!g_on || !Determinism_GetMoneyTrace()) return original(world, building, a3, a4);
     double rub = *(double*)(world + 0x588), usd = *(double*)(world + 0x580);
     U64 r = original(world, building, a3, a4);
@@ -1270,17 +1336,21 @@ typedef U64 (*SiteDrawFn)(U64 world, U64 pass);
 static U64 DetSiteDraw(U64 world, U64 pass)
 {
     SiteDrawFn original = (SiteDrawFn)(g_exeBase + SITE_DRAW_RVA);
-    bool fix = g_on && ConstructionView_GetDraw() && !g_inPhase;
+    FrameTimingScope timing(FRAME_SITE_DRAW);
+    bool privateDraw = g_on && !g_inPhase;
     ConstructionView_Sample((BYTE*)world, (int)(pass & 0xFF));
-    bool view = fix && VisibleIn();
+    bool view = privateDraw && VisibleIn();
     ConstructionView_View();
-    ConstructionView_Keep((BYTE*)world, view);
+    // Owning the camera scope and isolating the drawer's writes are separate:
+    // a nested call may already have this PC's view and still needs a guard,
+    // including when the optional construction drawing toggle is off.
+    ConstructionView_Keep((BYTE*)world, privateDraw);
     U64 r;
     {
-        Determinism_PrivateScope privateRng(view);
+        Determinism_PrivateScope privateRng(privateDraw);
         r = original(world, pass);
     }
-    ConstructionView_After(view);
+    ConstructionView_After(privateDraw);
     VisibleOut(view);
     return r;
 }
@@ -1321,7 +1391,7 @@ static bool VerifyStepCalls()
 
 // A relay page near the exe: one `jmp [rip+0]` per target, 16 bytes apart.
 static BYTE* g_relay = nullptr;
-#define RELAY_SLOTS 23
+#define RELAY_SLOTS 24
 
 static bool CallTo(unsigned int site, BYTE* target, unsigned char out[5])
 {
@@ -1335,6 +1405,7 @@ static bool CallTo(unsigned int site, BYTE* target, unsigned char out[5])
 
 bool SimPatches_Install()
 {
+    bool officeGuard = OfficeGuard_Install();
     bool late = InstallInlineHook(g_exeBase + LATE_RVA, (void*)&HookedLate, (void**)&o_late,
                                   kLateExpect, sizeof(kLateExpect), "republicmp late body");
 
@@ -1357,7 +1428,7 @@ bool SimPatches_Install()
                               (void*)&DetBuildingLinks, (void*)&DetConnectionChecks, (void*)&DetGroundPaint, (void*)&DetDisplayCost,
                               (void*)&DetPlacePress, (void*)&DetBuyPress, (void*)&DetStopPickVehicle, (void*)&DetStopPickLine,
                               (void*)&DetLineMark, (void*)&DetDepotMark, (void*)&DetPickRay, (void*)&DetSiteUpdate,
-                              (void*)&DetLinkMark, (void*)&DetSiteDraw };
+                              (void*)&DetLinkMark, (void*)&DetSiteDraw, (void*)&DetCursorPick };
         for (int i = 0; i < RELAY_SLOTS; i++) {
             BYTE* r = g_relay + i * 16;
             r[0] = 0xff; r[1] = 0x25; r[2] = r[3] = r[4] = r[5] = 0;
@@ -1392,6 +1463,11 @@ bool SimPatches_Install()
             for (int i = 0; i < PICK_RAY_SITES; i++) Write(g_exeBase + kPickRaySites[i], pickRay[i], 6);
             unsigned char siteUpdate[5];
             if (CallTo(SITE_UPDATE_CALL, g_relay + 20 * 16, siteUpdate)) Write(g_exeBase + SITE_UPDATE_CALL, siteUpdate, 5);
+            unsigned char cursorPick[5];
+            if (memcmp(g_exeBase + CURSOR_PICK_CALL, kCursorPickCallOriginal, 5) != 0)
+                Logf("republicmp  SIM_PATCHES: the cursor pick call differs - in a pause, ports off the camera at the time stay unpickable");
+            else if (CallTo(CURSOR_PICK_CALL, g_relay + 23 * 16, cursorPick))
+                Write(g_exeBase + CURSOR_PICK_CALL, cursorPick, 5);
             relays = true;
             for (int i = 0; i < STEP_CALL_COUNT; i++) {
                 unsigned char call[5];
@@ -1406,7 +1482,7 @@ bool SimPatches_Install()
     ImmigrantInvite_Install(); // the residential window's invite presses; without them they act on one PC
     Logf("republicmp  SIM_PATCHES: late hook %d, relays %d (building visibility, saplings, render before Early, interface searches, Prepare at speed 0, window cost display, placing press, buy press, route tools, pick ray), tool stubs %d (%d calls)%s",
          late, relays, tools, (int)TOOL_CALL_COUNT, sitesOk ? "" : " - unexpected bytes at a relay site");
-    return late && relays && tools;
+    return late && relays && tools && officeGuard;
 }
 
 bool SimPatches_Apply()

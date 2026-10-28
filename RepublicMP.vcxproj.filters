@@ -78,6 +78,9 @@
     <ClCompile Include="core\profile.cpp">
       <Filter>core</Filter>
     </ClCompile>
+    <ClCompile Include="core\frame_timing.cpp">
+      <Filter>core</Filter>
+    </ClCompile>
     <ClCompile Include="world\local_builds.cpp">
       <Filter>world</Filter>
     </ClCompile>
@@ -94,6 +97,9 @@
       <Filter>determinism</Filter>
     </ClCompile>
     <ClCompile Include="determinism\determinism.cpp">
+      <Filter>determinism</Filter>
+    </ClCompile>
+    <ClCompile Include="determinism\office_guard.cpp">
       <Filter>determinism</Filter>
     </ClCompile>
     <ClCompile Include="determinism\sim_patches.cpp">
@@ -157,6 +163,9 @@
       <Filter>ui</Filter>
     </ClCompile>
     <ClCompile Include="ui\multiplayer_page.cpp">
+      <Filter>ui</Filter>
+    </ClCompile>
+    <ClCompile Include="ui\chat.cpp">
       <Filter>ui</Filter>
     </ClCompile>
     <ClCompile Include="ui\ui_text.cpp">
@@ -297,6 +306,12 @@
     <ClCompile Include="game\panel2d.cpp">
       <Filter>game</Filter>
     </ClCompile>
+    <ClCompile Include="game\border_draw.cpp">
+      <Filter>game</Filter>
+    </ClCompile>
+    <ClCompile Include="game\weather.cpp">
+      <Filter>game</Filter>
+    </ClCompile>
     <ClCompile Include="modes\mode.cpp">
       <Filter>modes</Filter>
     </ClCompile>
@@ -341,6 +356,9 @@
     <ClInclude Include="core\profile.h">
       <Filter>core</Filter>
     </ClInclude>
+    <ClInclude Include="core\frame_timing.h">
+      <Filter>core</Filter>
+    </ClInclude>
     <ClInclude Include="game\present_hook.h">
       <Filter>game</Filter>
     </ClInclude>
@@ -351,6 +369,9 @@
       <Filter>determinism</Filter>
     </ClInclude>
     <ClInclude Include="determinism\determinism.h">
+      <Filter>determinism</Filter>
+    </ClInclude>
+    <ClInclude Include="determinism\office_guard.h">
       <Filter>determinism</Filter>
     </ClInclude>
     <ClInclude Include="determinism\sim_patches.h">
@@ -432,6 +453,9 @@
       <Filter>ui</Filter>
     </ClInclude>
     <ClInclude Include="ui\multiplayer_page.h">
+      <Filter>ui</Filter>
+    </ClInclude>
+    <ClInclude Include="ui\chat.h">
       <Filter>ui</Filter>
     </ClInclude>
     <ClInclude Include="ui\ui_text.h">
@@ -561,6 +585,12 @@
       <Filter>game</Filter>
     </ClInclude>
     <ClInclude Include="game\panel2d.h">
+      <Filter>game</Filter>
+    </ClInclude>
+    <ClInclude Include="game\border_draw.h">
+      <Filter>game</Filter>
+    </ClInclude>
+    <ClInclude Include="game\weather.h">
       <Filter>game</Filter>
     </ClInclude>
     <ClInclude Include="modes\mode.h">

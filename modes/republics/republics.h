@@ -14,3 +14,7 @@
 
 // Called from TsmPluginInit; plugs the mode in (Modes_SetRepublics).
 void Republics_Bind(const TsmHost* host);
+
+// The border's stars on this PC (profile "overlay" "border_signs"; the SESSION page).
+bool Republics_GetShowSigns();
+void Republics_SetShowSigns(bool on);

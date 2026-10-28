@@ -9,9 +9,11 @@
 #include "../lockstep/commands.h"
 #include "../lockstep/lockstep_net.h"
 #include "../game/save_load.h"
+#include "../game/weather.h"
 #include "../session/game_speed.h"
 #include "../session/save_sync.h" // SaveSync_IsBusy - no probe during a session
 #include "../core/profile.h"
+#include "../core/frame_timing.h"
 #include <intrin.h>           // _ReturnAddress
 #include <math.h>
 #include <stdio.h>
@@ -387,6 +389,9 @@ static volatile bool g_probeBusy = false;
 static int g_probeSteps = 0, g_probeInterval = 60, g_probeRun = 0;
 static int g_probeSpeed = 1;
 static bool g_probeFuzz = false;
+// Fuzz with long holds: a high ping makes the host wait for the player on
+// most ticks, so both PCs hold many frames in a row, then run in bursts.
+static bool g_probeLongHolds = false;
 // Lockstep session (session/save_sync): the next load starts the shared
 // simulation; then ticks come from the host (lockstep/lockstep_net).
 static volatile bool g_sessionLoadPending = false;
@@ -794,6 +799,8 @@ static void HookedLoadWorld(void)
         ResetFrames();
         g_paused = true;
         g_stepCount = 0;
+        // Not in the save: every PC starts it alike, from the date and the shared draws.
+        Weather_StartShared();
         g_sessionLoadPending = false;
         g_sessionRunning = true;
         Commands_SetSession(g_sessionHost ? COMMANDS_HOST : COMMANDS_PLAYER);
@@ -1310,7 +1317,10 @@ static void SessionAdmission(BYTE* timer)
 static void HookedSimStep(__int64 world)
 {
     if (!g_active) {
-        o_simStep(world);
+        {
+            FrameTimingScope timing(FRAME_EARLY);
+            o_simStep(world);
+        }
         for (int i = 0; i < g_stepObserverCount; i++) g_stepObservers[i]();
         return;
     }
@@ -1321,6 +1331,7 @@ static void HookedSimStep(__int64 world)
     if (!g_frameStep) {
         g_framePhase = 3;
         if (g_probeState == PROBE_RUNNING) ++g_holdCount[g_probeRun];
+        FrameTimingScope timing(FRAME_HELD);
         if (!g_frameFault && g_probeState != PROBE_WAIT_LOAD && !g_sessionLoadPending && !HeldFrame_Draw(g_haveStep)) {
             g_frameFault = true;
             Logf("republicmp  PROBE: held presentation failed - no successful result can be reported");
@@ -1333,6 +1344,7 @@ static void HookedSimStep(__int64 world)
     WriteGameSpeed(GameSpeedOf(g_tickSpeed));
     // Early keeps the tool: its one read that changed the simulation (the
     // building pass, 13cc11) is patched in sim_patches. (by SoylentGreed)
+    FrameTimingScope timing(FRAME_EARLY);
     SimPatches_BeforeEarly(world);
     g_inEarly = true;
     o_simStep(world);
@@ -1388,7 +1400,12 @@ void Determinism_AfterLate()
             ProbeWatch_Step(g_probeRun, g_runStep, g_runStep >= (unsigned long long)g_probeSteps);
             if (g_runStep % g_probeInterval == 0) RecordSample();
             // Independent of game RNG: run 1 holds none, run 2 holds 0..3.
-            if (g_probeFuzz && g_probeRun == 1) g_holdsLeft = (unsigned)(SplitMix(PROBE_SEED ^ g_runStep) & 3);
+            if (g_probeFuzz && g_probeRun == 1) {
+                unsigned long long r = SplitMix(PROBE_SEED ^ g_runStep);
+                // Long holds: one tick in four waits 4..35 frames, the rest run back to back.
+                if (g_probeLongHolds) g_holdsLeft = (r & 3) == 0 ? 4 + (unsigned)((r >> 2) & 31) : 0;
+                else g_holdsLeft = (unsigned)(r & 3);
+            }
         }
     }
     Commands_AfterFrame(g_frameStep && g_frameEarly);
@@ -1695,8 +1712,9 @@ static DWORD WINAPI ProbeThread(LPVOID)
                 break;
             }
             if (g_frameFault) { SetProbeStatus("run %d: held-frame guard failed", g_probeRun + 1); failed = true; break; }
-            Logf("republicmp  PROBE: run %d complete: %llu ticks, %llu held frames, %llu speed changes, fuzz %d",
-                 g_probeRun + 1, g_runStep, g_holdCount[g_probeRun], g_speedChanges[g_probeRun], g_probeFuzz);
+            Logf("republicmp  PROBE: run %d complete: %llu ticks, %llu held frames, %llu speed changes, fuzz %d%s",
+                 g_probeRun + 1, g_runStep, g_holdCount[g_probeRun], g_speedChanges[g_probeRun], g_probeFuzz,
+                 g_probeLongHolds ? " (long holds)" : "");
             WriteRunLog(g_probeRun);
         }
         Commands_ProbeEnd(&g_commandsRecorded, &g_commandsReplayed);
@@ -1718,7 +1736,7 @@ static DWORD WINAPI ProbeThread(LPVOID)
     return 0;
 }
 
-bool Probe_Start(int steps, int interval, bool fuzzFrames, bool recordCommands)
+bool Probe_Start(int steps, int interval, bool fuzzFrames, bool recordCommands, bool longHolds)
 {
     if (g_probeBusy || SaveSync_IsBusy()) return false;
     if (!g_framesReady) { SetProbeStatus("frame hooks unavailable - see startup log"); return false; }
@@ -1729,6 +1747,7 @@ bool Probe_Start(int steps, int interval, bool fuzzFrames, bool recordCommands)
         return false;
     }
     g_probeFuzz = fuzzFrames;
+    g_probeLongHolds = fuzzFrames && longHolds;
     g_probeRecord = recordCommands;
     g_commandsRecorded = g_commandsReplayed = 0;
     memset(g_holdCount, 0, sizeof(g_holdCount));

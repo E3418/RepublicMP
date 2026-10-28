@@ -35,6 +35,9 @@
 // (on the minimap, after its border).
 #include "../game/panel2d.h"
 #include "../game/minimap.h"
+// --- The game's own border strip (BorderDraw_SetAfter, BorderDraw_Strip,
+// BorderDraw_Ready): lines drawn as the map's border line is.
+#include "../game/border_draw.h"
 #include "../determinism/sim_patches.h"
 
 // --- The session: its state and the host's game mode (SaveSync_GetState,

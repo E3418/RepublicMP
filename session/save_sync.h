@@ -64,6 +64,15 @@ enum { SESSION_MODE_COOP = 0, SESSION_MODE_REPUBLICS = 1 };
 void SaveSync_StartHost(int gameMode = SESSION_MODE_COOP);
 // The current/last session's mode (a player: the host's).
 int SaveSync_GetGameMode();
+// Republics' kind, the host's choice too (profile "republics_variant", sent
+// with the mode in its hello): East vs West - one republic of each bloc - or
+// two republics on equal terms.
+enum { SESSION_REPUBLICS_EAST_WEST = 0, SESSION_REPUBLICS_EQUAL = 1 };
+int SaveSync_GetGameVariant();
+// Republics: the half of the map the host plays (profile "republics_side":
+// 0 the first - the East in East vs West - or 1), sent the same way; the
+// player gets the other.
+int SaveSync_GetHostSide();
 // The session's size: the profile's for co-op, 2 for Republics.
 int SaveSync_MaxPlayers();
 void SaveSync_StartClient(const char* hostIp = nullptr); // nullptr = keep last IP

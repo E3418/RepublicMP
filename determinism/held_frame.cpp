@@ -53,9 +53,14 @@ public:
         }
         for (size_t i = 0; i < targets_.size(); i++) {
             if (targets_.size() > (64ull << 20) / Bytes) return false;
-            BYTE* parent = nullptr; BYTE** children[2] = {};
-            if (!Read(targets_[i] + 0x398, &parent, 8) || !Read(targets_[i] + 0x3A0, children, 16)) return false;
+            BYTE* parent = nullptr; BYTE* link = nullptr; BYTE** children[2] = {};
+            // 6712b0 recurses through +398/+3a0, then calls 67c280 at
+            // 6716eb for that object's +4a0 link. Follow links at every
+            // level, including objects absent from the root render list.
+            if (!Read(targets_[i] + 0x398, &parent, 8) || !Read(targets_[i] + 0x4A0, &link, 8) ||
+                !Read(targets_[i] + 0x3A0, children, 16)) return false;
             Add(parent);
+            Add(link);
             uintptr_t begin = (uintptr_t)children[0], end = (uintptr_t)children[1];
             if (end < begin || (end - begin) % 8 || (end - begin) / 8 > 1024) return false;
             std::vector<BYTE*> c((end - begin) / 8);
@@ -90,7 +95,9 @@ public:
                 memcpy(&before, copies_.data() + i * Bytes + o, 8);
                 now = current[o / 8];
                 if (now == before) continue;
-                if (HeapPointer(before) && HeapPointer(now)) {
+                // A pointer becoming null (or the reverse) can free or replace
+                // its allocation too. Refuse it without reviving the old value.
+                if (HeapPointer(before) || HeapPointer(now)) {
                     Logf("republicmp  HELD FRAME: vehicle pointer changed at +0x%zX - probe refused", o);
                     ok = false;
                 } else memcpy(p + o, &before, 8);
