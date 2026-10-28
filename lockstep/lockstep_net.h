@@ -121,6 +121,8 @@ bool LockstepNet_HostState(bool* paused, int* speed);
 // Both, any thread: this PC's cursor or ping (lockstep/presence) - not a
 // command, the simulation never sees it.
 void LockstepNet_SendMark(int kind, const float pos[3]);
+// Game thread: a line of the chat (ui/chat), to every other player.
+void LockstepNet_SendChat(const char* text);
 
 // Both: commands (host: `player`'s, made after `afterTick`, to every player;
 // player: to the host, which stamps who sent it).

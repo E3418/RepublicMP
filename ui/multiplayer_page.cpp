@@ -17,6 +17,7 @@
 #include "../transport/steam_lobby.h"
 #include "../lockstep/lockstep_net.h" // LockstepNet_PeerCount, LockstepNet_Players
 #include "../lockstep/presence.h"
+#include "chat.h"
 #include "sync_block.h"
 #include "imgui.h"
 #include <misc/cpp/imgui_stdlib.h>
@@ -46,8 +47,8 @@ static int s_mode = -1; // 0 co-op, 1 republics (remembered in the profile); -1 
 static int s_public = -1; // a hosted game is listed for everyone (1), for friends (0) or not at all (2: LAN / IP)
 static int s_tab = 0;     // 0 host, 1 join
 static int s_selected = -1;
-static bool s_pingWaiting = false;
-static bool s_pingDown[256] = {};
+static int s_keyWaiting = 0; // a key being chosen: 1 the ping key, 2 the chat key
+static bool s_keyDown[256] = {};
 
 void MultiplayerPage_Open()
 {
@@ -64,7 +65,7 @@ bool MultiplayerPage_IsOpen() { return s_open && (s_menuOn || World_IsReady()) &
 static void Close()
 {
     s_open = false;
-    s_pingWaiting = false;
+    s_keyWaiting = 0;
     MainMenuHook_SetHidden(false);
     ImGui::SetWindowFocus(nullptr); // no focus left over to take keys while nothing is shown
 }
@@ -411,28 +412,42 @@ static void JoinTab(float cx, float listMin, float listMax, float s)
         SaveSync_StartClient(s_target.c_str());
 }
 
-// The same map-ping binding as the ImGui panel. Ignore keys already held
-// when capture starts, and let Escape cancel without leaving this page.
-static void SessionPingKey(float x, float y, float s)
+// The map ping key (the same binding as the ImGui panel) and the chat key
+// (ui/chat), each on its row. Ignore keys already held when capture starts,
+// and let Escape cancel without leaving this page. The two keys differ.
+static void SessionKeys(float x, float y, float s)
 {
-    Label(GAME_FONT_ARIAL, 24 * s, ImVec2(x, y), kInk, "Map ping key:");
     char name[32];
+    bool start = false;
+    Label(GAME_FONT_ARIAL, 24 * s, ImVec2(x, y), kInk, "Map ping key:");
     Presence_KeyName(Presence_GetPingKey(), name, sizeof(name));
-    if (Row("##sessionPingKey", s_pingWaiting ? "PRESS A KEY..." : name, x + 230 * s, y + 30 * s, s) && !s_pingWaiting) {
-        s_pingWaiting = true;
-        for (int vk = 0; vk < 256; ++vk) s_pingDown[vk] = (GetAsyncKeyState(vk) & 0x8000) != 0;
+    if (Row("##sessionPingKey", s_keyWaiting == 1 ? "PRESS A KEY..." : name, x + 380 * s, y - 4 * s, s) && !s_keyWaiting) {
+        s_keyWaiting = 1;
+        start = true;
+    }
+    Label(GAME_FONT_ARIAL, 24 * s, ImVec2(x, y + 38 * s), kInk, "Chat key:");
+    Presence_KeyName(Chat_GetKey(), name, sizeof(name));
+    if (Row("##sessionChatKey", s_keyWaiting == 2 ? "PRESS A KEY..." : name, x + 380 * s, y + 34 * s, s) && !s_keyWaiting) {
+        s_keyWaiting = 2;
+        start = true;
+    }
+    if (start) {
+        for (int vk = 0; vk < 256; ++vk) s_keyDown[vk] = (GetAsyncKeyState(vk) & 0x8000) != 0;
         return;
     }
-    WrappedLabel(GAME_FONT_ARIAL, 20 * s, ImVec2(x, y + 70 * s), 450 * s, 2, kInk,
-                 s_pingWaiting ? "Press a key or mouse button; Esc cancels." : "Point at the map and press this key to ping.");
-    if (!s_pingWaiting || !IsGameWindowFocused()) return;
+    WrappedLabel(GAME_FONT_ARIAL, 20 * s, ImVec2(x, y + 78 * s), 450 * s, 2, kInk,
+                 s_keyWaiting ? "Press a key or mouse button; Esc cancels."
+                              : "Point at the map and press the ping key; the chat key opens the chat.");
+    if (!s_keyWaiting || !IsGameWindowFocused()) return;
     for (int vk = 1; vk < 256; ++vk) {
         bool down = (GetAsyncKeyState(vk) & 0x8000) != 0;
-        if (down && !s_pingDown[vk] && (vk == VK_ESCAPE || Presence_SetPingKey(vk))) {
-            s_pingWaiting = false;
+        if (down && !s_keyDown[vk] &&
+            (vk == VK_ESCAPE ||
+             (s_keyWaiting == 1 ? vk != Chat_GetKey() && Presence_SetPingKey(vk) : Chat_SetKey(vk)))) {
+            s_keyWaiting = 0;
             break;
         }
-        s_pingDown[vk] = down;
+        s_keyDown[vk] = down;
     }
 }
 
@@ -549,7 +564,7 @@ static void SessionTab(float left, float right, float bottom, float s)
     if (Choice("##sShow", "SHOW", c1, ry + 30 * s, s, cursors)) Presence_SetShowCursors(true);
     if (Choice("##sHide", "HIDE", c2, ry + 30 * s, s, !cursors)) Presence_SetShowCursors(false);
 
-    SessionPingKey(right, ry + 90 * s, s);
+    SessionKeys(right, ry + 90 * s, s);
 
     // The game is left (Stop hosting / Disconnect) only after the session's first moments.
     bool canStop = SaveSync_GetSessionAgeMs() >= SAVE_SYNC_STOP_BUTTON_DELAY_MS;
@@ -604,7 +619,7 @@ void MultiplayerPage_Draw()
         s_targetInit = true;
     }
 
-    bool bindingAtStart = s_pingWaiting;
+    bool bindingAtStart = s_keyWaiting != 0;
     float s = MainMenuHook_UiScale();
     ImVec2 display = ImGui::GetIO().DisplaySize;
     float cx = display.x * 0.5f;
@@ -650,7 +665,7 @@ void MultiplayerPage_Draw()
 
     if (session) SessionTab(left, right, pMax.y - 70 * s, s);
     else {
-        s_pingWaiting = false;
+        s_keyWaiting = 0;
         if (s_tab == 0) HostTab(cx, left, right, s);
         else JoinTab(cx, pMin.x + 50 * s, pMax.x - 50 * s, s);
     }

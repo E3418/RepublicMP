@@ -3,6 +3,7 @@
 #include "lockstep_net.h"
 #include "commands.h"
 #include "presence.h"
+#include "../ui/chat.h"
 #include "../determinism/determinism.h"
 #include "../determinism/citizen_trace.h"
 #include "../transport/network.h"
@@ -33,6 +34,7 @@ enum LockstepMsgType {
     LS_HELLO = 13,  // player -> host, first: LsHello
     LS_PLAYERS = 14, // host -> player: LsPlayers (once a second)
     LS_MARK = 15,    // either way: LsMark, a cursor or ping (lockstep/presence; the host passes it on)
+    LS_CHAT = 16,    // either way: LsChat, a line of the chat (ui/chat; the host passes it on)
 };
 
 #pragma pack(push, 1)
@@ -46,6 +48,7 @@ struct LsHello { char magic[8]; char nick[PROFILE_NICK_BYTES]; };
 struct LsPlayerEntry { char nick[PROFILE_NICK_BYTES]; int rttMs; unsigned behind; unsigned char host, self, pad[2]; };
 struct LsPlayers { unsigned count; LsPlayerEntry e[PROFILE_MAX_PLAYERS]; };
 struct LsMark { int player; int kind; float pos[3]; char nick[PROFILE_NICK_BYTES]; };
+struct LsChat { int player; char nick[PROFILE_NICK_BYTES]; char text[CHAT_TEXT_BYTES]; };
 #pragma pack(pop)
 
 #define LS_MAX_PAYLOAD (1u << 20)
@@ -346,6 +349,22 @@ static DWORD WINAPI RecvThread(LPVOID param)
                 }
                 k.nick[PROFILE_NICK_BYTES - 1] = 0;
                 Presence_Receive(k.player, k.kind, k.pos, k.nick);
+            }
+            continue;
+        }
+        if (h.type == LS_CHAT) {
+            if (m.data.size() == sizeof(LsChat)) {
+                LsChat c = *(const LsChat*)m.data.data();
+                if (g_isHost) {
+                    // A player's: numbered and named by the host, passed on to the others.
+                    c.player = index + 1;
+                    strncpy_s(c.nick, peer.nick, _TRUNCATE);
+                    for (int i = 0; i < g_peerSlots; i++)
+                        if (i != index) Send(g_peers[i], LS_CHAT, &c, sizeof(c));
+                }
+                c.nick[PROFILE_NICK_BYTES - 1] = 0;
+                c.text[CHAT_TEXT_BYTES - 1] = 0;
+                Chat_Receive(c.player, c.nick, c.text);
             }
             continue;
         }
@@ -946,6 +965,16 @@ void LockstepNet_SendMark(int kind, const float pos[3])
     strncpy_s(k.nick, Profile_GetNick(), _TRUNCATE);
     if (g_isHost) Broadcast(LS_MARK, &k, sizeof(k));
     else Send(g_peers[0], LS_MARK, &k, sizeof(k));
+}
+
+void LockstepNet_SendChat(const char* text)
+{
+    if (!g_locksReady) return;
+    LsChat c = {};
+    strncpy_s(c.nick, Profile_GetNick(), _TRUNCATE);
+    strncpy_s(c.text, text, _TRUNCATE);
+    if (g_isHost) Broadcast(LS_CHAT, &c, sizeof(c));
+    else Send(g_peers[0], LS_CHAT, &c, sizeof(c));
 }
 
 void LockstepNet_SendCommand(int kind, unsigned long long afterTick, int player, const void* data, size_t size)

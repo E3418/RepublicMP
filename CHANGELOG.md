@@ -2,8 +2,16 @@
 
 ## Unreleased
 
-Protocol 51 - every player needs this build.
+Protocol 52 - every player needs this build.
 
+- **Chat** - a session has a chat: a small window in the MULTIPLAYER page's
+  look over the game and its windows, that stops nothing - the game gets
+  only the keys of a line being typed and the clicks on the window. Its bar
+  moves it, shrinks it to an icon (with the count of new lines) or hides it.
+  The chat key (Enter by default, set on the SESSION page beside the map
+  ping key) brings it back and starts a line; Enter sends it, Esc stops
+  typing. The lines go beside the commands, like the cursors: the
+  simulation never sees them.
 - **Fix: border connections in a pause** - while a session was paused,
   a road could not be attached to a border connection (or another building's
   port) that had been off the camera when the pause began: the game's cursor

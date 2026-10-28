@@ -222,6 +222,7 @@
     <ClCompile Include="game\imgui_hook.cpp" />
     <ClCompile Include="ui\game_assets.cpp" />
     <ClCompile Include="ui\multiplayer_page.cpp" />
+    <ClCompile Include="ui\chat.cpp" />
     <ClCompile Include="ui\ui_text.cpp" />
     <ClCompile Include="game\main_menu_hook.cpp" />
     <ClCompile Include="game\system_menu.cpp" />
@@ -308,6 +309,7 @@
     <ClInclude Include="game\imgui_hook.h" />
     <ClInclude Include="ui\game_assets.h" />
     <ClInclude Include="ui\multiplayer_page.h" />
+    <ClInclude Include="ui\chat.h" />
     <ClInclude Include="ui\ui_text.h" />
     <ClInclude Include="game\main_menu_hook.h" />
     <ClInclude Include="game\system_menu.h" />

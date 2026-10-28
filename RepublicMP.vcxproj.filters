@@ -162,6 +162,9 @@
     <ClCompile Include="ui\multiplayer_page.cpp">
       <Filter>ui</Filter>
     </ClCompile>
+    <ClCompile Include="ui\chat.cpp">
+      <Filter>ui</Filter>
+    </ClCompile>
     <ClCompile Include="ui\ui_text.cpp">
       <Filter>ui</Filter>
     </ClCompile>
@@ -438,6 +441,9 @@
       <Filter>ui</Filter>
     </ClInclude>
     <ClInclude Include="ui\multiplayer_page.h">
+      <Filter>ui</Filter>
+    </ClInclude>
+    <ClInclude Include="ui\chat.h">
       <Filter>ui</Filter>
     </ClInclude>
     <ClInclude Include="ui\ui_text.h">

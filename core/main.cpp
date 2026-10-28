@@ -14,6 +14,7 @@
 #include "../game/session_patches.h"
 #include "../world/view_list_scope.h"
 #include "../game/input_block.h"
+#include "../ui/chat.h"
 #include "../determinism/state_hash.h"
 #include "../determinism/determinism.h"
 #include "../determinism/sim_patches.h"
@@ -60,6 +61,7 @@ extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPlugi
     Buildings_Bind(host);
     Networks_Bind(host);
     ImGuiHook_Bind(host);
+    Chat_Bind(host);
     MainMenuHook_Bind(host);
     SystemMenu_Bind(host);
     TerrainHook_Bind(host);
