@@ -565,7 +565,7 @@ static void SessionTab(float left, float right, float bottom, float s)
         char name[96];
         snprintf(name, sizeof(name), "%s%s%s", p.nick, p.host ? T(" (host)") : "", p.self ? T(" - you") : "");
         Raw(GAME_FONT_ARIAL, 24 * s, ImVec2(x + 10 * s, y), kInk, name);
-        if (!p.self) { // the host's row: a player's ping to the host
+        if (!p.host) { // each player's ping to the host (the host has none)
             char ping[16];
             if (p.rttMs >= 0) snprintf(ping, sizeof(ping), "%d ms", p.rttMs);
             else snprintf(ping, sizeof(ping), "-");

@@ -561,9 +561,11 @@ static void DrawIcon(float s, ImVec2 display)
         ImVec2 ts = GameText_Size(GAME_FONT_ARIAL, h, n);
         float r = (ts.x * 0.5f + 6 * s) > 11 * s ? ts.x * 0.5f + 6 * s : 11 * s;
         ImVec2 c(p.x + d - 4 * s, p.y + 4 * s);
-        dl->AddCircleFilled(c, r, kPaper);
-        dl->AddCircle(c, r, kDustyEdge, 0, 1.5f * s);
-        GameText_Draw(dl, GAME_FONT_ARIAL, h, ImVec2(c.x - ts.x * 0.5f, c.y - h * 0.5f), kInk, n);
+        // Over the icon's corner, past its window (which would clip it).
+        ImDrawList* fg = ImGui::GetForegroundDrawList();
+        fg->AddCircleFilled(c, r, kPaper);
+        fg->AddCircle(c, r, kDustyEdge, 0, 1.5f * s);
+        GameText_Draw(fg, GAME_FONT_ARIAL, h, ImVec2(c.x - ts.x * 0.5f, c.y - h * 0.5f), kInk, n);
     }
     ImGui::End();
     if (clicked && !dragged) SetMode(CHAT_OPEN);

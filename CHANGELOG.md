@@ -9,6 +9,11 @@ Protocol 53 - every player needs this build.
   while the host was still loading its city) got "can't reach" at once. A
   first join now keeps trying for up to 3 minutes ("Waiting for the host")
   and comes in once the host opens again; Cancel joining stops it.
+- **Fix: the pings on the SESSION page** - the host's row showed 0 ms and
+  this player's own row none: each player's row now shows that player's
+  ping to the host, as the RepublicMP window does, and the host's none.
+- **Fix: the chat icon's count** - the count of new lines on the shrunk chat
+  was clipped by the icon's own window; it shows whole over its corner.
 - **SETTINGS on the MULTIPLAYER page** - a tab beside HOST and JOIN (and
   beside SESSION while one runs) with what is set once and kept: the DLC
   check, the re-sync after a desync, the players' cursors, the border stars
