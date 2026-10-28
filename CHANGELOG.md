@@ -2,8 +2,25 @@
 
 ## Unreleased
 
-Protocol 53 - every player needs this build.
+Protocol 54 - every player needs this build.
 
+- **Fix: desyncs from the weather** - the weather (temperature, wind, snow,
+  rain, wet roads) is not in the save, so a load kept each PC's own: the
+  host went on with its weather and the players started with theirs. The
+  heating plants burned coal and water by a different temperature and the
+  vehicles drove at other speeds on the roads, and the games drifted apart
+  within minutes (a heating plant's coal and water 0.07 apart, two buses
+  20 m apart). At a session's load every PC now starts the weather as the
+  game does for a new world - the season and the temperature from the date,
+  the rest from the shared random numbers - so all have the same weather
+  from the first tick, nobody's copied (from Sohn's notes on the weather).
+- **Fix: desyncs after paying for a construction with money** - the "pay
+  with rubles / dollars" buttons of a construction's window ran the game's
+  funding routine on the clicking PC at once, and the command made it again
+  on every PC. The clicking PC ran it once more than the others, and its
+  construction sites went their own way: a site more, or sites gone earlier
+  (the clicker had other buildings than everyone else minutes later). The
+  click now only becomes the command, made once on every PC.
 - **Fix: a second player joining at the same time** - the host closes its
   port while it takes a player in, and a player who connected then (or
   while the host was still loading its city) got "can't reach" at once. A

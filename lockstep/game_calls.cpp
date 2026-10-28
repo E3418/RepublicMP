@@ -66,6 +66,10 @@ enum {
     CALL_NEW_CITY,
     // The city tool's 32ff40 right after it: made by that command.
     CALL_NEW_CITY_ASSIGN,
+    // A construction window's fund button: it writes the site's +608 word, then calls 161440.
+    // In a session the word is a building setting (building_settings.cpp) whose command calls
+    // 160550 and so 161440 on every PC; the button's own call is not made.
+    CALL_FUND,
 };
 #define REPEAT_MS 1500
 #define REFRESH_MS 20000
@@ -222,6 +226,13 @@ static const GameCallSite kSites[] = {
     // click is 68a420(the picked vehicle, the window's vehicle +d298, 1); its answer picks the
     // tool's message and ends the tool, so a captured click answers 1 (by SoylentGreed).
     { 0x2B6DF5, 0x68A420, "vehicle-to-vehicle tool: load onto the picked vehicle", "VOb", 0, 1, false },
+    // The fund buttons (call sites by SoylentGreed): made on the clicking PC, 161440 ran there
+    // once more than elsewhere, before the setting sync put the flags back - that PC's
+    // construction sites went their own way (a site more, or sites gone earlier).
+    { 0x6FA969, 0x161440, "building window header: fund in rubles", "WO", 0, 0, false, CALL_FUND },
+    { 0x6FAD83, 0x161440, "building window header: fund in dollars", "WO", 0, 0, false, CALL_FUND },
+    { 0x775A8D, 0x161440, "construction panel: fund in rubles", "WO", 0, 0, false, CALL_FUND },
+    { 0x775D61, 0x161440, "construction panel: fund in dollars", "WO", 0, 0, false, CALL_FUND },
 };
 #define SITE_COUNT (sizeof(kSites) / sizeof(kSites[0]))
 
@@ -443,6 +454,7 @@ static U64 Run(unsigned index, const U64* a)
     }
     switch (s.special) {
     case CALL_PRESENTATION:
+    case CALL_FUND:
         return s.result;
     case CALL_LOCAL:
         return CallSite(s, a);
