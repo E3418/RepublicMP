@@ -78,6 +78,9 @@
     <ClCompile Include="core\profile.cpp">
       <Filter>core</Filter>
     </ClCompile>
+    <ClCompile Include="core\frame_timing.cpp">
+      <Filter>core</Filter>
+    </ClCompile>
     <ClCompile Include="world\local_builds.cpp">
       <Filter>world</Filter>
     </ClCompile>
@@ -351,6 +354,9 @@
       <Filter>core</Filter>
     </ClInclude>
     <ClInclude Include="core\profile.h">
+      <Filter>core</Filter>
+    </ClInclude>
+    <ClInclude Include="core\frame_timing.h">
       <Filter>core</Filter>
     </ClInclude>
     <ClInclude Include="game\present_hook.h">

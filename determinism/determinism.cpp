@@ -13,6 +13,7 @@
 #include "../session/game_speed.h"
 #include "../session/save_sync.h" // SaveSync_IsBusy - no probe during a session
 #include "../core/profile.h"
+#include "../core/frame_timing.h"
 #include <intrin.h>           // _ReturnAddress
 #include <math.h>
 #include <stdio.h>
@@ -1313,7 +1314,10 @@ static void SessionAdmission(BYTE* timer)
 static void HookedSimStep(__int64 world)
 {
     if (!g_active) {
-        o_simStep(world);
+        {
+            FrameTimingScope timing(FRAME_EARLY);
+            o_simStep(world);
+        }
         for (int i = 0; i < g_stepObserverCount; i++) g_stepObservers[i]();
         return;
     }
@@ -1324,6 +1328,7 @@ static void HookedSimStep(__int64 world)
     if (!g_frameStep) {
         g_framePhase = 3;
         if (g_probeState == PROBE_RUNNING) ++g_holdCount[g_probeRun];
+        FrameTimingScope timing(FRAME_HELD);
         if (!g_frameFault && g_probeState != PROBE_WAIT_LOAD && !g_sessionLoadPending && !HeldFrame_Draw(g_haveStep)) {
             g_frameFault = true;
             Logf("republicmp  PROBE: held presentation failed - no successful result can be reported");
@@ -1336,6 +1341,7 @@ static void HookedSimStep(__int64 world)
     WriteGameSpeed(GameSpeedOf(g_tickSpeed));
     // Early keeps the tool: its one read that changed the simulation (the
     // building pass, 13cc11) is patched in sim_patches. (by SoylentGreed)
+    FrameTimingScope timing(FRAME_EARLY);
     SimPatches_BeforeEarly(world);
     g_inEarly = true;
     o_simStep(world);

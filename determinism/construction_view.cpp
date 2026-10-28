@@ -32,25 +32,15 @@
 #define LOG_MS 2000
 #define LOG_SITES 6
 
-static bool g_draw = true;
 static bool g_log = false;
 
 void ConstructionView_Bind(const TsmHost* host)
 {
     TsmBind(host);
-    g_draw = Profile_GetInt("debug", "construction_draw", 1) != 0;
     g_log = Profile_GetInt("debug", "construction_log", 0) != 0;
 }
 
-bool ConstructionView_GetDraw() { return g_draw; }
 bool ConstructionView_GetLog() { return g_log; }
-
-void ConstructionView_SetDraw(bool on)
-{
-    g_draw = on;
-    Profile_SetInt("debug", "construction_draw", on ? 1 : 0);
-    Logf("republicmp  CONSTRUCTION: sites in a session are drawn %s", on ? "with this PC's view" : "as before (no stages)");
-}
 
 void ConstructionView_SetLog(bool on)
 {

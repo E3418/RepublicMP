@@ -21,6 +21,11 @@ Protocol 54 - every player needs this build.
   construction sites went their own way: a site more, or sites gone earlier
   (the clicker had other buildings than everyone else minutes later). The
   click now only becomes the command, made once on every PC.
+- **Construction stages are always drawn in a session** - the Debug
+  window's switch for them is gone, so nobody turns them off by mistake.
+- **Debug: frame timing** - a switch (off by default) that logs every 2 s
+  the main thread's frames and the ms per frame of the game's phases and
+  this plugin's work in them, to find what makes a PC slow in a session.
 - **Fix: a second player joining at the same time** - the host closes its
   port while it takes a player in, and a player who connected then (or
   while the host was still loading its city) got "can't reach" at once. A

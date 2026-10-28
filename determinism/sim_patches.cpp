@@ -25,6 +25,7 @@
 #include "state_hash.h"
 #include "construction_view.h"
 #include "office_guard.h"
+#include "../core/frame_timing.h"
 #include <string.h>
 #include <intrin.h>
 #include <limits.h>
@@ -485,6 +486,7 @@ static bool VisibleIn()
         if (!g_visibleIn) g_visibleFresh = false;
         return false;
     }
+    FrameTimingScope timing(FRAME_VISIBLE);
     if (!g_visibleFresh) {
         FillPrivateVisible();
         g_visibleFresh = true;
@@ -505,6 +507,7 @@ static bool VisibleIn()
 static void VisibleOut(bool swapped)
 {
     if (!swapped) return;
+    FrameTimingScope timing(FRAME_VISIBLE);
     BYTE* world = g_exeBase + WORLD_RVA;
     // Put the simulation's values back on every building that still exists
     // (one the phase removed is gone). The visible list itself is no guide:
@@ -617,8 +620,13 @@ static void PrivateLate(__int64 world)
 static void HookedLate(__int64 world)
 {
     InputBlock_ClearGameLatches(); // an Escape or a click for the MULTIPLAYER page is not the game's too
+    if (world == (__int64)(g_exeBase + WORLD_RVA)) FrameTiming_MainFrame();
     bool active = g_on && Determinism_IsActive() && world == (__int64)(g_exeBase + WORLD_RVA);
-    if (!active) { o_late(world); return; }
+    if (!active) {
+        FrameTimingScope timing(FRAME_LATE);
+        o_late(world);
+        return;
+    }
     Determinism_BeforeLate();
     g_simThread = GetCurrentThreadId();
     // No save on one PC alone in a lockstep session: a save writes every
@@ -633,16 +641,20 @@ static void HookedLate(__int64 world)
     // The tool stays selected on every frame. A tick's Late runs its handlers
     // through the tool stubs below; a held Late is this PC's own altogether.
     // The render thread has finished here (105eb8). (by SoylentGreed)
-    if (step) {
-        bool visible = VisibleIn();
-        g_inPhase = true;
-        o_late(world);
-        g_inPhase = false;
-        VisibleOut(visible);
-    } else {
-        PrivateLate(world);
+    {
+        FrameTimingScope timing(FRAME_LATE);
+        if (step) {
+            bool visible = VisibleIn();
+            g_inPhase = true;
+            o_late(world);
+            g_inPhase = false;
+            VisibleOut(visible);
+        } else {
+            PrivateLate(world);
+        }
     }
     *(float*)(world + AUTOSAVE_TIMER_OFFSET) = 0.0f;
+    FrameTimingScope timing(FRAME_AFTER_LATE);
     Determinism_AfterLate();
 }
 
@@ -963,6 +975,7 @@ static __int64 DetUiRoutine(void* world)
 {
     typedef __int64 (*UiFn)(void*);
     UiFn original = (UiFn)(g_exeBase + UI_ROUTINE_RVA);
+    FrameTimingScope timing(FRAME_UI);
     if (g_underUi) g_underUi();
     if (!g_on || (BYTE*)world != g_exeBase + WORLD_RVA) return original(world);
     BYTE* shared = (BYTE*)world + SEARCH_WORKSPACE_OFFSET;
@@ -1045,10 +1058,12 @@ static void DetPrepare(__int64 world)
 {
     typedef void (*PrepareFn)(__int64);
     PrepareFn original = (PrepareFn)(g_exeBase + PREPARE_RVA);
+    FrameTimingScope timing(FRAME_PREPARE);
     if (!g_on || world != (__int64)(g_exeBase + WORLD_RVA)) {
         original(world);
         return;
     }
+    long long commandsBegin = FrameTiming_Begin();
     OfficeSelection_Poll(); // a change of the assign tool's selection becomes a command at this boundary
     BYTE** buildingsBegin = *(BYTE***)(g_exeBase + BUILDINGS_BEGIN_RVA);
     BYTE** buildingsEnd = *(BYTE***)(g_exeBase + BUILDINGS_END_RVA);
@@ -1057,6 +1072,7 @@ static void DetPrepare(__int64 world)
     Determinism_BeforePrepare();
     g_commandFrame = false;
     CommandViewOut(emptied, buildingsBegin, buildingsEnd);
+    FrameTiming_End(FRAME_COMMANDS, commandsBegin);
     // Keep the native tool for previews. Held frames have no Early pass,
     // so refresh the local preview list before Prepare.
     g_visibleFresh = false;
@@ -1320,9 +1336,10 @@ typedef U64 (*SiteDrawFn)(U64 world, U64 pass);
 static U64 DetSiteDraw(U64 world, U64 pass)
 {
     SiteDrawFn original = (SiteDrawFn)(g_exeBase + SITE_DRAW_RVA);
+    FrameTimingScope timing(FRAME_SITE_DRAW);
     bool privateDraw = g_on && !g_inPhase;
     ConstructionView_Sample((BYTE*)world, (int)(pass & 0xFF));
-    bool view = privateDraw && ConstructionView_GetDraw() && VisibleIn();
+    bool view = privateDraw && VisibleIn();
     ConstructionView_View();
     // Owning the camera scope and isolating the drawer's writes are separate:
     // a nested call may already have this PC's view and still needs a guard,

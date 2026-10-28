@@ -38,6 +38,7 @@
 #include "../modes/republics/republics.h"
 #include "version.h"
 #include "profile.h"
+#include "frame_timing.h"
 
 extern "C" __declspec(dllexport) unsigned TsmPluginApiVersion(void)
 {
@@ -49,6 +50,7 @@ extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPlugi
 {
     TsmBind(host);
     Profile_Bind(host);
+    FrameTiming_Bind(host);
     World_Bind(host);
     Camera_Bind(host);
     Panel2D_Bind(host);

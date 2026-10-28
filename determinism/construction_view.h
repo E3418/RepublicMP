@@ -13,7 +13,7 @@
 // building off the camera (+115a 0, +115c 100000.0 - the building
 // visibility patch, by SoylentGreed), so no site showed its stages.
 //
-// With this on, the drawer runs inside this PC's view (sim_patches'
+// In a session the drawer always runs inside this PC's view (sim_patches'
 // VisibleIn, as the interface routine does): +115a/+115c of the buildings on
 // this PC's camera are set for the call and put back after. The render and
 // the simulation never overlap while the layer is on (the frame waits for the
@@ -37,9 +37,6 @@
 
 void ConstructionView_Bind(const TsmHost* host);
 
-// Draw the sites' stages with this PC's view in a session (remembered; on by default).
-bool ConstructionView_GetDraw();
-void ConstructionView_SetDraw(bool on);
 // The diagnostic log (remembered; off by default).
 bool ConstructionView_GetLog();
 void ConstructionView_SetLog(bool on);

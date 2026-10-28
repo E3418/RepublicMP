@@ -177,6 +177,7 @@
     <ClCompile Include="game\save_load.cpp" />
     <ClCompile Include="core\main.cpp" />
     <ClCompile Include="core\profile.cpp" />
+    <ClCompile Include="core\frame_timing.cpp" />
     <ClCompile Include="world\local_builds.cpp" />
     <ClCompile Include="game\present_hook.cpp" />
     <ClCompile Include="session\game_speed.cpp" />
@@ -326,6 +327,7 @@
     <ClInclude Include="game\input_block.h" />
     <ClInclude Include="core\version.h" />
     <ClInclude Include="core\profile.h" />
+    <ClInclude Include="core\frame_timing.h" />
     <ClInclude Include="world\buildings.h" />
     <ClInclude Include="world\networks.h" />
     <ClInclude Include="world\build_mode.h" />

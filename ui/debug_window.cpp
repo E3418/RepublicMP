@@ -12,6 +12,7 @@
 #include "../lockstep/building_settings.h"
 #include "debug_log.h"
 #include "../lockstep/lockstep_net.h"
+#include "../core/frame_timing.h"
 #include <vector>
 #include <string>
 
@@ -85,6 +86,16 @@ void DebugWindow::Draw()
         ImGui::Separator();
         ImGui::Spacing();
 
+        // --- Frame timing (core/frame_timing) ---
+        bool frameTiming = FrameTiming_GetOn();
+        if (ImGui::Checkbox("Frame timing (every 2 s)", &frameTiming)) FrameTiming_SetOn(frameTiming);
+        ImGui::TextWrapped("Off by default: logs the main thread's frames and the ms per frame of the game's "
+                           "phases and this plugin's work in them, to find what makes a PC slow.");
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
         // --- Terrain call log (world/terrain_hook) ---
         static const char* const kTerrainLog[] = { "Off", "Per frame", "Per call" };
         int terrainLog = TerrainHook_GetLogMode();
@@ -111,11 +122,9 @@ void DebugWindow::Draw()
         ImGui::Spacing();
 
         // --- Construction sites (determinism/construction_view) ---
-        bool siteDraw = ConstructionView_GetDraw();
-        if (ImGui::Checkbox("Draw construction stages in a session", &siteDraw)) ConstructionView_SetDraw(siteDraw);
         bool siteLog = ConstructionView_GetLog();
         if (ImGui::Checkbox("Log construction sites (every 2 s)", &siteLog)) ConstructionView_SetLog(siteLog);
-        ImGui::TextWrapped("The stages are drawn with this PC's view; the log shows the sites the drawer sees, "
+        ImGui::TextWrapped("The stages are always drawn with this PC's view; the log shows the sites the drawer sees, "
                            "with the simulation's and this PC's camera fields.");
         ImGui::Spacing();
 

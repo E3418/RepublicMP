@@ -13,6 +13,7 @@
 #include "../session/save_sync.h"
 #include "../lockstep/building_settings.h"
 #include "../modes/mode.h"
+#include "../core/frame_timing.h"
 
 #include <d3d11.h>
 #include <dxgi.h>
@@ -72,18 +73,26 @@ static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain* pSwapChain, UINT 
 static HRESULT PresentFrame(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags)
 {
     g_presentCallCount++;
-    SessionPatches_Tick(); // camera/frame-rate patches while connected (see session_patches.h)
-    SimPatches_Tick();     // determinism patches back once the probe ends (see sim_patches.h)
-    InputBlock_Tick();  // keep the game's mouse-button bytes clear while the join screen is up
-    TerrainHook_Tick(); // flush last frame's terrain-edit log
-    SaveSync_Tick(); // a session ends when the player leaves the world
-    BuildingSettings_Tick(); // clicks, and the Debug window's field diff
-    LocalBuilds_Tick(); // drag state, a commit that was not taken
-    Modes_Frame(); // the plugged-in game mode's frame (modes/mode.h)
+    FrameTiming_Present(); // the Debug window's frame timing (see frame_timing.h)
+    {
+        FrameTimingScope timing(FRAME_PRESENT_OURS);
+        SessionPatches_Tick(); // camera/frame-rate patches while connected (see session_patches.h)
+        SimPatches_Tick();     // determinism patches back once the probe ends (see sim_patches.h)
+        InputBlock_Tick();  // keep the game's mouse-button bytes clear while the join screen is up
+        TerrainHook_Tick(); // flush last frame's terrain-edit log
+        SaveSync_Tick(); // a session ends when the player leaves the world
+        BuildingSettings_Tick(); // clicks, and the Debug window's field diff
+        LocalBuilds_Tick(); // drag state, a commit that was not taken
+        Modes_Frame(); // the plugged-in game mode's frame (modes/mode.h)
+    }
 
-    ImGuiHook_EnsureInit(pSwapChain); // one-time: grabs device/hwnd, sets up ImGui + WndProc hook
-    ImGuiHook_NewFrameAndRender();    // draws the overlay on top of the game's own frame
+    {
+        FrameTimingScope timing(FRAME_OVERLAY);
+        ImGuiHook_EnsureInit(pSwapChain); // one-time: grabs device/hwnd, sets up ImGui + WndProc hook
+        ImGuiHook_NewFrameAndRender();    // draws the overlay on top of the game's own frame
+    }
 
+    FrameTimingScope timing(FRAME_SWAP);
     return g_origPresent(pSwapChain, SyncInterval, Flags);
 }
 
