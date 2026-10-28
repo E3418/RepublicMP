@@ -64,6 +64,8 @@ static volatile ULONGLONG g_sessionStartTick = 0;
 #define RESYNC_ANNOUNCE_FLUSH_MS 500    // host: lets the announcement leave before the channels close
 #define RESYNC_REJOIN_TIMEOUT_MS 30000  // host: how long the players have to come back; client: how long it retries
 #define RESYNC_RETRY_MS 500
+#define JOIN_RETRY_TIMEOUT_MS 180000 // client, first join: how long a refused connect is retried (the host
+                                     // loads its city, or takes another player in with its port closed)
 static volatile bool g_resyncRequested = false; // host: the button
 static volatile bool g_resyncing = false;
 static volatile int g_desyncResyncSeconds = 60;    // re-sync this long after a desync (-1 off)
@@ -1085,12 +1087,19 @@ static bool RunClientJoin(bool rejoin)
             SetSessionError("network init failed");
             break;
         }
+        // Refused connects are retried: for a re-sync the host opens again in a
+        // moment; for a first join it may still be loading its city, or taking
+        // another player in (its port is closed until that player is in).
         ULONGLONG connectStart = GetTickCount64();
+        ULONGLONG retryFor = rejoin ? RESYNC_REJOIN_TIMEOUT_MS : JOIN_RETRY_TIMEOUT_MS;
         for (;;) {
             sock = NetworkConnect(g_targetIp, SAVE_SYNC_PORT, 15000, 0, &g_disconnectRequested);
-            if (sock != NET_NO_LINK || !rejoin || g_disconnectRequested) break;
-            if (GetTickCount64() - connectStart > RESYNC_REJOIN_TIMEOUT_MS) break;
-            SyncBlock_SetStep(1, JOIN_STEPS, "Re-sync: waiting for the host to open for the players again", -1);
+            if (sock != NET_NO_LINK || g_disconnectRequested) break;
+            if (GetTickCount64() - connectStart > retryFor) break;
+            SyncBlock_SetStep(1, JOIN_STEPS,
+                              rejoin ? "Re-sync: waiting for the host to open for the players again"
+                                     : "Waiting for the host - it is loading, or letting another player in",
+                              -1);
             Sleep(RESYNC_RETRY_MS);
         }
         if (sock == NET_NO_LINK) {
