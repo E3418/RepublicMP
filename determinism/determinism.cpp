@@ -813,6 +813,9 @@ static void HookedLoadWorld(void)
         SimPatches_ResetSearches();
         g_runStep = 0;
         ResetFrames();
+        // As a session's load does: the weather is not in the save, and run 2
+        // began with the weather run 1 left (the probe differed on it).
+        Weather_StartShared();
         WriteGameSpeed(g_probeSpeed); // the first step already at the probe's speed
         if (g_probeRun == 0) {
             g_dataSnapshot.assign(g_exeBase + DATA_RVA, g_exeBase + DATA_RVA + DATA_SIZE);

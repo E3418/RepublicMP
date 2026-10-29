@@ -20,6 +20,9 @@ DLL, 0.7.3 included).
   the slowest player, which a round trip near 290 ms already used up: every
   PC waited now and then. It may now run 20 ahead (enough to ~620 ms); a
   player still keeps only the lead its round trip needs.
+- **The determinism probe starts the weather too** - it loaded its runs
+  with whatever weather the game had (run 2 with run 1's), so a probe could
+  differ on the weather alone; each run now starts it as a session's load does.
 - **Faster frames in big cities** - putting back the buildings' camera fields
   after this PC's view made a set of every building, about 9 times a frame;
   it now looks up only the buildings that were on the camera.

@@ -31,7 +31,7 @@ void Weather_StartShared()
         *(float*)(w + W_WETNESS) = 0.0f;
         ((WeatherFn)(g_exeBase + SKY_RVA))(w, 1);
         ((WeatherFn)(g_exeBase + WEATHER_RVA))(w, 1);
-        Logf("republicmp  WEATHER: started for the session - %.2f C (was %.2f), wind %.2f, snowing %d, sky %d",
+        Logf("republicmp  WEATHER: started at the load -%.2f C (was %.2f), wind %.2f, snowing %d, sky %d",
              *(float*)(w + W_TEMPERATURE), before, *(float*)(w + W_WIND), *(int*)(w + W_SNOWING), *(int*)(w + W_SKY));
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         Logf("republicmp  WEATHER: could not be started for the session");
