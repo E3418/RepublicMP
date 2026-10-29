@@ -1092,7 +1092,9 @@ static void DetPrepare(__int64 world)
     g_commandFrame = false;
     CommandViewOut(emptied, buildingsBegin, buildingsEnd);
     FrameTiming_End(FRAME_COMMANDS, commandsBegin);
-    SiteWatch_Check("commands", false);
+    // Commands lay and remove sites on every PC alike (their log says so): as
+    // a tick's, only invalid values count, so they do not use up the lines.
+    SiteWatch_Check("commands", true);
     // Keep the native tool for previews. Held frames have no Early pass,
     // so refresh the local preview list before Prepare.
     g_visibleFresh = false;
