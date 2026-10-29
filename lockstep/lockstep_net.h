@@ -36,7 +36,11 @@
 #include "../core/profile.h"
 
 #define LOCKSTEP_PORT 5560
-#define LOCKSTEP_WINDOW 10      // ticks the host may run ahead of the slowest player
+// Ticks the host may run ahead of the slowest player. It needs about the round
+// trip times 30 ticks a second plus ~1.5 ticks of frames: 10 ran out near
+// 290 ms, so a 280 ms link with its jitter made every PC wait now and then;
+// 20 lasts to ~620 ms. A player keeps only the lead the round trip needs.
+#define LOCKSTEP_WINDOW 20
 #define LOCKSTEP_HASH_TICKS 60  // ticks between state comparisons
 #define LOCKSTEP_MAX_PEERS (PROFILE_MAX_PLAYERS - 1) // players besides the host
 

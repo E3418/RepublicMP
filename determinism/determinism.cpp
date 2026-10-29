@@ -1334,8 +1334,19 @@ static void HookedSimStep(__int64 world)
         if (g_probeState == PROBE_RUNNING) ++g_holdCount[g_probeRun];
         FrameTimingScope timing(FRAME_HELD);
         if (!g_frameFault && g_probeState != PROBE_WAIT_LOAD && !g_sessionLoadPending && !HeldFrame_Draw(g_haveStep)) {
-            g_frameFault = true;
-            Logf("republicmp  PROBE: held presentation failed - no successful result can be reported");
+            // A refused held frame (held_frame: a vehicle pointer the drawing
+            // changed, left as it is) fails a probe, whose runs can no longer
+            // be compared. In a session it stopped the ticks for good - the
+            // game froze on that PC and the others waited for it: there the
+            // session goes on, and a difference it leaves is the state hash's.
+            if (g_probeState == PROBE_RUNNING) {
+                g_frameFault = true;
+                Logf("republicmp  PROBE: held presentation failed - no successful result can be reported");
+            } else {
+                static LONG s_logged = 0;
+                if (InterlockedIncrement(&s_logged) <= 8)
+                    Logf("republicmp  HELD FRAME: refused at tick %llu - the session goes on", g_stepCount);
+            }
         }
         g_framePhase = 4;
         return;

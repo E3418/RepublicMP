@@ -1,9 +1,28 @@
 # Changelog
 
-## Unreleased
+## 0.7.4
 
-Protocol 54 - joins 0.7.3.
+Protocol 54 - every player needs this build (the build check refuses another
+DLL, 0.7.3 included).
 
+- **Fix: the game stopping for good in a session** - since 0.7.2 a held
+  frame (one without a tick) that found a vehicle pointer changed by the
+  drawing stopped that PC's ticks until the next load: the game stood still
+  there and the other PCs waited for it. The pointer is still never put back,
+  but the session goes on (a probe still fails on it), and the log line comes
+  a few times only instead of on every frame.
+- **Fix: slow ticks in cities with many offices** - the linked-office check
+  added in 0.7.2 searched all buildings and all vehicles for each office
+  vehicle, reading every field through a system call, on every job search of
+  a tick. It makes the same checks with one pass over the world's lists and
+  plain reads.
+- **Fix: waiting on a ~280 ms link** - the host ran at most 10 ticks ahead of
+  the slowest player, which a round trip near 290 ms already used up: every
+  PC waited now and then. It may now run 20 ahead (enough to ~620 ms); a
+  player still keeps only the lead its round trip needs.
+- **Faster frames in big cities** - putting back the buildings' camera fields
+  after this PC's view made a set of every building, about 9 times a frame;
+  it now looks up only the buildings that were on the camera.
 - **Fix: the game closing at "checking versions"** - the join listed the
   DLC folders with names converted to the Windows code page, and one file or
   folder in `media_soviet` whose name the code page cannot hold ended the
@@ -16,6 +35,8 @@ Protocol 54 - joins 0.7.3.
   writes a `GUARD` line to the log; a session that fails ends with a message
   on the MULTIPLAYER page and the game goes on. The errors shown on that page
   are written to the log too.
+
+## 0.7.3
 
 Fewer desyncs, the Republics border, a chat and hosting over a LAN.
 Protocol 54 - every player needs this build.

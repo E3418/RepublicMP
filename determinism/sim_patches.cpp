@@ -31,6 +31,7 @@
 #include <limits.h>
 #include <vector>
 #include <unordered_set>
+#include <algorithm>
 
 #define WORLD_RVA 0x9D4F10
 
@@ -516,12 +517,25 @@ static void VisibleOut(bool swapped)
     // this PC only - the probe found it, and the sessions split on it.
     BYTE** listed = *(BYTE***)(g_exeBase + BUILDINGS_BEGIN_RVA);
     BYTE** listedEnd = *(BYTE***)(g_exeBase + BUILDINGS_END_RVA);
-    std::unordered_set<BYTE*> still(listed, listedEnd);
+    // Which kept buildings are still listed: one pass over the list against
+    // the few kept ones (sorted). A set of every building, made on each of
+    // the ~9 calls a frame, cost a big city its frame rate.
+    static thread_local std::vector<BYTE*> kept;
+    static thread_local std::vector<char> still;
+    kept.clear();
+    for (const VisibleKept& k : g_visibleKept) kept.push_back(k.building);
+    std::sort(kept.begin(), kept.end());
+    still.assign(kept.size(), 0);
+    if (!kept.empty())
+        for (BYTE** it = listed; it && it < listedEnd; ++it) {
+            auto at = std::lower_bound(kept.begin(), kept.end(), *it);
+            if (at != kept.end() && *at == *it) still[at - kept.begin()] = 1;
+        }
     // What the simulation's own building pass writes with no building on the
     // camera (13ce61/13ce6d; a construction site keeps its distance, 13d963):
     // the same on every PC, whatever this phase or an earlier one left.
     for (const VisibleKept& k : g_visibleKept) {
-        if (!still.count(k.building)) continue;
+        if (!still[std::lower_bound(kept.begin(), kept.end(), k.building) - kept.begin()]) continue;
         bool typed = *(void**)(k.building + 0x318) != nullptr;
         k.building[0x115A] = 0;
         *(float*)(k.building + 0x115C) = typed ? 100000.0f : k.distance;
