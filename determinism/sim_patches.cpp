@@ -26,6 +26,7 @@
 #include "construction_view.h"
 #include "office_guard.h"
 #include "../core/frame_timing.h"
+#include "site_watch.h"
 #include <string.h>
 #include <intrin.h>
 #include <limits.h>
@@ -663,8 +664,10 @@ static void HookedLate(__int64 world)
             o_late(world);
             g_inPhase = false;
             VisibleOut(visible);
+            SiteWatch_Check("Late", true);
         } else {
             PrivateLate(world);
+            SiteWatch_Check("Late (held, this PC's tools)", false);
         }
     }
     *(float*)(world + AUTOSAVE_TIMER_OFFSET) = 0.0f;
@@ -1028,6 +1031,7 @@ static __int64 DetUiRoutine(void* world)
     memcpy(g_privateSearch, shared, sizeof(saved));
     memcpy(shared, saved, sizeof(saved));
     InterlockedIncrement(&g_uiEnclosed);
+    SiteWatch_Check("interface", false);
     return r;
 }
 
@@ -1078,6 +1082,7 @@ static void DetPrepare(__int64 world)
         return;
     }
     long long commandsBegin = FrameTiming_Begin();
+    SiteWatch_Check("between frames", false); // the render thread, the windows outside the hooks
     OfficeSelection_Poll(); // a change of the assign tool's selection becomes a command at this boundary
     BYTE** buildingsBegin = *(BYTE***)(g_exeBase + BUILDINGS_BEGIN_RVA);
     BYTE** buildingsEnd = *(BYTE***)(g_exeBase + BUILDINGS_END_RVA);
@@ -1087,6 +1092,7 @@ static void DetPrepare(__int64 world)
     g_commandFrame = false;
     CommandViewOut(emptied, buildingsBegin, buildingsEnd);
     FrameTiming_End(FRAME_COMMANDS, commandsBegin);
+    SiteWatch_Check("commands", false);
     // Keep the native tool for previews. Held frames have no Early pass,
     // so refresh the local preview list before Prepare.
     g_visibleFresh = false;
@@ -1112,6 +1118,7 @@ static void DetPrepare(__int64 world)
     memcpy(timer, tickTimer, sizeof(tickTimer));
     if (scope) Determinism_ToolScopeEnd();
     PrivateViewOut(kept);
+    SiteWatch_Check("Prepare", false);
 }
 
 // The game's cursor pick (2f0f10, called by the frame loop at 105f39 right
@@ -1140,6 +1147,7 @@ static void DetCursorPick(__int64 world, __int64 a2, __int64 a3, __int64 a4)
         original(world, a2, a3, a4);
     }
     PrivateViewOut(kept);
+    SiteWatch_Check("cursor pick", false);
 }
 
 // Late runs even at speed 0: 547ef0 clamps road speeds without time passing;
@@ -1366,6 +1374,7 @@ static U64 DetSiteDraw(U64 world, U64 pass)
     }
     ConstructionView_After(privateDraw);
     VisibleOut(view);
+    SiteWatch_Check("site drawer", false);
     return r;
 }
 

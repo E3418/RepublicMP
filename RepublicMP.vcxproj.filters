@@ -81,6 +81,9 @@
     <ClCompile Include="core\frame_timing.cpp">
       <Filter>core</Filter>
     </ClCompile>
+    <ClCompile Include="determinism\site_watch.cpp">
+      <Filter>determinism</Filter>
+    </ClCompile>
     <ClCompile Include="world\local_builds.cpp">
       <Filter>world</Filter>
     </ClCompile>
@@ -361,6 +364,9 @@
     </ClInclude>
     <ClInclude Include="core\guard.h">
       <Filter>core</Filter>
+    </ClInclude>
+    <ClInclude Include="determinism\site_watch.h">
+      <Filter>determinism</Filter>
     </ClInclude>
     <ClInclude Include="game\present_hook.h">
       <Filter>game</Filter>

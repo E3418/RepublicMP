@@ -23,6 +23,10 @@ DLL, 0.7.3 included).
 - **The determinism probe starts the weather too** - it loaded its runs
   with whatever weather the game had (run 2 with run 1's), so a probe could
   differ on the weather alone; each run now starts it as a session's load does.
+- **Debug: construction site watch** - off by default: logs (`SITE_WATCH`)
+  a construction site whose progress, stage or materials change outside a
+  tick, with the frame's phase and thread, or become invalid - to find the
+  sites that go their own way on one PC with no command (#55).
 - **Faster frames in big cities** - putting back the buildings' camera fields
   after this PC's view made a set of every building, about 9 times a frame;
   it now looks up only the buildings that were on the camera.

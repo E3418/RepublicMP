@@ -15,6 +15,7 @@
 #include "../core/profile.h"
 #include "../core/frame_timing.h"
 #include "../core/guard.h"
+#include "site_watch.h"
 #include <intrin.h>           // _ReturnAddress
 #include <math.h>
 #include <stdio.h>
@@ -791,6 +792,7 @@ static void HookedLoadWorld(void)
         }
     }
     o_loadWorld();
+    if (session || g_probeState == PROBE_WAIT_LOAD) SiteWatch_Reset();
     if (session) {
         // The same start on both PCs as a probe run gets: the shared
         // simulation begins at this load, paused until a player resumes.
@@ -1351,6 +1353,7 @@ static void HookedSimStep(__int64 world)
                     Logf("republicmp  HELD FRAME: refused at tick %llu - the session goes on", g_stepCount);
             }
         }
+        SiteWatch_Check("held frame draw", false);
         g_framePhase = 4;
         return;
     }
@@ -1365,6 +1368,7 @@ static void HookedSimStep(__int64 world)
     o_simStep(world);
     g_inEarly = false;
     SimPatches_AfterEarly();
+    SiteWatch_Check("Early", true);
     WriteGameSpeed(0);
     *(int*)(g_exeBase + 0x9D54BC) = kSpeedSentinel;
     memcpy(g_tickTimer, g_exeBase + GAME_TIMER_RVA, sizeof(g_tickTimer));

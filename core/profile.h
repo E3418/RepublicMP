@@ -14,6 +14,7 @@
 //   [debug]   money_trace (determinism), field_diff (lockstep/building_settings),
 //             terrain_log (world/terrain_hook),
 //             construction_log (determinism/construction_view),
+//             site_watch (determinism/site_watch),
 //             storage_trace (determinism/state_hash, off unless remembered)
 //
 // Each module reads its own setting when it is bound and writes it when it
