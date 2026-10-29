@@ -328,6 +328,7 @@
     <ClInclude Include="core\version.h" />
     <ClInclude Include="core\profile.h" />
     <ClInclude Include="core\frame_timing.h" />
+    <ClInclude Include="core\guard.h" />
     <ClInclude Include="world\buildings.h" />
     <ClInclude Include="world\networks.h" />
     <ClInclude Include="world\build_mode.h" />

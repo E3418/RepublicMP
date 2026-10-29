@@ -14,6 +14,7 @@
 #include "../lockstep/building_settings.h"
 #include "../modes/mode.h"
 #include "../core/frame_timing.h"
+#include "../core/guard.h"
 
 #include <d3d11.h>
 #include <dxgi.h>
@@ -73,8 +74,11 @@ static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain* pSwapChain, UINT 
 static HRESULT PresentFrame(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags)
 {
     g_presentCallCount++;
-    FrameTiming_Present(); // the Debug window's frame timing (see frame_timing.h)
-    {
+    // The plugin's per-frame work and its overlay are guarded (core/guard.h):
+    // one that throws skips its rest for this frame, and the frame is still
+    // presented.
+    Guard_Call("the plugin's per-frame work", [] {
+        FrameTiming_Present(); // the Debug window's frame timing (see frame_timing.h)
         FrameTimingScope timing(FRAME_PRESENT_OURS);
         SessionPatches_Tick(); // camera/frame-rate patches while connected (see session_patches.h)
         SimPatches_Tick();     // determinism patches back once the probe ends (see sim_patches.h)
@@ -84,13 +88,13 @@ static HRESULT PresentFrame(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
         BuildingSettings_Tick(); // clicks, and the Debug window's field diff
         LocalBuilds_Tick(); // drag state, a commit that was not taken
         Modes_Frame(); // the plugged-in game mode's frame (modes/mode.h)
-    }
+    });
 
-    {
+    Guard_Call("the overlay", [pSwapChain] {
         FrameTimingScope timing(FRAME_OVERLAY);
         ImGuiHook_EnsureInit(pSwapChain); // one-time: grabs device/hwnd, sets up ImGui + WndProc hook
         ImGuiHook_NewFrameAndRender();    // draws the overlay on top of the game's own frame
-    }
+    });
 
     FrameTimingScope timing(FRAME_SWAP);
     return g_origPresent(pSwapChain, SyncInterval, Flags);

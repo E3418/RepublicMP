@@ -14,6 +14,7 @@
 #include "../session/save_sync.h" // SaveSync_IsBusy - no probe during a session
 #include "../core/profile.h"
 #include "../core/frame_timing.h"
+#include "../core/guard.h"
 #include <intrin.h>           // _ReturnAddress
 #include <math.h>
 #include <stdio.h>
@@ -1677,7 +1678,7 @@ static bool WaitState(LONG want, DWORD timeoutMs)
     return true;
 }
 
-static DWORD WINAPI ProbeThread(LPVOID)
+static void ProbeRun()
 {
     do {
         char dir[MAX_PATH];
@@ -1729,6 +1730,13 @@ static DWORD WINAPI ProbeThread(LPVOID)
         }
         ResetDetail();
     } while (false);
+}
+
+// A probe that throws (core/guard.h) ends as a failed one; the game goes on.
+static DWORD WINAPI ProbeThread(LPVOID)
+{
+    if (!Guard_Call("the determinism probe", [] { ProbeRun(); }))
+        SetProbeStatus("stopped on an error - see the log (GUARD)");
     InterlockedExchange(&g_probeState, PROBE_IDLE);
     Commands_ProbeEnd(nullptr, nullptr);
     if (g_active) Determinism_SetActive(false, 0);

@@ -1,6 +1,21 @@
 # Changelog
 
-## 0.7.3
+## Unreleased
+
+Protocol 54 - joins 0.7.3.
+
+- **Fix: the game closing at "checking versions"** - the join listed the
+  DLC folders with names converted to the Windows code page, and one file or
+  folder in `media_soviet` whose name the code page cannot hold ended the
+  player's game at once, with nothing in the log. The names are now read as
+  they are; the host's cleanup of old join saves and the save packing read
+  them the same way.
+- **Errors no longer close the game** - an error in a session thread, a
+  received message, a command, the Steam service, the probe, the save packing
+  or the plugin's per-frame work and overlay now stops only that piece and
+  writes a `GUARD` line to the log; a session that fails ends with a message
+  on the MULTIPLAYER page and the game goes on. The errors shown on that page
+  are written to the log too.
 
 Fewer desyncs, the Republics border, a chat and hosting over a LAN.
 Protocol 54 - every player needs this build.

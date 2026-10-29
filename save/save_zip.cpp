@@ -2,6 +2,7 @@
 // See save_zip.h.
 #include "save_zip.h"
 #include "../third_party/miniz/miniz.h"
+#include "../core/guard.h"
 
 #include <filesystem>
 #include <string>
@@ -14,7 +15,7 @@ void SaveZip_Bind(const TsmHost* host)
     TsmBind(host);
 }
 
-bool ZipSaveDirectory(const char* srcDir, const char* outZipPath, ZipProgressFn onProgress, void* userData)
+static bool ZipSaveDirectoryInner(const char* srcDir, const char* outZipPath, ZipProgressFn onProgress, void* userData)
 {
     std::error_code ec;
     fs::path base(srcDir);
@@ -55,8 +56,17 @@ bool ZipSaveDirectory(const char* srcDir, const char* outZipPath, ZipProgressFn 
             continue;
         }
 
-        std::string archiveName = fs::relative(entry.path(), base, ec).generic_string();
-        std::string fullPath = entry.path().string();
+        // A name the code page cannot hold makes string() throw: the save
+        // cannot be packed whole, so the join stops here, said in the log.
+        std::string archiveName, fullPath;
+        if (!Guard_Call("naming a file of the save", [&] {
+                archiveName = fs::relative(entry.path(), base, ec).generic_string();
+                fullPath = entry.path().string();
+            })) {
+            Logf("republicmp  SAVE_ZIP: a file name in [%s] cannot be packed", srcDir);
+            mz_zip_writer_end(&zip);
+            return false;
+        }
         if (ec) {
             Logf("republicmp  SAVE_ZIP: couldn't compute relative path for [%s]", fullPath.c_str());
             continue;
@@ -101,7 +111,7 @@ static bool IsSafeEntryName(const char* name)
     return true;
 }
 
-bool UnzipToDirectory(const char* zipPath, const char* destDir, ZipProgressFn onProgress, void* userData)
+static bool UnzipToDirectoryInner(const char* zipPath, const char* destDir, ZipProgressFn onProgress, void* userData)
 {
     mz_zip_archive zip;
     memset(&zip, 0, sizeof(zip));
@@ -127,17 +137,22 @@ bool UnzipToDirectory(const char* zipPath, const char* destDir, ZipProgressFn on
         }
 
         // A real save never contains such a name - refuse the whole archive.
-        if (!IsSafeEntryName(stat.m_filename)) {
+        // A name the code page cannot hold (fs::path throws) is refused too.
+        bool safe = false;
+        std::string outPathStr;
+        Guard_Call("naming a file of the received save", [&] {
+            if (!IsSafeEntryName(stat.m_filename)) return;
+            fs::path outPath = fs::path(destDir) / stat.m_filename;
+            std::error_code dirEc;
+            fs::create_directories(outPath.parent_path(), dirEc);
+            outPathStr = outPath.string();
+            safe = true;
+        });
+        if (!safe) {
             Logf("republicmp  SAVE_ZIP: refusing unsafe entry [%s] in [%s]", stat.m_filename, zipPath);
             mz_zip_reader_end(&zip);
             return false;
         }
-
-        fs::path outPath = fs::path(destDir) / stat.m_filename;
-        std::error_code dirEc;
-        fs::create_directories(outPath.parent_path(), dirEc);
-
-        std::string outPathStr = outPath.string();
         if (!mz_zip_reader_extract_to_file(&zip, i, outPathStr.c_str(), 0)) {
             Logf("republicmp  SAVE_ZIP: couldn't extract [%s] -> [%s]", stat.m_filename, outPathStr.c_str());
             mz_zip_reader_end(&zip);
@@ -150,4 +165,20 @@ bool UnzipToDirectory(const char* zipPath, const char* destDir, ZipProgressFn on
     mz_zip_reader_end(&zip);
     Logf("republicmp  SAVE_ZIP: extracted %zu files from [%s] -> [%s]", extracted, zipPath, destDir);
     return true;
+}
+
+// The whole walk guarded too (core/guard.h): an exception the steps above
+// do not expect fails the packing, said in the log, and the game goes on.
+bool ZipSaveDirectory(const char* srcDir, const char* outZipPath, ZipProgressFn onProgress, void* userData)
+{
+    bool ok = false;
+    Guard_Call("packing the save", [&] { ok = ZipSaveDirectoryInner(srcDir, outZipPath, onProgress, userData); });
+    return ok;
+}
+
+bool UnzipToDirectory(const char* zipPath, const char* destDir, ZipProgressFn onProgress, void* userData)
+{
+    bool ok = false;
+    Guard_Call("unpacking the save", [&] { ok = UnzipToDirectoryInner(zipPath, destDir, onProgress, userData); });
+    return ok;
 }

@@ -3,6 +3,7 @@
 // third_party/gns), which declare the same interfaces the Steam client serves.
 #include "steam_net.h"
 #include "../core/profile.h"
+#include "../core/guard.h"
 #include "../third_party/gns/steam/isteamnetworkingsockets.h"
 #include "../third_party/gns/steam/isteamnetworkingutils.h"
 #include <algorithm>
@@ -301,8 +302,11 @@ static HANDLE g_serviceThread = nullptr;
 static DWORD WINAPI ServiceThread(LPVOID)
 {
     while (!InterlockedCompareExchange(&g_serviceStop, 0, 0)) {
-        g_sockets->RunCallbacks();
-        AdjustRates();
+        // A callback that fails is lost; the links keep being served.
+        Guard_Call("the Steam service thread", [] {
+            g_sockets->RunCallbacks();
+            AdjustRates();
+        });
         Sleep(5);
     }
     return 0;

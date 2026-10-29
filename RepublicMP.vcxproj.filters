@@ -359,6 +359,9 @@
     <ClInclude Include="core\frame_timing.h">
       <Filter>core</Filter>
     </ClInclude>
+    <ClInclude Include="core\guard.h">
+      <Filter>core</Filter>
+    </ClInclude>
     <ClInclude Include="game\present_hook.h">
       <Filter>game</Filter>
     </ClInclude>

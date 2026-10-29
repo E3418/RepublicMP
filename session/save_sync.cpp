@@ -13,6 +13,7 @@
 #include "../game/world.h"
 #include "../lockstep/lockstep_net.h"
 #include "../core/profile.h"
+#include "../core/guard.h"
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -22,6 +23,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <system_error>
+#include <wctype.h>
 
 #pragma comment(lib, "User32.lib")
 
@@ -98,6 +100,8 @@ static void SetSessionError(const char* fmt, ...)
     EnterCriticalSection(&g_lock);
     strncpy_s(g_lastError, body, _TRUNCATE);
     LeaveCriticalSection(&g_lock);
+    // The log too: an error shown only on the page left nothing behind.
+    if (body[0]) Logf("republicmp  SESSION: error shown - %s", body);
 }
 
 // Writes to tesmioloader.log and the in-game UI log.
@@ -365,24 +369,32 @@ struct SessionDlcs {
     char list[248]; // the dlcN folder names, sorted, comma-separated
 };
 
+// Wide names and a walk that never throws: path::string() throws on a name
+// the code page cannot hold, and one such file or folder anywhere in
+// media_soviet ended the player's game at the join's DLC check.
 static void ListDlcs(char* out, size_t outSize)
 {
     out[0] = 0;
-    char exePath[MAX_PATH] = {};
-    DWORD len = GetModuleFileNameA(g_exe, exePath, MAX_PATH);
+    wchar_t exePath[MAX_PATH] = {};
+    DWORD len = GetModuleFileNameW(g_exe, exePath, MAX_PATH);
     if (len == 0 || len == MAX_PATH) return;
-    char* lastSlash = strrchr(exePath, '\\');
+    wchar_t* lastSlash = wcsrchr(exePath, L'\\');
     if (!lastSlash) return;
-    *lastSlash = '\0';
+    *lastSlash = L'\0';
     std::vector<std::string> names;
     std::error_code ec;
-    for (const auto& e : std::filesystem::directory_iterator(std::string(exePath) + "\\media_soviet", ec)) {
-        std::string name = e.path().filename().string();
-        if (_strnicmp(name.c_str(), "dlc", 3) != 0 || !e.is_directory(ec)) continue;
-        if (std::filesystem::directory_iterator(e.path(), ec) == std::filesystem::directory_iterator()) continue; // empty
-        for (char& c : name) c = (char)tolower((unsigned char)c);
-        names.push_back(name);
+    std::filesystem::directory_iterator it(std::filesystem::path(exePath) / L"media_soviet", ec), end;
+    for (; !ec && it != end; it.increment(ec)) {
+        const std::wstring name = it->path().filename().wstring();
+        if (name.size() < 3 || _wcsnicmp(name.c_str(), L"dlc", 3) != 0) continue;
+        std::error_code dirEc;
+        if (!it->is_directory(dirEc) || dirEc) continue;
+        if (std::filesystem::directory_iterator(it->path(), dirEc) == std::filesystem::directory_iterator()) continue; // empty
+        std::string ascii;
+        for (wchar_t c : name) ascii += c < 128 ? (char)towlower(c) : '?';
+        names.push_back(ascii);
     }
+    if (ec) Logf("republicmp  SESSION: the DLC folders could not be listed completely: %s", ec.message().c_str());
     std::sort(names.begin(), names.end());
     for (const std::string& n : names) {
         if (out[0]) strncat_s(out, outSize, ",", _TRUNCATE);
@@ -460,12 +472,15 @@ static void GenerateRandomSaveName(char* out, size_t outSize)
 // The host's newest join save. Each join (and so each re-sync) writes a new
 // one; every older one is deleted, so they do not pile up - also those left
 // by earlier runs of the game (one per run had stayed, ~150 MB each).
-static bool IsHostJoinSaveName(const std::string& name)
+// Wide: the save folder also holds the player's own saves, whose names the
+// code page may not hold (path::string() throws on them).
+static bool IsHostJoinSaveName(const std::wstring& name)
 {
-    const char* prefix = "mp_syncsave_";
-    if (name.size() != strlen(prefix) + 8 || name.compare(0, strlen(prefix), prefix) != 0) return false;
-    for (size_t i = strlen(prefix); i < name.size(); i++)
-        if (!isxdigit((unsigned char)name[i])) return false;
+    const wchar_t* prefix = L"mp_syncsave_";
+    size_t n = wcslen(prefix);
+    if (name.size() != n + 8 || name.compare(0, n, prefix) != 0) return false;
+    for (size_t i = n; i < name.size(); i++)
+        if (!iswxdigit(name[i])) return false;
     return true;
 }
 
@@ -473,15 +488,17 @@ static void KeepOnlyNewestHostSave(const char* newSaveDir)
 {
     std::error_code ec;
     std::filesystem::path keep(newSaveDir);
+    const std::wstring keepName = keep.filename().wstring();
     std::filesystem::directory_iterator it(keep.parent_path(), ec), end;
     int deleted = 0;
     for (; !ec && it != end; it.increment(ec)) {
-        if (!it->is_directory(ec)) continue;
-        std::string name = it->path().filename().string();
-        if (!IsHostJoinSaveName(name) || _stricmp(name.c_str(), keep.filename().string().c_str()) == 0) continue;
+        std::error_code dirEc;
+        if (!it->is_directory(dirEc) || dirEc) continue;
+        const std::wstring name = it->path().filename().wstring();
+        if (!IsHostJoinSaveName(name) || _wcsicmp(name.c_str(), keepName.c_str()) == 0) continue;
         std::error_code rm;
         std::filesystem::remove_all(it->path(), rm);
-        if (rm) Logf("republicmp  SESSION: couldn't delete the old join save [%s]: %s", name.c_str(), rm.message().c_str());
+        if (rm) Logf("republicmp  SESSION: couldn't delete the old join save [%ls]: %s", name.c_str(), rm.message().c_str());
         else deleted++;
     }
     if (deleted) Logf("republicmp  SESSION: deleted %d old join save(s)", deleted);
@@ -621,8 +638,11 @@ static void WorldSendProgress(unsigned long long done, unsigned long long total,
 static DWORD WINAPI WorldSendThread(LPVOID param)
 {
     WorldSend* w = (WorldSend*)param;
-    w->ok = SendMsg(w->j->sock, MSG_FILE_FOLLOWS, 4, -1, "") &&
-            NetworkSendFile(w->j->sock, w->zipPath, WorldSendProgress, w);
+    w->ok = false;
+    Guard_Call("sending the world", [w] {
+        w->ok = SendMsg(w->j->sock, MSG_FILE_FOLLOWS, 4, -1, "") &&
+                NetworkSendFile(w->j->sock, w->zipPath, WorldSendProgress, w);
+    });
     return 0;
 }
 
@@ -1321,16 +1341,40 @@ static void RunClientSession()
 // Entry points
 // ---------------------------------------------------------------------------
 
+// After an exception left a session (core/guard.h): what the session's own
+// ends do, each step guarded too - the game goes on outside a session.
+static void EndFailedSession()
+{
+    SetSessionError("the session stopped on an error - see the log (GUARD)");
+    SaveStatus("[%s] the session stopped on an error (see the GUARD line above)", g_isHost ? "HOST" : "CLIENT");
+    Guard_Call("the failed session's cleanup", [] {
+        NetLink s = g_activeSock;
+        g_activeSock = NET_NO_LINK;
+        if (s != NET_NO_LINK) NetworkClose(s);
+        if (g_listener != NET_NO_LINK) {
+            NetworkClose(g_listener);
+            g_listener = NET_NO_LINK;
+        }
+        EnterCriticalSection(&g_lock);
+        for (int i = 0; i < g_joinSockCount; i++) NetworkShutdown(g_joinSocks[i]);
+        g_joinSockCount = 0;
+        LeaveCriticalSection(&g_lock);
+        CloseLockstep();
+        SyncBlock_SetActive(false, nullptr);
+        EnsureGameUnpaused();
+    });
+}
+
 static DWORD WINAPI HostSessionThread(LPVOID)
 {
-    RunHostSession();
+    if (!Guard_Call("the host session", [] { RunHostSession(); })) EndFailedSession();
     SetState(SESSION_IDLE);
     return 0;
 }
 
 static DWORD WINAPI ClientSessionThread(LPVOID)
 {
-    RunClientSession();
+    if (!Guard_Call("the join", [] { RunClientSession(); })) EndFailedSession();
     SetPeerIp("");
     SetState(SESSION_IDLE);
     return 0;

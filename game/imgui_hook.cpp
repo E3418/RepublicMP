@@ -10,8 +10,10 @@
 #include "../ui/chat.h"
 #include "../lockstep/presence.h"
 #include "../modes/mode.h"
+#include "../core/guard.h"
 
 #include "imgui.h"
+#include "imgui_internal.h" // ErrorRecoveryStoreState / TryToRecoverState
 #include "imgui_impl_win32.h"
 #include "imgui_impl_dx11.h"
 
@@ -200,16 +202,28 @@ void ImGuiHook_NewFrameAndRender()
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
 
-    if (page) MultiplayerPage_Draw(); // under the overlay's windows
-    if (menuButton) MultiplayerPage_DrawMenuButton();
-    if (g_imguiVisible) {
-        g_mainMenu.Draw();
-        g_debug_window.Draw();
+    // A window that throws (core/guard.h) leaves a Begin without its End: the
+    // stacks are put back before Render, so the next frame starts clean.
+    ImGuiErrorRecoveryState recovery;
+    ImGui::ErrorRecoveryStoreState(&recovery);
+    bool drawn = Guard_Call("the overlay's windows", [&] {
+        if (page) MultiplayerPage_Draw(); // under the overlay's windows
+        if (menuButton) MultiplayerPage_DrawMenuButton();
+        if (g_imguiVisible) {
+            g_mainMenu.Draw();
+            g_debug_window.Draw();
+        }
+        if (presence) Presence_Frame(); // under the windows (background draw list)
+        if (modeOverlay) Modes_DrawOverlay();
+        if (presence) Chat_Frame(); // over the windows above; the chat key works while it is hidden too
+        SyncBlock_Draw(); // drawn last (on top), independent of g_imguiVisible
+    });
+    if (!drawn) {
+        bool assertOn = io.ConfigErrorRecoveryEnableAssert;
+        io.ConfigErrorRecoveryEnableAssert = false;
+        ImGui::ErrorRecoveryTryToRecoverState(&recovery);
+        io.ConfigErrorRecoveryEnableAssert = assertOn;
     }
-    if (presence) Presence_Frame(); // under the windows (background draw list)
-    if (modeOverlay) Modes_DrawOverlay();
-    if (presence) Chat_Frame(); // over the windows above; the chat key works while it is hidden too
-    SyncBlock_Draw(); // drawn last (on top), independent of g_imguiVisible
 
     ImGui::Render();
     g_pd3dContext->OMSetRenderTargets(1, &g_mainRenderTargetView, nullptr);
