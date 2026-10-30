@@ -230,6 +230,7 @@ static void DumpRecords(unsigned long long tick, const char* what)
     out.Flush();
 }
 static char g_desync[256] = "";
+static char g_lastRefusal[320] = ""; // the host's last accept: why a player was refused
 static unsigned long long g_desyncTick = 0; // the tick of g_desync
 
 // Player side.
@@ -544,6 +545,7 @@ int LockstepNet_HostAccept(int expected, DWORD timeoutMs, volatile bool* cancel,
     LockstepNet_Close();
     if (!NetworkInit()) return 0;
     ResetState();
+    g_lastRefusal[0] = 0;
     g_isHost = true;
     if (expected > LOCKSTEP_MAX_PEERS) expected = LOCKSTEP_MAX_PEERS;
     NetLink listener = NetworkListen(LOCKSTEP_PORT, LOCKSTEP_MAX_PEERS);
@@ -594,6 +596,7 @@ int LockstepNet_HostAccept(int expected, DWORD timeoutMs, volatile bool* cancel,
                 NetworkSendExact(s, &h, sizeof(h));
                 NetworkSendExact(s, differs, h.size);
                 Logf("republicmp  LOCKSTEP: %s refused - set Check DLCs to OFF to play anyway", hello.nick);
+                _snprintf_s(g_lastRefusal, sizeof(g_lastRefusal), _TRUNCATE, "%s: %s", hello.nick, differs);
                 NetworkClose(s);
                 continue;
             }
@@ -679,6 +682,19 @@ void LockstepNet_Close()
         }
     }
     g_peerSlots = 0;
+}
+
+const char* LockstepNet_LastRefusal() { return g_lastRefusal; }
+
+void LockstepNet_ForgetSession()
+{
+    g_isHost = false;
+    g_desync[0] = 0;
+    g_desyncTick = 0;
+    if (!g_locksReady) return;
+    EnterCriticalSection(&g_listLock);
+    memset(&g_list, 0, sizeof(g_list));
+    LeaveCriticalSection(&g_listLock);
 }
 
 int LockstepNet_PeerCount()

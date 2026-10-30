@@ -193,7 +193,20 @@ static void HandleKey()
     bool down = IsGameWindowFocused() && (GetAsyncKeyState(g_key) & 0x8000) != 0;
     bool pressed = down && !wasDown;
     wasDown = down;
-    if (!pressed || g_typing || MultiplayerPage_IsOpen() || ImGui::GetIO().WantTextInput) return;
+    if (!pressed || g_typing) return;
+    if (MultiplayerPage_IsOpen() || ImGui::GetIO().WantTextInput) {
+        // Said in the log: a chat that would not take a line after a session
+        // change could not be told from here.
+        static int s_logged = 0;
+        if (s_logged < 10) {
+            ++s_logged;
+            ImGuiContext* g = ImGui::GetCurrentContext();
+            Logf("republicmp  CHAT: the chat key is not taken - %s (active item %08X)",
+                 MultiplayerPage_IsOpen() ? "the MULTIPLAYER page is open" : "another text field has the keys",
+                 g ? g->ActiveId : 0);
+        }
+        return;
+    }
     if (g_mode != CHAT_OPEN) SetMode(CHAT_OPEN);
     g_focusIn = FOCUS_DELAY_FRAMES;
 }
@@ -571,8 +584,30 @@ static void DrawIcon(float s, ImVec2 display)
     if (clicked && !dragged) SetMode(CHAT_OPEN);
 }
 
+// A new session (lockstep/lockstep_net, at hosting or joining): what the chat
+// was doing in the last one - a line being typed, a drag, an ImGui field
+// holding the keys - is dropped at the next frame.
+static volatile LONG g_resetPending = 0;
+
+void Chat_ResetSession()
+{
+    InterlockedExchange(&g_resetPending, 1);
+}
+
+static void ResetNow()
+{
+    g_input.clear();
+    g_caret = 0;
+    g_focusIn = 0;
+    g_typing = false;
+    g_scroll = 0;
+    g_windowMoving = g_iconMoving = false;
+    if (ImGui::GetCurrentContext() && ImGui::GetActiveID()) ImGui::ClearActiveID();
+}
+
 void Chat_Frame()
 {
+    if (InterlockedExchange(&g_resetPending, 0)) ResetNow();
     if (!g_ready || !Presence_Active() || SyncBlock_IsActive()) {
         g_typing = false;
         g_focusIn = 0;

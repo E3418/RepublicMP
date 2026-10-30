@@ -7,6 +7,7 @@
 #include "../save/save_zip.h"
 #include "../ui/ui_log.h"
 #include "../ui/sync_block.h"
+#include "../ui/chat.h"
 #include "../third_party/miniz/miniz.h" // mz_crc32 for the build check
 #include "../transport/network.h"
 #include "../determinism/determinism.h"
@@ -362,7 +363,7 @@ static bool GetGameSaveDir(char* outPath, size_t outSize, const char* saveName)
 // and vehicles, and in lockstep the vehicle type table (commands name types by
 // their index in it) differs. After the version check both sides send their
 // list and their checker choice; the join is refused when the lists differ
-// and both players keep the checker on.
+// and the host keeps the checker on.
 
 struct SessionDlcs {
     char magic[8];  // "RPMPDLC"
@@ -420,7 +421,10 @@ static bool DlcsMatch(const SessionDlcs& mine, const SessionDlcs& theirs, bool h
     const char* playerList = host ? peer : mine.list;
     Logf("republicmp  SESSION: DLCs - host [%s], player [%s]", hostList[0] ? hostList : "none", playerList[0] ? playerList : "none");
     if (strcmp(mine.list, peer) == 0) return true;
-    bool refuse = mine.check && theirs.check;
+    // The host's checker decides, as for the content check after the load: a
+    // player with it off was let in with other DLCs and refused only once the
+    // shared world had loaded.
+    bool refuse = (host ? mine.check : theirs.check) != 0;
     _snprintf_s(why, whySize, _TRUNCATE,
                 "different DLCs: host [%s], player [%s]. %s",
                 hostList[0] ? hostList : "none", playerList[0] ? playerList : "none",
@@ -927,7 +931,12 @@ static int RunHostJoin(std::vector<Joiner>& js)
         HostStep(7, ready > 1 ? "Waiting for the players' lockstep connections" : "Waiting for the player's lockstep connection");
         joined = LockstepNet_HostAccept(ready, LOCKSTEP_CONNECT_TIMEOUT_MS, &g_disconnectRequested, JoinersStillThere, &js);
         if (!joined) {
-            if (!g_disconnectRequested) SetSessionError("the player's game link didn't arrive - TCP port %d must reach this PC", LOCKSTEP_PORT);
+            if (g_disconnectRequested) {
+            } else if (LockstepNet_LastRefusal()[0]) {
+                SetSessionError("join refused: %s", LockstepNet_LastRefusal());
+            } else {
+                SetSessionError("the player's game link didn't arrive - TCP port %d must reach this PC", LOCKSTEP_PORT);
+            }
             CloseLockstep();
         } else if (joined < ready) {
             SaveStatus("[HOST] %d of %d player(s) opened the lockstep connection - going on without the rest", joined, ready);
@@ -1557,6 +1566,11 @@ void SaveSync_StartHost(int gameMode)
     g_hostSide = Profile_GetInt("profile", "republics_side", 0) == 1 ? 1 : 0;
     g_resyncRequested = false;
     g_resyncing = false;
+    // A session this PC was a player in before showed its host, its ping and
+    // its re-sync countdown here while this host waited for players.
+    g_desyncSince = 0;
+    LockstepNet_ForgetSession();
+    Chat_ResetSession();
     g_sessionStartTick = GetTickCount64();
     SetSessionError("");
     SetState(SESSION_HOST_LISTENING);
@@ -1573,6 +1587,9 @@ void SaveSync_StartClient(const char* hostIp)
     g_isHost = false;
     g_gameMode = SESSION_MODE_COOP; // the host's hello says
     g_resyncing = false;
+    g_desyncSince = 0;
+    LockstepNet_ForgetSession();
+    Chat_ResetSession();
     g_sessionStartTick = GetTickCount64();
     SetSessionError("");
     SetState(SESSION_CLIENT_JOINING);

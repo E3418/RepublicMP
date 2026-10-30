@@ -57,6 +57,11 @@ bool LockstepNet_Join(const char* hostIp, DWORD timeoutMs, volatile bool* cancel
 // the session runs (the host sends none while it still waits for some).
 bool LockstepNet_SessionStarted();
 void LockstepNet_Close();
+// A new session (host or player) starts: the last session's player list and
+// desync are forgotten, so the page does not show them while it waits.
+void LockstepNet_ForgetSession();
+// Host: why the last accept refused a player ("" none) - the content check.
+const char* LockstepNet_LastRefusal();
 // Host: at least one player is connected; player: connected to the host.
 bool LockstepNet_IsConnected();
 // Commands/ticks wait until the host has finished accepting its roster.

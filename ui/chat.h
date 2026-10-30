@@ -23,6 +23,8 @@ bool Chat_Shown();
 void Chat_Frame();
 // Last frame: a line is being typed (the game gets no key).
 bool Chat_Typing();
+// A new session starts (any thread): the last one's typing, drag and focus go.
+void Chat_ResetSession();
 
 // Any thread (a receive thread): another player's line. player: the host's
 // number for it (0 the host).
