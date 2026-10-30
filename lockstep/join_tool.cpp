@@ -5,6 +5,7 @@
 #include "commands.h"
 #include "../world/view_list_scope.h"
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 typedef unsigned __int64 U64;
@@ -216,18 +217,42 @@ static int WriteOwn(U64 world, const OwnState& s)
     return cleared;
 }
 
-// The node the command names here: the same table, the node at its place with the same position.
-static const char* Decode(U64 world, const JoinMsg& m, U64& network, U64& node)
+// The node the command names here: the same table, the node with the same
+// position. The list's order can differ between PCs (one PC's own previews
+// add and take nodes), so a node not at the sender's place is looked for by
+// its position in the whole list; *moved is its place here then.
+static const char* Decode(U64 world, const JoinMsg& m, U64& network, U64& node, int* moved)
 {
     network = node = 0;
+    *moved = -1;
     U64 nets[MAX_NETWORKS] = {};
     unsigned n = Networks(world, nets);
     if (n != m.networks || m.table >= n || !nets[m.table]) return "the network table differs here";
     U64 b = 0;
     unsigned c = 0;
-    if (!List(nets[m.table] + NODES, b, c) || m.node >= c) return "the node's place is not in the network here";
-    U64 at = Q(b + (U64)m.node * 8);
-    if (!at || memcmp((const void*)(at + NODE_POS), m.point, 12) != 0) return "another node is at that place here";
+    if (!List(nets[m.table] + NODES, b, c)) return "the network's nodes are unreadable here";
+    U64 at = m.node < c ? Q(b + (U64)m.node * 8) : 0;
+    if (!at || memcmp((const void*)(at + NODE_POS), m.point, 12) != 0) {
+        at = 0;
+        float nearest = 1.0e30f;
+        for (unsigned i = 0; i < c; i++) {
+            U64 p = Q(b + (U64)i * 8);
+            if (!p) continue;
+            const float* pos = (const float*)(p + NODE_POS);
+            float dx = pos[0] - m.point[0], dy = pos[1] - m.point[1], dz = pos[2] - m.point[2];
+            float d = dx * dx + dy * dy + dz * dz;
+            if (d < nearest) nearest = d;
+            if (memcmp(pos, m.point, 12) != 0) continue;
+            if (at) return "two nodes are at that position here";
+            at = p;
+            *moved = (int)i;
+        }
+        if (!at) {
+            static char why[96];
+            _snprintf_s(why, sizeof(why), _TRUNCATE, "no node is at that position here (the nearest %.4f m)", sqrtf(nearest));
+            return why;
+        }
+    }
     network = nets[m.table];
     node = at;
     return nullptr;
@@ -274,9 +299,10 @@ bool JoinTool_ApplyCommand(const void* data, size_t size)
         if (!isfinite(f) || fabsf(f) > 1.0e6f) return false;
     if (!JoinTool_Ready()) return false;
     U64 world = (U64)World(), network = 0, node = 0;
+    int moved = -1;
     const char* why;
     __try {
-        why = Decode(world, m, network, node);
+        why = Decode(world, m, network, node, &moved);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         why = "a fault while resolving";
     }
@@ -285,6 +311,8 @@ bool JoinTool_ApplyCommand(const void* data, size_t size)
              m.point[1], m.point[2], why);
         return false;
     }
+    if (moved >= 0)
+        Logf("republicmp  JOIN: node #%u of network %u is #%d here (the node lists' order differs)", m.node, m.table, moved);
     unsigned nodes = 0, edges = 0, nodesAfter = 0, edgesAfter = 0;
     Counts(network, &nodes, &edges);
     static OwnState own;
