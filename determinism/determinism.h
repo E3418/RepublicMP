@@ -89,6 +89,8 @@ void Determinism_DumpMoneyTrace(unsigned long long tick);
 // The money trace's per-site part: what one construction site's update paid
 // in the tick being run (main thread, the tick's Late).
 void Determinism_NoteSitePayment(unsigned char* building, double rubles, double dollars);
+// Right before the same update: what it reads besides progress and materials.
+void Determinism_NoteSiteInputs(unsigned char* building, float step);
 
 // A command's own draws from the shared random stream, keyed by a fixed exe RVA
 // instead of the caller (a call from this DLL has another address on every PC).

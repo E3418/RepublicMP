@@ -38,7 +38,9 @@ DLL, 0.7.3 included).
   tick it logs a site whose progress jumps or that finishes well before its
   time in its construction update (with the stage's materials before and
   after), and every building object made and site destroyed while a world
-  runs - each with the call stack.
+  runs - each with the call stack. The money trace's per-site lines in a
+  desync report also list what the construction update read before it ran
+  (time step, workers, the site's flags and counters).
 - **Workshop sync** - at a join the host and the player exchange their
   Steam Workshop items. The join screen shows the steps (the DLCs, then the
   Workshop items); a player who lacks some of the host's, or has an older

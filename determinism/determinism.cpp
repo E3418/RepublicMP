@@ -1020,6 +1020,20 @@ static MoneyTick g_moneyTicks[MONEY_TRACE_TICKS];
 static unsigned long long g_moneyTickCount = 0;
 static bool g_moneyTrace = true;
 
+// The construction update's inputs besides progress and materials
+// (Determinism_NoteSiteInputs).
+struct SiteInputs {
+    float step;              // its time step (xmm2)
+    float ddc, df4, f898;    // site +ddc, +df4, +898
+    int workers, listC20;    // counts of the site's lists +bc0 and +c20
+    int i628, i62c;
+    unsigned flags;          // 1 +879, 2 +ea8, 4 +608, 8 +609, 16 +115a, 32 world +1004, 64 world +9
+    int nodeState;           // [+5d0]+12c, -1 without a node
+    int stages;
+    int world5bc;
+    long long worldCb88;
+};
+
 // What each construction site paid, tick by tick (see Determinism_NoteSitePayment).
 struct SitePayment {
     unsigned long long tick;
@@ -1027,7 +1041,10 @@ struct SitePayment {
     float x, z, progress;
     double rub, usd;
     double have, need; // the stage's materials: sums of entry +8 and +c
+    SiteInputs in;     // what the update read, before it ran
 };
+static BYTE* g_inputsSite = nullptr;
+static SiteInputs g_inputs;
 #define SITE_PAYMENTS 8192
 #define SITE_TICKS_DUMPED MONEY_TRACE_DUMPED
 // A site's construction stages: [+610] + stage * 0x21b8, the current one +634;
@@ -1049,10 +1066,45 @@ void Determinism_SetMoneyTrace(bool on)
     Profile_SetInt("debug", "money_trace", on ? 1 : 0);
 }
 
+// Before 159070 runs for a site (sim_patches): besides its progress and
+// materials, the fields it decides the step by. The two PCs' dumps then show
+// which of them differed the tick a site finished at once on one PC only.
+void Determinism_NoteSiteInputs(unsigned char* b, float step)
+{
+    g_inputsSite = nullptr;
+    if (!g_moneyTrace || !g_sessionRunning) return;
+    SiteInputs& in = g_inputs;
+    in = {};
+    in.step = step;
+    __try {
+        BYTE* world = g_exeBase + 0x9D4F10;
+        in.ddc = *(float*)(b + 0xDDC);
+        in.df4 = *(float*)(b + 0xDF4);
+        in.f898 = *(float*)(b + 0x898);
+        in.workers = (int)((*(BYTE**)(b + 0xBC8) - *(BYTE**)(b + 0xBC0)) / 8);
+        in.listC20 = (int)((*(BYTE**)(b + 0xC28) - *(BYTE**)(b + 0xC20)) / 8);
+        in.i628 = *(int*)(b + 0x628);
+        in.i62c = *(int*)(b + 0x62C);
+        in.flags = (b[0x879] ? 1 : 0) | (b[0xEA8] ? 2 : 0) | (b[0x608] ? 4 : 0) | (b[0x609] ? 8 : 0) |
+                   (b[0x115A] ? 16 : 0) | (world[0x1004] ? 32 : 0) | (world[9] ? 64 : 0);
+        BYTE* node = *(BYTE**)(b + 0x5D0);
+        in.nodeState = node && ((unsigned long long)node >> 32) ? *(int*)(node + 0x12C) : -1;
+        in.world5bc = *(int*)(world + 0x5BC);
+        in.worldCb88 = *(long long*)(world + 0xCB88);
+        BYTE* stages = *(BYTE**)(b + SITE_STAGES);
+        BYTE* stagesEnd = *(BYTE**)(b + SITE_STAGES + 8);
+        in.stages = stages && stagesEnd >= stages ? (int)((stagesEnd - stages) / STAGE_BYTES) : 0;
+        g_inputsSite = b;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
 void Determinism_NoteSitePayment(unsigned char* b, double rubles, double dollars)
 {
     if (!g_moneyTrace || !g_sessionRunning || (rubles == 0 && dollars == 0)) return;
     SitePayment p = {};
+    if (b == g_inputsSite) p.in = g_inputs;
+    g_inputsSite = nullptr;
     p.tick = g_stepCount + 1; // the tick being run (counted after its Late)
     p.rub = rubles;
     p.usd = dollars;
@@ -1171,9 +1223,13 @@ void Determinism_DumpMoneyTrace(unsigned long long tick)
     for (unsigned long long i = firstPay; i < g_sitePaymentCount; i++) {
         const SitePayment& p = g_sitePayments[i % SITE_PAYMENTS];
         if (p.tick > tick || p.tick + SITE_TICKS_DUMPED <= tick) continue;
+        const SiteInputs& in = p.in;
         Logf("republicmp  MONEY_TRACE: tick %llu site #%d (category %d at %.1f,%.1f) paid %.6f rubles %.6f dollars, progress %.9g,"
-             " stage %d: %d material(s) %.9g of %.9g",
-             p.tick, p.index, p.category, p.x, p.z, p.rub, p.usd, p.progress, p.stage, p.entries, p.have, p.need);
+             " stage %d: %d material(s) %.9g of %.9g | before: step %.9g ddc %.9g df4 %.9g 898 %.9g workers %d c20 %d"
+             " 628 %d 62c %d flags %X node %d stages %d world 5bc %d cb88 %llX",
+             p.tick, p.index, p.category, p.x, p.z, p.rub, p.usd, p.progress, p.stage, p.entries, p.have, p.need,
+             in.step, in.ddc, in.df4, in.f898, in.workers, in.listC20, in.i628, in.i62c, in.flags, in.nodeState, in.stages,
+             in.world5bc, (unsigned long long)in.worldCb88);
     }
     LogPrices();
 }
