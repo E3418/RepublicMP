@@ -15,7 +15,8 @@
 // difference there is the real test.
 //
 // Each player chooses for themselves (SETTINGS: Sync Workshop, remembered,
-// on by default); with it off the player is only told what differs.
+// on by default): a host with it off offers nothing, a player with it off
+// downloads nothing and is only told what differs; neither refuses a join.
 #pragma once
 
 #include "tesmio_plugin.h"

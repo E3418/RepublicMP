@@ -34,11 +34,12 @@ DLL, 0.7.3 included).
   the chosen ones - with the progress of each - and join, or join without
   them; what the player unticks or joins without is not offered again in
   that game run. The game takes the new items in at the shared world's
-  load, no restart. Items the player has
-  and the host has not, and the host's items Steam cannot download
-  (private, removed, not from Steam), are warned about. Each player chooses
-  on the SETTINGS tab (Sync Workshop, on by default); with it off the
-  player is told what differs, and refused when Check DLCs is on.
+  load, no restart. Items the player has and the host has not, and the
+  host's items Steam cannot download (private, removed, not from Steam),
+  are warned about. Each player chooses
+  on the SETTINGS tab (Sync Workshop, on by default): a host with it off
+  offers nothing, a player with it off downloads nothing and is only told
+  what differs - neither refuses a join.
   Protocol 55.
 - **Content check** - the lockstep hello carries the vehicle types and the
   build menu the game loaded (names in order). Other vehicle types - other

@@ -504,7 +504,8 @@ static void SettingsTab(float left, float right, float s)
     if (Choice("##wsOn", "ON", x + 115 * s, y + 30 * s, s, workshop)) Workshop_SetSync(true);
     if (Choice("##wsOff", "OFF", x + 335 * s, y + 30 * s, s, !workshop)) Workshop_SetSync(false);
     WrappedLabel(GAME_FONT_ARIAL, 20 * s, ImVec2(x, y + 70 * s), 470 * s, 2, kInk,
-                 workshop ? "When you join: download the host's Workshop items you lack." : "When you join: only tell what differs.");
+                 workshop ? "Offer your Workshop items when you host; get the host's when you join."
+                          : "Neither offer nor download Workshop items.");
     // The host's: a player's session follows the host.
     y += 130 * s;
     Label(GAME_FONT_ARIAL, 24 * s, ImVec2(x, y), kInk, "After a desync:");
