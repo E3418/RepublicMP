@@ -64,6 +64,9 @@ static const WatchedField kFields[] = {
     { "repair threshold",        0xFC8,  4, FIELD_BYTES, FOLLOW_NONE,          { 0x6C, -1 } },
     { "closed above temperature", 0xE00, 1, FIELD_BYTES, FOLLOW_NONE,          { 0x46, -1 } },
     { "water quality",           0x1340, 4, FIELD_BYTES, FOLLOW_NONE,          { 0x61, 0x62, -1 } },
+    // The construction window's priority arrows; the construction update
+    // reads it and clears it when the site finishes (159070). (by SoylentGreed)
+    { "construction priority",   0xE04,  4, FIELD_BYTES, FOLLOW_NONE,          { ANY, -1 } },
 };
 static const int kFieldCount = sizeof(kFields) / sizeof(kFields[0]);
 
@@ -524,7 +527,7 @@ static bool Apply(const BuildingSettingMsg& w)
 // after a click is logged as "FIELD_DIFF". Leave the building alone for a few
 // seconds first so its noise is learned, then click the button in question.
 
-#define FIELD_DIFF_BYTES 0x1600
+#define FIELD_DIFF_BYTES 0x1420 // a building's allocation (25bab0); 0x1600 read past its end
 #define FIELD_DIFF_MAX_RANGES 12
 
 struct FieldDiffState {
