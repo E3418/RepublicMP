@@ -48,6 +48,11 @@ refuses another DLL, 0.7.3 included).
   construction's window changed it on the clicking PC only and the games
   split at once. The priority is now a carried building setting (by
   SoylentGreed).
+- **Fix: a node join made on one PC only** - the join tool named its node
+  by its place in the network's node list and its position, but the list's
+  order can differ between PCs: the other PC refused the join ("another
+  node is at that place") and the networks split. A node not at the sender's
+  place is now looked for by its position in the whole list.
 - **The determinism probe starts the weather too** - it loaded its runs
   with whatever weather the game had (run 2 with run 1's), so a probe could
   differ on the weather alone; each run now starts it as a session's load does.
@@ -139,6 +144,8 @@ refuses another DLL, 0.7.3 included).
   each building, past the end of its 0x1420-byte object: at a page's end
   the read faulted (caught, but logged as a CRASH during loads).
 - **Debug: frame timing is remembered** like the other Debug switches.
+- **Desync reports name each vehicle's type** - a vehicle desync's records
+  list the type's name after the cargo, to see which models go their own way.
 
 **Known issues**
 
