@@ -2,24 +2,19 @@
 
 ## 0.7.4
 
-Protocol 56 - every player needs this build (the build check refuses another
-DLL, 0.7.3 included).
+Fewer desyncs in construction, Workshop sync at a join, and fewer ways to
+lose a session. Protocol 56 - every player needs this build (the build check
+refuses another DLL, 0.7.3 included).
 
-- **Fix: the game stopping for good in a session** - since 0.7.2 a held
-  frame (one without a tick) that found a vehicle pointer changed by the
-  drawing stopped that PC's ticks until the next load: the game stood still
-  there and the other PCs waited for it. The pointer is still never put back,
-  but the session goes on (a probe still fails on it), and the log line comes
-  a few times only instead of on every frame.
-- **Fix: slow ticks in cities with many offices** - the linked-office check
-  added in 0.7.2 searched all buildings and all vehicles for each office
-  vehicle, reading every field through a system call, on every job search of
-  a tick. It makes the same checks with one pass over the world's lists and
-  plain reads.
-- **Fix: waiting on a ~280 ms link** - the host ran at most 10 ticks ahead of
-  the slowest player, which a round trip near 290 ms already used up: every
-  PC waited now and then. It may now run 20 ahead (enough to ~620 ms); a
-  player still keeps only the lead its round trip needs.
+**Fewer desyncs**
+
+- **Fix: roads running off and sites finishing at once** (#55) - the
+  building pass hands each construction site's update a time step that is
+  always 0, but after a site finished in a tick the next sites of that tick
+  got another value in it, different on each PC: their progress jumped to 1
+  or to a huge negative number, the roads under construction were drawn
+  running off into the distance (one PC lost its display driver) and the
+  PCs differed. The step is made 0 again.
 - **Fix: a building's connections in a session** (#58) - a placed building
   got its road and footpath connections even with Ctrl held, and never its
   connections to the buildings around it: conveyors, factory connections,
@@ -28,21 +23,11 @@ DLL, 0.7.3 included).
   looks for the buildings to connect to around the spot - not among the
   buildings on one player's camera, so every PC lays the same ones. A
   building just off the screen can be connected too.
-- **The determinism probe starts the weather too** - it loaded its runs
-  with whatever weather the game had (run 2 with run 1's), so a probe could
-  differ on the weather alone; each run now starts it as a session's load does.
-- **Fix: roads running off and sites finishing at once** (#55) - the
-  building pass hands each construction site's update a time step that is
-  always 0, but after a site finished in a tick the next sites of that tick
-  got another value in it, different on each PC: their progress jumped to 1
-  or to a huge negative number, the roads under construction were drawn
-  running off into the distance (one PC lost its display driver) and the
-  PCs differed. The step is made 0 again.
 - **Fix: the cancel road tool on one PC only** - a click of a network's
   cancel tool (cancel road and the others) on a piece with nothing on it
   removed the whole piece at once, past the network commit the session
   takes: only the clicking PC lost it, and the PCs differed. That removal is
-  now a command, made on every PC on the same piece. Protocol 56.
+  now a command, made on every PC on the same piece.
 - **Fix: a new city named differently on each PC** - a building or road
   away from every city makes a new one with a random name from the PC's own
   name list, and the random numbers a command drew also depended on how
@@ -53,7 +38,71 @@ DLL, 0.7.3 included).
   names shown and the open windows, as the rename window does - the name had
   changed but the old one stayed on the screen. The log lists the cities
   that appear or are renamed (`CITIES`).
-- **Debug: frame timing is remembered** like the other Debug switches.
+- **The determinism probe starts the weather too** - it loaded its runs
+  with whatever weather the game had (run 2 with run 1's), so a probe could
+  differ on the weather alone; each run now starts it as a session's load does.
+
+**Joining**
+
+- **Workshop sync** - at a join the host and the player exchange their
+  Steam Workshop items. The join screen shows the steps (the DLCs, then the
+  Workshop items); a player who lacks some of the host's, or has an older
+  version, gets a screen with the host's items by name and size: download
+  the chosen ones - with the progress of each - and join, or join without
+  them; what the player unticks or joins without is not offered again in
+  that game run. The game takes the new items in at the shared world's
+  load, no restart. Items the player has and the host has not, and the
+  host's items Steam cannot download (private, removed, not from Steam),
+  are warned about. Each player chooses on
+  the SETTINGS tab (Sync Workshop, on by default): a host with it off
+  offers nothing, a player with it off downloads nothing and is only told
+  what differs - neither refuses a join.
+- **Content check** - the lockstep hello carries the vehicle types and the
+  build menu the game loaded (names in order). Other vehicle types - other
+  Workshop items, their load order or DLCs - refuse the player with the
+  reason when Check DLCs is on; a different build menu is only warned about.
+- **Fix: the game closing at "checking versions"** - the join listed the
+  DLC folders with names converted to the Windows code page, and one file or
+  folder in `media_soviet` whose name the code page cannot hold ended the
+  player's game at once, with nothing in the log. The names are now read as
+  they are; the host's cleanup of old join saves and the save packing read
+  them the same way.
+
+**Stability and speed**
+
+- **Fix: the game stopping for good in a session** - since 0.7.2 a held
+  frame (one without a tick) that found a vehicle pointer changed by the
+  drawing stopped that PC's ticks until the next load: the game stood still
+  there and the other PCs waited for it. The pointer is still never put back,
+  but the session goes on (a probe still fails on it), and the log line comes
+  a few times only instead of on every frame.
+- **Errors no longer close the game** - an error in a session thread, a
+  received message, a command, the Steam service, the probe, the save packing
+  or the plugin's per-frame work and overlay now stops only that piece and
+  writes a `GUARD` line to the log; a session that fails ends with a message
+  on the MULTIPLAYER page and the game goes on. The errors shown on that page
+  are written to the log too.
+- **Fix: slow ticks in cities with many offices** - the linked-office check
+  added in 0.7.2 searched all buildings and all vehicles for each office
+  vehicle, reading every field through a system call, on every job search of
+  a tick. It makes the same checks with one pass over the world's lists and
+  plain reads.
+- **Fix: waiting on a ~280 ms link** - the host ran at most 10 ticks ahead of
+  the slowest player, which a round trip near 290 ms already used up: every
+  PC waited now and then. It may now run 20 ahead (enough to ~620 ms); a
+  player still keeps only the lead its round trip needs.
+- **Faster frames in big cities** - putting back the buildings' camera fields
+  after this PC's view made a set of every building, about 9 times a frame;
+  it now looks up only the buildings that were on the camera.
+
+**Logs and debugging**
+
+- **Logs for a bulldozer that does nothing** - a click with no piece picked
+  under the cursor, a building demolition that could not become a command,
+  and a bulldozer on a network the mod does not carry are now said in the
+  log; before, a player's demolitions could do nothing without a trace. So
+  are a road change (upgrade, cancel) whose piece cannot be read and a
+  network tool's commit that runs outside the capture, on one PC only.
 - **Debug: construction site watch** - off by default: logs (`SITE_WATCH`)
   a construction site whose progress, stage or materials change outside a
   tick, with the frame's phase and thread, or become invalid - to find the
@@ -65,45 +114,15 @@ DLL, 0.7.3 included).
   runs - each with the call stack. The money trace's per-site lines in a
   desync report also list what the construction update read before it ran
   (time step, workers, the site's flags and counters).
-- **Workshop sync** - at a join the host and the player exchange their
-  Steam Workshop items. The join screen shows the steps (the DLCs, then the
-  Workshop items); a player who lacks some of the host's, or has an older
-  version, gets a screen with the host's items by name and size: download
-  the chosen ones - with the progress of each - and join, or join without
-  them; what the player unticks or joins without is not offered again in
-  that game run. The game takes the new items in at the shared world's
-  load, no restart. Items the player has and the host has not, and the
-  host's items Steam cannot download (private, removed, not from Steam),
-  are warned about. Each player chooses
-  on the SETTINGS tab (Sync Workshop, on by default): a host with it off
-  offers nothing, a player with it off downloads nothing and is only told
-  what differs - neither refuses a join.
-  Protocol 55.
-- **Content check** - the lockstep hello carries the vehicle types and the
-  build menu the game loaded (names in order). Other vehicle types - other
-  Workshop items, their load order or DLCs - refuse the player with the
-  reason when Check DLCs is on; a different build menu is only warned about.
-- **Logs for a bulldozer that does nothing** - a click with no piece picked
-  under the cursor, a building demolition that could not become a command,
-  and a bulldozer on a network the mod does not carry are now said in the
-  log; before, a player's demolitions could do nothing without a trace. So
-  are a road change (upgrade, cancel) whose piece cannot be read and a
-  network tool's commit that runs outside the capture, on one PC only.
-- **Faster frames in big cities** - putting back the buildings' camera fields
-  after this PC's view made a set of every building, about 9 times a frame;
-  it now looks up only the buildings that were on the camera.
-- **Fix: the game closing at "checking versions"** - the join listed the
-  DLC folders with names converted to the Windows code page, and one file or
-  folder in `media_soviet` whose name the code page cannot hold ended the
-  player's game at once, with nothing in the log. The names are now read as
-  they are; the host's cleanup of old join saves and the save packing read
-  them the same way.
-- **Errors no longer close the game** - an error in a session thread, a
-  received message, a command, the Steam service, the probe, the save packing
-  or the plugin's per-frame work and overlay now stops only that piece and
-  writes a `GUARD` line to the log; a session that fails ends with a message
-  on the MULTIPLAYER page and the game goes on. The errors shown on that page
-  are written to the log too.
+- **Debug: frame timing is remembered** like the other Debug switches.
+
+**Known issues**
+
+- A new city a player's building makes shows that player's own name on its
+  label until the label is clicked; the city itself has the host's name on
+  every PC (its card, the save).
+- Players with other Workshop items or DLCs play different worlds: keep
+  Check DLCs on, or use the Workshop sync to match the host.
 
 ## 0.7.3
 
