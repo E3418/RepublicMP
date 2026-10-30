@@ -129,6 +129,10 @@ extern "C" __declspec(dllexport) int TsmPluginStart(void)
     Logf("republicmp  group tool hook: %d%s", okGroupTool,
          okGroupTool ? "" : " - the group construction tools will NOT be synced");
 
+    bool okLinkSearch = Buildings_InstallLinkSearch();
+    Logf("republicmp  building link search: %d%s", okLinkSearch,
+         okLinkSearch ? "" : " - placed buildings get no conveyor, pipe or factory connections in a session");
+
     bool okCollision = InstallPlacementCollisionHook();
     Logf("republicmp  placement collision hook: %d%s", okCollision,
          okCollision ? "" : " - access roads may take a different route on each PC");

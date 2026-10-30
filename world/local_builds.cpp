@@ -7,6 +7,7 @@
 #include "view_list_scope.h"
 #include "demolish_hook.h" // DemolishHook_InDemolish
 #include "../ui/sync_block.h"
+#include "../game/input_block.h" // InputBlock_ButtonDown
 #include "../lockstep/commands.h"
 #include "../determinism/determinism.h"
 #include <stdio.h>
@@ -786,7 +787,8 @@ bool LocalBuilds_PlacementPress()
         msg.cursorRot = *(float*)(world + CURSOR_YAW_OFFSET);
         msg.param5 = (unsigned long long)g_placeParam5;
         msg.mirrored = *(unsigned char*)(world + MIRROR_EFFECTIVE_OFFSET) != 0;
-        msg.pickModes = (*(unsigned char*)(world + 0xF600) ? 1 : 0) | (*(unsigned char*)(world + 0xF698) ? 2 : 0);
+        msg.pickModes = (*(unsigned char*)(world + 0xF600) ? 1 : 0) | (*(unsigned char*)(world + 0xF698) ? 2 : 0) |
+                        (InputBlock_ButtonDown(BUILDING_NO_LINKS_BINDING) ? BUILDING_PICK_NO_LINKS : 0);
         strncpy_s(msg.typeName, typeName, _TRUNCATE);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;

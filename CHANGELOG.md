@@ -20,6 +20,14 @@ DLL, 0.7.3 included).
   the slowest player, which a round trip near 290 ms already used up: every
   PC waited now and then. It may now run 20 ahead (enough to ~620 ms); a
   player still keeps only the lead its round trip needs.
+- **Fix: a building's connections in a session** (#58) - a placed building
+  got its road and footpath connections even with Ctrl held, and never its
+  connections to the buildings around it: conveyors, factory connections,
+  pipes, footpaths and fences to their points. The placement now carries the
+  clicking player's Ctrl, which leaves them all out as in the base game, and
+  looks for the buildings to connect to around the spot - not among the
+  buildings on one player's camera, so every PC lays the same ones. A
+  building just off the screen can be connected too.
 - **The determinism probe starts the weather too** - it loaded its runs
   with whatever weather the game had (run 2 with run 1's), so a probe could
   differ on the weather alone; each run now starts it as a session's load does.
