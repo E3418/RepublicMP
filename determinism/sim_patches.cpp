@@ -1344,9 +1344,15 @@ static U64 DetSiteUpdate(U64 world, U64 building, float a3, U64 a4)
     // must not change that input. Ordered commands may still update sites.
     if (g_on && Determinism_IsActive() && !Commands_Applying() &&
         (GetCurrentThreadId() != g_simThread || !Determinism_InStepFrame())) return 0;
-    if (!g_on || !Determinism_GetMoneyTrace()) return original(world, building, a3, a4);
+    SiteWatch_UpdateBefore((BYTE*)building);
+    if (!g_on || !Determinism_GetMoneyTrace()) {
+        U64 r = original(world, building, a3, a4);
+        SiteWatch_UpdateAfter((BYTE*)building);
+        return r;
+    }
     double rub = *(double*)(world + 0x588), usd = *(double*)(world + 0x580);
     U64 r = original(world, building, a3, a4);
+    SiteWatch_UpdateAfter((BYTE*)building);
     Determinism_NoteSitePayment((BYTE*)building, *(double*)(world + 0x588) - rub, *(double*)(world + 0x580) - usd);
     return r;
 }

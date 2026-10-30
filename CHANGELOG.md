@@ -34,7 +34,11 @@ DLL, 0.7.3 included).
 - **Debug: construction site watch** - off by default: logs (`SITE_WATCH`)
   a construction site whose progress, stage or materials change outside a
   tick, with the frame's phase and thread, or become invalid - to find the
-  sites that go their own way on one PC with no command (#55).
+  sites that go their own way on one PC with no command (#55). Inside the
+  tick it logs a site whose progress jumps or that finishes well before its
+  time in its construction update (with the stage's materials before and
+  after), and every building object made and site destroyed while a world
+  runs - each with the call stack.
 - **Workshop sync** - at a join the host and the player exchange their
   Steam Workshop items. The join screen shows the steps (the DLCs, then the
   Workshop items); a player who lacks some of the host's, or has an older
