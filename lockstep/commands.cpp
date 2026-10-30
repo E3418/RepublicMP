@@ -416,7 +416,9 @@ static void Apply(const Command& c)
     MenusClosedScope menus;
     // A module that throws (core/guard.h) leaves this command not made here,
     // logged, instead of ending the game.
+    Determinism_CommandBegin(c.seq);
     Guard_Call(KindName(c.kind), [&] { ok = ApplyKind(c); });
+    Determinism_CommandEnd();
     InputBlock_EndNeutral();
     if (recipeAudit && recipeLoad == Determinism_WorldLoads())
         Guard_Call("the construction recipe report", [&] { StateHash_LogRecipeChanges(recipes, c.seq, c.afterTick); });
@@ -477,6 +479,7 @@ void Commands_Boundary(unsigned long long completed)
     // world and broadcasts to nobody; the player drains requests into no link.
     // Keep both queues intact until the transport has finished its setup.
     if ((g_session == COMMANDS_HOST || g_session == COMMANDS_PLAYER) && !LockstepNet_CommandsReady()) return;
+    if (g_session == COMMANDS_HOST || g_session == COMMANDS_PLAYER) Rename_LogCities();
     if (g_session == COMMANDS_PLAYER) {
         PlayerBoundary(completed);
         return;
@@ -492,6 +495,7 @@ void Commands_Boundary(unsigned long long completed)
         }
         return;
     }
+    if (g_session == COMMANDS_HOST) Rename_ShareNewCities();
     std::vector<Command> due;
     Lock();
     due.swap(g_outbox);
@@ -740,6 +744,7 @@ void Commands_SetSession(int role)
     g_replaying = false;
     g_seq = 0;
     g_session = role;
+    Rename_ResetCities();
     g_capturing = role != COMMANDS_OFF;
     Logf("republicmp  LOCKSTEP: commands %s", role == COMMANDS_HOST ? "ordered here (host)"
                                               : role == COMMANDS_PLAYER ? "ordered by the host" : "off");

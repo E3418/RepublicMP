@@ -43,6 +43,16 @@ DLL, 0.7.3 included).
   removed the whole piece at once, past the network commit the session
   takes: only the clicking PC lost it, and the PCs differed. That removal is
   now a command, made on every PC on the same piece. Protocol 56.
+- **Fix: a new city named differently on each PC** - a building or road
+  away from every city makes a new one with a random name from the PC's own
+  name list, and the random numbers a command drew also depended on how
+  often each PC had drawn at the same places before. Each command now draws
+  from a stream of its own number, the same on every PC, and the host gives
+  every city that appears its own name on every PC (a rename at the next
+  boundary). A shared rename of a city or a crossroad now also refreshes the
+  names shown and the open windows, as the rename window does - the name had
+  changed but the old one stayed on the screen. The log lists the cities
+  that appear or are renamed (`CITIES`).
 - **Debug: frame timing is remembered** like the other Debug switches.
 - **Debug: construction site watch** - off by default: logs (`SITE_WATCH`)
   a construction site whose progress, stage or materials change outside a

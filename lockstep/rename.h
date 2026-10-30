@@ -24,3 +24,13 @@ bool Rename_Capture(unsigned __int64 field, unsigned __int64 length, unsigned __
 
 // The command (lockstep/commands).
 bool Rename_ApplyCommand(const void* data, size_t size);
+
+// Host, at each boundary: the cities that appeared since the last one get the
+// host's names on every PC (the game draws a new city's name in the PC's own
+// language). Reset when a session starts.
+void Rename_ShareNewCities();
+void Rename_ResetCities();
+// Every PC, at each boundary: cities that appeared or were renamed, in the log.
+void Rename_LogCities();
+// The city labels drawn afresh after a shared city rename (see rename.cpp).
+bool Rename_InstallLabelRefresh();

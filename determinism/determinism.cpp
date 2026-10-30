@@ -122,6 +122,21 @@ static thread_local SiteCounters* t_sites = nullptr;
 static thread_local SiteCounters* t_privateSites = nullptr;
 static thread_local unsigned t_privateDepth = 0;
 static volatile LONG g_privateWorker = 0;
+// A command's stream: the counts start over for each command and its number
+// is in the seed. The counts of the shared stream are kept per site for the
+// whole session, so one call more on one PC (the building tool's city lookup
+// 330690 outside a command, say) gave a placement's new city another name
+// there.
+static thread_local SiteCounters* t_commandSites = nullptr;
+static thread_local bool t_inCommand = false;
+static thread_local unsigned long long t_commandSeq = 0;
+void Determinism_CommandBegin(unsigned long long seq)
+{
+    t_inCommand = true;
+    t_commandSeq = seq;
+    if (t_commandSites) t_commandSites->calls.clear();
+}
+void Determinism_CommandEnd() { t_inCommand = false; }
 void Determinism_PrivateBegin() { ++t_privateDepth; }
 void Determinism_PrivateEnd() { --t_privateDepth; }
 void Determinism_SetPrivateWorker(DWORD thread) { InterlockedExchange(&g_privateWorker, (LONG)thread); }
@@ -141,7 +156,8 @@ static int SiteRand(void* returnAddress)
     // Held presentation and UI can call the same native routines as a tick.
     // Separate counters keep any number of local frames out of that stream.
     bool privateDraw = t_privateDepth || GetCurrentThreadId() == (DWORD)g_privateWorker;
-    SiteCounters*& counters = privateDraw ? t_privateSites : t_sites;
+    bool command = t_inCommand && !privateDraw;
+    SiteCounters*& counters = command ? t_commandSites : privateDraw ? t_privateSites : t_sites;
     if (!counters) counters = new SiteCounters{ 0, {} };
     LONG epoch = g_epoch;
     if (counters->epoch != epoch) {
@@ -149,7 +165,8 @@ static int SiteRand(void* returnAddress)
         counters->epoch = epoch;
     }
     unsigned n = counters->calls[site]++;
-    unsigned long long x = SplitMix(g_seed ^ ((unsigned long long)site << 32) ^ n);
+    unsigned long long seed = command ? g_seed ^ SplitMix(t_commandSeq) : g_seed;
+    unsigned long long x = SplitMix(seed ^ ((unsigned long long)site << 32) ^ n);
     int value = (int)((x >> 33) & 0x7FFF);
     if (!privateDraw && g_inEarly && !IsPresentationSite(site)) {
         if (GetCurrentThreadId() == g_simThread) {

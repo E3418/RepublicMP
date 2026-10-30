@@ -97,6 +97,11 @@ void Determinism_NoteSiteInputs(unsigned char* building, float step);
 // Same arithmetic as rand() and C3DRandom_Float.
 int Determinism_CommandRand(unsigned site);
 float Determinism_CommandRandFloat(unsigned site, float a, float b);
+// Around one command made at a boundary (lockstep/commands): the game's draws
+// come from a stream of that command alone (its number), the same on every
+// PC whatever each one drew before at the same sites.
+void Determinism_CommandBegin(unsigned long long seq);
+void Determinism_CommandEnd();
 
 // Probe control (UI). steps: complete ticks per run, interval: ticks between hashes.
 // Fuzz: run 2 inserts held frames; both runs change speed every 300 ticks.
