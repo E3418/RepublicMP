@@ -298,6 +298,11 @@ static BYTE* HookedMake(BYTE* memory)
 static unsigned long long HookedFree(BYTE* building)
 {
     SiteState s;
+    if (Watching() && building) {
+        // A new object at the same address is another site, not this one changed.
+        LockScope lock(g_watchLock);
+        g_sites.erase(building);
+    }
     if (Watching() && building && ReadSite(building, s)) {
         LockScope lock(g_watchLock);
         if (LineAllowed()) {
