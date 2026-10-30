@@ -21,6 +21,7 @@
 #define ENTRY_BYTES 16           // a stage's material: definition, have +8, need +c
 #define LOG_LIMIT 400            // lines per world load
 #define JUMP 0.25f               // progress gained at once that is logged in a tick
+#define DROP 0.05f               // progress lost at once that is logged in a tick
 #define EARLY_END 0.97f          // a site finished from below this is logged
 #define DETAIL_ENTRIES 8         // materials listed for a jump
 #define STACK_FRAMES 12
@@ -157,6 +158,7 @@ static void Compare(const char* phase, bool tick)
             if (!tick) Line(phase, "changed outside the tick", b, &w, s);
             else if (Invalid(s) && !Invalid(w)) Line(phase, "became invalid", b, &w, s);
             else if (AsFloat(s.progress) - AsFloat(w.progress) > JUMP) Line(phase, "jumped", b, &w, s);
+            else if (AsFloat(w.progress) - AsFloat(s.progress) > DROP) Line(phase, "dropped", b, &w, s);
             else if (s.stage < w.stage && s.records == w.records) Line(phase, "went back a stage", b, &w, s);
         }
         if (!tick)

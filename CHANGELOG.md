@@ -35,7 +35,8 @@ DLL, 0.7.3 included).
   a construction site whose progress, stage or materials change outside a
   tick, with the frame's phase and thread, or become invalid - to find the
   sites that go their own way on one PC with no command (#55). Inside the
-  tick it logs a site whose progress jumps or that finishes well before its
+  tick it logs a site whose progress jumps or drops (also around the
+  tick's building link and connection checks), or that finishes well before its
   time in its construction update (with the stage's materials before and
   after), and every building object made and site destroyed while a world
   runs - each with the call stack. The money trace's per-site lines in a

@@ -1181,15 +1181,24 @@ static void DetRoadWeather(void* world, unsigned long long init)
 // frames looked harmless; after a construction command the PC with more
 // held frames worked the queues off first. On the save path (42cd57) 12fd80
 // stays native.
+// The construction site watch looks at the sites around both: a site whose
+// progress went wrong a few ticks after a road command (#55) is put on the
+// routine that did it.
 static void DetBuildingLinks(void* world, unsigned long long all)
 {
-    if (!Determinism_IsActive() || Determinism_IsStepFrame())
+    if (!Determinism_IsActive() || Determinism_IsStepFrame()) {
+        SiteWatch_Check("Late, before the building links", true);
         ((void (*)(void*, unsigned long long))(g_exeBase + 0x12FD80))(world, all);
+        SiteWatch_Check("the building links (12fd80)", true);
+    }
 }
 static void DetConnectionChecks(void* world)
 {
-    if (!Determinism_IsActive() || Determinism_IsStepFrame())
+    if (!Determinism_IsActive() || Determinism_IsStepFrame()) {
+        SiteWatch_Check("Late, before the connection checks", true);
         ((void (*)(void*))(g_exeBase + 0x12EC40))(world);
+        SiteWatch_Check("the connection checks (12ec40)", true);
+    }
 }
 // The ground-paint queue world+130d0 (filled by 40eaa0 when roads and
 // buildings are built) is drained by 40ece0 at 3155f4 on every frame too: a
