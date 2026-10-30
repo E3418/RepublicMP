@@ -179,6 +179,8 @@
     <ClCompile Include="core\profile.cpp" />
     <ClCompile Include="core\frame_timing.cpp" />
     <ClCompile Include="determinism\site_watch.cpp" />
+    <ClCompile Include="session\workshop.cpp" />
+    <ClCompile Include="ui\workshop_panel.cpp" />
     <ClCompile Include="world\local_builds.cpp" />
     <ClCompile Include="game\present_hook.cpp" />
     <ClCompile Include="session\game_speed.cpp" />
@@ -331,6 +333,8 @@
     <ClInclude Include="core\frame_timing.h" />
     <ClInclude Include="core\guard.h" />
     <ClInclude Include="determinism\site_watch.h" />
+    <ClInclude Include="session\workshop.h" />
+    <ClInclude Include="ui\workshop_panel.h" />
     <ClInclude Include="world\buildings.h" />
     <ClInclude Include="world\networks.h" />
     <ClInclude Include="world\build_mode.h" />

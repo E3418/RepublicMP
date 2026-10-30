@@ -26,6 +26,7 @@
 #include "../save/save_zip.h"
 #include "../transport/network.h"
 #include "../session/save_sync.h"
+#include "../session/workshop.h"
 #include "../world/buildings.h"
 #include "../world/networks.h"
 #include "../lockstep/building_settings.h"
@@ -65,6 +66,7 @@ extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPlugi
     SaveZip_Bind(host);
     Network_Bind(host);
     SaveSync_Bind(host);
+    Workshop_Bind(host);
     Buildings_Bind(host);
     Networks_Bind(host);
     ImGuiHook_Bind(host);

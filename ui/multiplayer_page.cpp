@@ -20,6 +20,7 @@
 #include "../lockstep/presence.h"
 #include "chat.h"
 #include "sync_block.h"
+#include "../session/workshop.h"
 #include "imgui.h"
 #include <misc/cpp/imgui_stdlib.h>
 #include <cstdio>
@@ -496,6 +497,14 @@ static void SettingsTab(float left, float right, float s)
     if (Choice("##dlcOff", "OFF", x + 335 * s, y + 30 * s, s, !dlcCheck)) SaveSync_SetDlcCheck(false);
     WrappedLabel(GAME_FONT_ARIAL, 20 * s, ImVec2(x, y + 70 * s), 470 * s, 1, kInk,
                  dlcCheck ? "Refuse players with different DLCs." : "Allow players with different DLCs.");
+    // This player's own choice (session/workshop).
+    y += 130 * s;
+    Label(GAME_FONT_ARIAL, 24 * s, ImVec2(x, y), kInk, "Sync Workshop:");
+    bool workshop = Workshop_GetSync();
+    if (Choice("##wsOn", "ON", x + 115 * s, y + 30 * s, s, workshop)) Workshop_SetSync(true);
+    if (Choice("##wsOff", "OFF", x + 335 * s, y + 30 * s, s, !workshop)) Workshop_SetSync(false);
+    WrappedLabel(GAME_FONT_ARIAL, 20 * s, ImVec2(x, y + 70 * s), 470 * s, 2, kInk,
+                 workshop ? "When you join: download the host's Workshop items you lack." : "When you join: only tell what differs.");
     // The host's: a player's session follows the host.
     y += 130 * s;
     Label(GAME_FONT_ARIAL, 24 * s, ImVec2(x, y), kInk, "After a desync:");

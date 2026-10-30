@@ -2,7 +2,7 @@
 
 ## 0.7.4
 
-Protocol 54 - every player needs this build (the build check refuses another
+Protocol 55 - every player needs this build (the build check refuses another
 DLL, 0.7.3 included).
 
 - **Fix: the game stopping for good in a session** - since 0.7.2 a held
@@ -27,6 +27,23 @@ DLL, 0.7.3 included).
   a construction site whose progress, stage or materials change outside a
   tick, with the frame's phase and thread, or become invalid - to find the
   sites that go their own way on one PC with no command (#55).
+- **Workshop sync** - at a join the host and the player exchange their
+  Steam Workshop items. The join screen shows the steps (the DLCs, then the
+  Workshop items); a player who lacks some of the host's, or has an older
+  version, gets a screen with the host's items by name and size: download
+  the chosen ones - with the progress of each - and join, or join without
+  them; what the player unticks or joins without is not offered again in
+  that game run. The game takes the new items in at the shared world's
+  load, no restart. Items the player has
+  and the host has not, and the host's items Steam cannot download
+  (private, removed, not from Steam), are warned about. Each player chooses
+  on the SETTINGS tab (Sync Workshop, on by default); with it off the
+  player is told what differs, and refused when Check DLCs is on.
+  Protocol 55.
+- **Content check** - the lockstep hello carries the vehicle types and the
+  build menu the game loaded (names in order). Other vehicle types - other
+  Workshop items, their load order or DLCs - refuse the player with the
+  reason when Check DLCs is on; a different build menu is only warned about.
 - **Logs for a bulldozer that does nothing** - a click with no piece picked
   under the cursor, a building demolition that could not become a command,
   and a bulldozer on a network the mod does not carry are now said in the

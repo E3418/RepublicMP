@@ -8,6 +8,8 @@
 #include "../determinism/citizen_trace.h"
 #include "../transport/network.h"
 #include "../core/guard.h"
+#include "../session/workshop.h"
+#include "../session/save_sync.h"
 #include <deque>
 #include <vector>
 #include <string.h>
@@ -45,7 +47,7 @@ struct LsCommandHead { unsigned long long afterTick; int kind; int player; }; //
 struct LsHash { unsigned long long tick; StateSummary s; };
 struct LsState { int paused; int speed; };
 struct LsPing { unsigned long long sentMs; int reply; };
-struct LsHello { char magic[8]; char nick[PROFILE_NICK_BYTES]; };
+struct LsHello { char magic[8]; char nick[PROFILE_NICK_BYTES]; WorkshopContent content; }; // content: session/workshop
 struct LsPlayerEntry { char nick[PROFILE_NICK_BYTES]; int rttMs; unsigned behind; unsigned char host, self, pad[2]; };
 struct LsPlayers { unsigned count; LsPlayerEntry e[PROFILE_MAX_PLAYERS]; };
 struct LsMark { int player; int kind; float pos[3]; char nick[PROFILE_NICK_BYTES]; };
@@ -571,7 +573,33 @@ int LockstepNet_HostAccept(int expected, DWORD timeoutMs, volatile bool* cancel,
         NetworkSetTimeouts(s, 0);
         char ip[48];
         NetworkPeerAddress(s, ip, sizeof(ip));
+        // The loaded content (session/workshop): other Workshop items, their
+        // load order or DLCs give other type numbers, which commands use.
+        // The vehicle types refuse (commands name them by number); the build
+        // menu only warns until it is known to match on PCs that agree.
+        char differs[256] = "";
+        WorkshopContent mine = Workshop_Content();
+        bool vehiclesDiffer = mine.vehicles != hello.content.vehicles || mine.vehicleHash != hello.content.vehicleHash;
+        if (memcmp(&mine, &hello.content, sizeof(mine)) != 0)
+            _snprintf_s(differs, sizeof(differs), _TRUNCATE,
+                        "the games' content differs (vehicle types %u here, %u there; build menu %u here, %u there) - "
+                        "the Workshop items, their load order or the DLCs",
+                        mine.vehicles, hello.content.vehicles, mine.buildings, hello.content.buildings);
+        if (differs[0]) {
+            Logf("republicmp  LOCKSTEP: %s: %s (hashes %08X/%08X here, %08X/%08X there)", hello.nick, differs, mine.vehicleHash,
+                 mine.buildingHash, hello.content.vehicleHash, hello.content.buildingHash);
+            if (vehiclesDiffer && SaveSync_GetDlcCheck()) {
+                // The player shows why, then its join ends.
+                LsHeader h = { LS_DESYNC, (unsigned)strlen(differs) };
+                NetworkSendExact(s, &h, sizeof(h));
+                NetworkSendExact(s, differs, h.size);
+                Logf("republicmp  LOCKSTEP: %s refused - set Check DLCs to OFF to play anyway", hello.nick);
+                NetworkClose(s);
+                continue;
+            }
+        }
         StartPeer(s, hello.nick, ip);
+        if (differs[0]) Send(g_peers[g_peerSlots - 1], LS_DESYNC, differs, strlen(differs)); // playing anyway: said on its page
         Logf("republicmp  LOCKSTEP: %s (%s) connected - %d of %d", hello.nick, ip, g_peerSlots, expected);
     }
     NetworkClose(listener);
@@ -610,6 +638,7 @@ bool LockstepNet_Join(const char* hostIp, DWORD timeoutMs, volatile bool* cancel
             first.h = { LS_HELLO, sizeof(LsHello) };
             memcpy(first.hello.magic, kHelloMagic, sizeof(kHelloMagic));
             strncpy_s(first.hello.nick, Profile_GetNick(), _TRUNCATE);
+            first.hello.content = Workshop_Content();
             if (!NetworkSendExact(s, &first, sizeof(first))) {
                 NetworkClose(s);
                 return false;

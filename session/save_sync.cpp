@@ -14,6 +14,7 @@
 #include "../lockstep/lockstep_net.h"
 #include "../core/profile.h"
 #include "../core/guard.h"
+#include "workshop.h"
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -438,6 +439,91 @@ static bool DlcsMatch(const SessionDlcs& mine, const SessionDlcs& theirs, bool h
 // After the DLC check both sides send the name their player chose (core/
 // profile; "Player" when none): only for showing who is who.
 
+// ---------------------------------------------------------------------------
+// Workshop items (session/workshop)
+// ---------------------------------------------------------------------------
+//
+// After the DLCs both send their Steam Workshop list; the player compares,
+// tells the host whether it goes on (and why not), and downloads what it
+// lacks when its Sync Workshop is on.
+
+struct SessionWorkshopHead {
+    char magic[8];  // "RPMPWSL"
+    unsigned count; // WorkshopItem entries that follow
+    unsigned steam; // the list could be read
+};
+struct SessionWorkshopVerdict {
+    char magic[8]; // "RPMPWSV"
+    int ok;        // the player goes on
+    char why[248]; // why not, or what it was warned about
+};
+
+static bool SendWorkshop(NetLink sock, const std::vector<WorkshopItem>& items, bool steam)
+{
+    SessionWorkshopHead h = {};
+    memcpy(h.magic, "RPMPWSL", 8);
+    h.count = (unsigned)items.size();
+    h.steam = steam ? 1 : 0;
+    return NetworkSendExact(sock, &h, sizeof(h)) &&
+           (items.empty() || NetworkSendExact(sock, items.data(), items.size() * sizeof(WorkshopItem)));
+}
+
+static bool RecvWorkshop(NetLink sock, std::vector<WorkshopItem>& items, bool* steam)
+{
+    SessionWorkshopHead h = {};
+    if (!NetworkRecvExact(sock, &h, sizeof(h)) || memcmp(h.magic, "RPMPWSL", 8) != 0 || h.count > 20000) return false;
+    items.resize(h.count);
+    *steam = h.steam != 0;
+    return items.empty() || NetworkRecvExact(sock, items.data(), items.size() * sizeof(WorkshopItem));
+}
+
+// Player: whether to go on with the host's items. With Sync Workshop on,
+// what it lacks opens the choice screen (ui/workshop_panel) and this join
+// ends; the screen downloads and joins again, or joins again without them.
+static bool WorkshopVerdict(const std::vector<WorkshopItem>& host, const std::vector<WorkshopItem>& mine, bool steam,
+                            char* why, size_t whySize)
+{
+    why[0] = 0;
+    if (!steam) {
+        _snprintf_s(why, whySize, _TRUNCATE, "Workshop items not compared (no Steam Workshop on one side)");
+        return true;
+    }
+    WorkshopDiff d = Workshop_Compare(host, mine);
+    Logf("republicmp  SESSION: Workshop - host %zu item(s), player %zu; missing %zu, older %zu, extra %zu", host.size(),
+         mine.size(), d.missing.size(), d.older.size(), d.extra.size());
+    if (!d.missing.empty()) Logf("republicmp  SESSION:   missing: %s", Workshop_Ids(Workshop_IdsOf(d.missing), 200).c_str());
+    if (!d.older.empty()) Logf("republicmp  SESSION:   older here: %s", Workshop_Ids(Workshop_IdsOf(d.older), 200).c_str());
+    if (!d.extra.empty()) Logf("republicmp  SESSION:   extra here (the host has not): %s", Workshop_Ids(d.extra, 200).c_str());
+    // What the player declined on the screen is not offered again.
+    std::vector<WorkshopItem> need;
+    size_t declined = 0;
+    for (const std::vector<WorkshopItem>* list : { &d.missing, &d.older })
+        for (const WorkshopItem& i : *list) {
+            if (Workshop_Declined(i.id)) declined++;
+            else need.push_back(i);
+        }
+    size_t lacking = need.size();
+    if (!lacking && declined) {
+        _snprintf_s(why, whySize, _TRUNCATE, "joined without %zu of the host's Workshop item(s) (the player's choice)", declined);
+        return true;
+    }
+    if (lacking && Workshop_GetSync()) {
+        Workshop_Offer(need, d.extra.size());
+        _snprintf_s(why, whySize, _TRUNCATE, "choosing %zu Workshop item(s) of the host to download", need.size());
+        return false;
+    }
+    if (lacking) {
+        bool refuse = SaveSync_GetDlcCheck();
+        _snprintf_s(why, whySize, _TRUNCATE, "%zu Workshop item(s) of the host missing or older here (Sync Workshop is off)%s: %s",
+                    lacking, refuse ? "" : " - playing anyway", Workshop_Ids(Workshop_IdsOf(need), 5).c_str());
+        return !refuse;
+    }
+    if (!d.extra.empty())
+        _snprintf_s(why, whySize, _TRUNCATE, "%zu Workshop item(s) here the host has not - they may change the content: %s",
+                    d.extra.size(), Workshop_Ids(d.extra, 5).c_str());
+    return true;
+}
+
 struct SessionNick {
     char magic[8]; // "RPMPNIK"
     char nick[PROFILE_NICK_BYTES];
@@ -614,6 +700,21 @@ static bool CheckJoiner(Joiner& j)
         SaveStatus("[HOST] %s: join refused: %s", j.ip, dlcWhy);
         return false;
     }
+    std::vector<WorkshopItem> myItems, theirItems;
+    bool mySteam = Workshop_List(myItems), theirSteam = false;
+    SessionWorkshopVerdict verdict = {};
+    if (!SendWorkshop(j.sock, myItems, mySteam) || !RecvWorkshop(j.sock, theirItems, &theirSteam) ||
+        !NetworkRecvExact(j.sock, &verdict, sizeof(verdict)) || memcmp(verdict.magic, "RPMPWSV", 8) != 0) {
+        SetSessionError("%s dropped during the Workshop check", j.ip);
+        return false;
+    }
+    verdict.why[sizeof(verdict.why) - 1] = 0;
+    if (!verdict.ok) {
+        SetSessionError("join refused: %s", verdict.why);
+        SaveStatus("[HOST] %s: join refused: %s", j.ip, verdict.why);
+        return false;
+    }
+    if (verdict.why[0]) SaveStatus("[HOST] %s: %s", j.ip, verdict.why);
     if (!ExchangeNicks(j.sock, j.nick, sizeof(j.nick))) {
         SetSessionError("%s dropped during the name exchange", j.ip);
         return false;
@@ -1165,6 +1266,7 @@ static bool RunClientJoin(bool rejoin)
         SaveStatus("[CLIENT] the host plays %s", g_gameMode != SESSION_MODE_REPUBLICS ? "co-op"
                                                  : g_gameVariant == SESSION_REPUBLICS_EQUAL ? "Republics, equal"
                                                                                             : "Republics, East vs West");
+        SyncBlock_SetStep(1, JOIN_STEPS, "Checking the DLCs", -1);
         SessionDlcs myDlcs, theirDlcs;
         MakeDlcs(&myDlcs);
         if (!NetworkSendExact(sock, &myDlcs, sizeof(myDlcs)) || !NetworkRecvExact(sock, &theirDlcs, sizeof(theirDlcs)) ||
@@ -1178,6 +1280,28 @@ static bool RunClientJoin(bool rejoin)
             SaveStatus("[CLIENT] join refused: %s", dlcWhy);
             break;
         }
+        SyncBlock_SetStep(1, JOIN_STEPS, "Checking the Workshop items", -1);
+        std::vector<WorkshopItem> myItems, hostItems;
+        bool mySteam = Workshop_List(myItems), hostSteam = false;
+        if (!SendWorkshop(sock, myItems, mySteam) || !RecvWorkshop(sock, hostItems, &hostSteam)) {
+            SetSessionError("the host dropped during the Workshop check");
+            break;
+        }
+        SessionWorkshopVerdict verdict = {};
+        memcpy(verdict.magic, "RPMPWSV", 8);
+        verdict.ok = WorkshopVerdict(hostItems, myItems, mySteam && hostSteam, verdict.why, sizeof(verdict.why)) ? 1 : 0;
+        bool sent = NetworkSendExact(sock, &verdict, sizeof(verdict));
+        if (!verdict.ok) {
+            // The choice screen says what to do; nothing on the page.
+            if (Workshop_Phase() == WORKSHOP_CLOSED) SetSessionError("%s", verdict.why);
+            SaveStatus("[CLIENT] %s", verdict.why);
+            break;
+        }
+        if (!sent) {
+            SetSessionError("the host dropped during the Workshop check");
+            break;
+        }
+        if (verdict.why[0]) SaveStatus("[CLIENT] %s", verdict.why);
         char hostNick[PROFILE_NICK_BYTES];
         if (!ExchangeNicks(sock, hostNick, sizeof(hostNick))) {
             SetSessionError("the host dropped during the name exchange");
@@ -1289,7 +1413,9 @@ static bool RunClientJoin(bool rejoin)
             Sleep(100);
         }
         if (!LockstepNet_SessionStarted()) {
-            if (!g_disconnectRequested) SetSessionError("the host dropped while waiting for the other players");
+            // The host may have said why (the games' content differs).
+            if (!g_disconnectRequested)
+                SetSessionError("%s", LockstepNet_Desync()[0] ? LockstepNet_Desync() : "the host dropped while waiting for the other players");
             break;
         }
         joined = true;

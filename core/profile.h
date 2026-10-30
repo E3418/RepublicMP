@@ -10,6 +10,7 @@
 //                          host included (2..4); a host that is full stops
 //                          listening
 //             dlc_check    refuse a join when the DLCs differ (session/save_sync)
+//             workshop_sync download the host's Workshop items at a join (session/workshop)
 //   [overlay] show_cursors, ping_key (a virtual-key code; lockstep/presence)
 //   [debug]   money_trace (determinism), field_diff (lockstep/building_settings),
 //             terrain_log (world/terrain_hook),

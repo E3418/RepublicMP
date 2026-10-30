@@ -84,6 +84,12 @@
     <ClCompile Include="determinism\site_watch.cpp">
       <Filter>determinism</Filter>
     </ClCompile>
+    <ClCompile Include="session\workshop.cpp">
+      <Filter>session</Filter>
+    </ClCompile>
+    <ClCompile Include="ui\workshop_panel.cpp">
+      <Filter>ui</Filter>
+    </ClCompile>
     <ClCompile Include="world\local_builds.cpp">
       <Filter>world</Filter>
     </ClCompile>
@@ -367,6 +373,12 @@
     </ClInclude>
     <ClInclude Include="determinism\site_watch.h">
       <Filter>determinism</Filter>
+    </ClInclude>
+    <ClInclude Include="session\workshop.h">
+      <Filter>session</Filter>
+    </ClInclude>
+    <ClInclude Include="ui\workshop_panel.h">
+      <Filter>ui</Filter>
     </ClInclude>
     <ClInclude Include="game\present_hook.h">
       <Filter>game</Filter>
