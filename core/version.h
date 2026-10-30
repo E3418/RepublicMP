@@ -10,4 +10,4 @@
 #pragma once
 
 #define REPUBLICMP_VERSION "0.7.4"
-#define REPUBLICMP_PROTOCOL 55
+#define REPUBLICMP_PROTOCOL 56

@@ -30,6 +30,7 @@
 #include "office_selection.h"
 #include "new_city.h"
 #include "join_tool.h"
+#include "cancel_tool.h"
 #include "presence.h"
 #include "../core/guard.h"
 #include <vector>
@@ -58,6 +59,7 @@ void Commands_Bind(const TsmHost* host)
     OfficeSelection_Bind(host);
     NewCity_Bind(host);
     JoinTool_Bind(host);
+    CancelTool_Bind(host);
     Presence_Bind(host);
 }
 
@@ -160,6 +162,7 @@ static const char* KindName(int kind)
     case LS_CMD_OFFICE_SELECTION: return "office selection";
     case LS_CMD_NEW_CITY: return "new city";
     case LS_CMD_JOIN: return "join";
+    case LS_CMD_NET_CANCEL: return "network cancel";
     }
     return "?";
 }
@@ -374,6 +377,9 @@ static bool ApplyKind(const Command& c)
         break;
     case LS_CMD_JOIN:
         ok = JoinTool_ApplyCommand(p, n);
+        break;
+    case LS_CMD_NET_CANCEL:
+        ok = CancelTool_ApplyCommand(p, n);
         break;
     }
     return ok;

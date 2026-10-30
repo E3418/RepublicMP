@@ -30,6 +30,7 @@
 #include "../world/buildings.h"
 #include "../world/networks.h"
 #include "../lockstep/building_settings.h"
+#include "../lockstep/cancel_tool.h"
 
 #include "../game/world.h"
 #include "../game/camera.h"
@@ -132,6 +133,9 @@ extern "C" __declspec(dllexport) int TsmPluginStart(void)
     bool okSiteWatch = SiteWatch_Install();
     Logf("republicmp  site watch hooks: %d%s", okSiteWatch,
          okSiteWatch ? "" : " - the construction site watch does not see sites made or destroyed");
+
+    bool okCancel = CancelTool_Install();
+    Logf("republicmp  network cancel tool: %d%s", okCancel, okCancel ? "" : " - the cancel tools are made on one PC only");
 
     bool okLinkSearch = Buildings_InstallLinkSearch();
     Logf("republicmp  building link search: %d%s", okLinkSearch,

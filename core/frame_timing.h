@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Frame timing: a diagnostic (off by default, the Debug window sets it) that
+// Frame timing: a diagnostic (off by default, the Debug window sets it,
+// remembered) that
 // logs every 2 s where a frame's time went - the game's phases with the hooks
 // around them, and this plugin's own work inside them - to find what makes a
 // PC slow in a session.

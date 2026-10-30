@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // See frame_timing.h.
 #include "frame_timing.h"
+#include "profile.h"
 #include <stdio.h>
 
 #define LOG_MS 2000
@@ -27,9 +28,12 @@ static const char* const kSlotNames[FRAME_SLOT_COUNT] = {
     "site draw", "present ours", "overlay", "swap",
 };
 
+static void Start(bool on);
+
 void FrameTiming_Bind(const TsmHost* host)
 {
     TsmBind(host);
+    if (Profile_GetInt("debug", "frame_timing", 0) != 0) Start(true);
 }
 
 bool FrameTiming_GetOn()
@@ -38,6 +42,12 @@ bool FrameTiming_GetOn()
 }
 
 void FrameTiming_SetOn(bool on)
+{
+    Start(on);
+    Profile_SetInt("debug", "frame_timing", on ? 1 : 0);
+}
+
+static void Start(bool on)
 {
     if (!g_frequency.QuadPart) QueryPerformanceFrequency(&g_frequency);
     for (int i = 0; i < FRAME_SLOT_COUNT; i++) {

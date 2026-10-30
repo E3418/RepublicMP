@@ -2,7 +2,7 @@
 
 ## 0.7.4
 
-Protocol 55 - every player needs this build (the build check refuses another
+Protocol 56 - every player needs this build (the build check refuses another
 DLL, 0.7.3 included).
 
 - **Fix: the game stopping for good in a session** - since 0.7.2 a held
@@ -31,6 +31,19 @@ DLL, 0.7.3 included).
 - **The determinism probe starts the weather too** - it loaded its runs
   with whatever weather the game had (run 2 with run 1's), so a probe could
   differ on the weather alone; each run now starts it as a session's load does.
+- **Fix: roads running off and sites finishing at once** (#55) - the
+  building pass hands each construction site's update a time step that is
+  always 0, but after a site finished in a tick the next sites of that tick
+  got another value in it, different on each PC: their progress jumped to 1
+  or to a huge negative number, the roads under construction were drawn
+  running off into the distance (one PC lost its display driver) and the
+  PCs differed. The step is made 0 again.
+- **Fix: the cancel road tool on one PC only** - a click of a network's
+  cancel tool (cancel road and the others) on a piece with nothing on it
+  removed the whole piece at once, past the network commit the session
+  takes: only the clicking PC lost it, and the PCs differed. That removal is
+  now a command, made on every PC on the same piece. Protocol 56.
+- **Debug: frame timing is remembered** like the other Debug switches.
 - **Debug: construction site watch** - off by default: logs (`SITE_WATCH`)
   a construction site whose progress, stage or materials change outside a
   tick, with the frame's phase and thread, or become invalid - to find the
@@ -63,7 +76,9 @@ DLL, 0.7.3 included).
 - **Logs for a bulldozer that does nothing** - a click with no piece picked
   under the cursor, a building demolition that could not become a command,
   and a bulldozer on a network the mod does not carry are now said in the
-  log; before, a player's demolitions could do nothing without a trace.
+  log; before, a player's demolitions could do nothing without a trace. So
+  are a road change (upgrade, cancel) whose piece cannot be read and a
+  network tool's commit that runs outside the capture, on one PC only.
 - **Faster frames in big cities** - putting back the buildings' camera fields
   after this PC's view made a set of every building, about 9 times a frame;
   it now looks up only the buildings that were on the camera.

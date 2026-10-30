@@ -1346,6 +1346,21 @@ typedef U64 (*SiteUpdateFn)(U64 world, U64 building, float a3, U64 a4);
 static U64 DetSiteUpdate(U64 world, U64 building, float a3, U64 a4)
 {
     SiteUpdateFn original = (SiteUpdateFn)(g_exeBase + SITE_UPDATE_RVA);
+    // The building pass passes its xmm8 (zeroed at 137c91, never written
+    // after) as the step: always 0. After a site finished in a tick the next
+    // sites of that tick got another value in it, different on each PC
+    // (-2.3e32 here, 4.4e18 there), and their progress jumped to 1 or to a
+    // huge negative number - the roads drawn running off (#55). It is put
+    // back to 0.
+    if (g_on && Determinism_IsActive() && a3 != 0.0f) {
+        static int s_logged = 0;
+        if (s_logged < 20) {
+            ++s_logged;
+            Logf("republicmp  SIM_PATCHES: construction update of site %p got step %.9g from the building pass - made with 0",
+                 (void*)building, a3);
+        }
+        a3 = 0.0f;
+    }
     // 159070 writes +ddc = 0 at 15921c BEFORE its pause test at 159234,
     // then +898/+fc0 on the paused return. Held Late therefore changed the
     // last productivity even with zero time. The next tick compares it while
