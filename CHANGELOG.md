@@ -38,6 +38,16 @@ refuses another DLL, 0.7.3 included).
   names shown and the open windows, as the rename window does - the name had
   changed but the old one stayed on the screen. The log lists the cities
   that appear or are renamed (`CITIES`).
+- **Fix: construction workers going their own way** - a tick's Late runs
+  with each PC's own view, and a construction site on that PC's camera
+  gave its workers their targets and positions there only: the workers of
+  one home stood elsewhere on each PC and the citizens differed (seen as
+  desyncs on citizens, even 60 ticks after a load). A site's update now
+  sees it off the camera on every PC, as the simulation stores it.
+- **Fix: a construction's priority** - the priority arrows in a
+  construction's window changed it on the clicking PC only and the games
+  split at once. The priority is now a carried building setting (by
+  SoylentGreed).
 - **The determinism probe starts the weather too** - it loaded its runs
   with whatever weather the game had (run 2 with run 1's), so a probe could
   differ on the weather alone; each run now starts it as a session's load does.
@@ -57,10 +67,21 @@ refuses another DLL, 0.7.3 included).
   the SETTINGS tab (Sync Workshop, on by default): a host with it off
   offers nothing, a player with it off downloads nothing and is only told
   what differs - neither refuses a join.
+- **The host's Check DLCs decides at once** - other DLCs were refused only
+  when both the host and the player had Check DLCs on: a player with it off
+  got in, loaded the whole world and was refused only then by the content
+  check, and the host saw "the player's game link didn't arrive". The host's
+  setting now refuses other DLCs at the DLC step, and a refusal after the
+  load says its reason on the host too.
 - **Content check** - the lockstep hello carries the vehicle types and the
   build menu the game loaded (names in order). Other vehicle types - other
   Workshop items, their load order or DLCs - refuse the player with the
   reason when Check DLCs is on; a different build menu is only warned about.
+- **Fix: the last session on the MULTIPLAYER page** - after a session as a
+  player ended, hosting showed that session's host, ping and re-sync
+  countdown until the first player came, and the chat could show the
+  lines but not take one. A new session starts clean: the player list, the
+  desync, the countdown and the chat's typing and focus are forgotten.
 - **Fix: the game closing at "checking versions"** - the join listed the
   DLC folders with names converted to the Windows code page, and one file or
   folder in `media_soviet` whose name the code page cannot hold ended the
@@ -114,6 +135,9 @@ refuses another DLL, 0.7.3 included).
   runs - each with the call stack. The money trace's per-site lines in a
   desync report also list what the construction update read before it ran
   (time step, workers, the site's flags and counters).
+- **Debug: field diff reads a building only** - it copied 0x1600 bytes of
+  each building, past the end of its 0x1420-byte object: at a page's end
+  the read faulted (caught, but logged as a CRASH during loads).
 - **Debug: frame timing is remembered** like the other Debug switches.
 
 **Known issues**
