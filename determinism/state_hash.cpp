@@ -30,6 +30,8 @@
 #define VEH_INDEX_OFFSET 0x04
 #define VEH_CARGO_OFFSET 0x3B8
 #define VEH_POS_OFFSET 0xDE0
+#define VEH_TYPE_OFFSET 0x1708   // the vehicle type's record
+#define VEH_TYPE_NAME 0x200      // a type's name
 
 #define CIT_HOME_OFFSET 0x20
 #define CIT_AGE_OFFSET 0xD4
@@ -255,6 +257,10 @@ static bool FillVehicles(VehicleRecord* out, long long n)
             double unused = 0;
             MixEntries(h, v + VEH_CARGO_OFFSET, unused);
             r.cargo = h;
+            if (const char* name = *(const char**)(v + VEH_TYPE_OFFSET)) {
+                name += VEH_TYPE_NAME;
+                for (int k = 0; k < (int)sizeof(r.type) - 1 && name[k]; k++) r.type[k] = name[k];
+            }
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;

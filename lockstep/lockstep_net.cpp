@@ -216,9 +216,9 @@ static void DumpRecords(unsigned long long tick, const char* what)
         }
     }
     if (strstr(subsystems, "vehicles")) {
-        out.Add("tick %llu, %d vehicles (index x y z cargo)", tick, (int)r.vehicles.size());
+        out.Add("tick %llu, %d vehicles (index x y z cargo type)", tick, (int)r.vehicles.size());
         for (const VehicleRecord& v : r.vehicles)
-            out.Add("V %d %.9g %.9g %.9g %016llX", v.index, v.pos[0], v.pos[1], v.pos[2], v.cargo);
+            out.Add("V %d %.9g %.9g %.9g %016llX %s", v.index, v.pos[0], v.pos[1], v.pos[2], v.cargo, v.type);
     }
     if (strstr(subsystems, "citizens")) {
         out.Add("tick %llu, %d citizens (n home age x y z)", tick, (int)r.citizens.size());

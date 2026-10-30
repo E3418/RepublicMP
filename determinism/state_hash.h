@@ -76,6 +76,7 @@ struct VehicleRecord {
     int index;              // +0x04
     float pos[3];           // +0xde0
     unsigned long long cargo; // hash of the cargo entries
+    char type[32];          // its type's name (+0x1708, the name at +0x200), cut
 };
 struct CitizenRecord {
     int home;               // home building's index (-1: none)
