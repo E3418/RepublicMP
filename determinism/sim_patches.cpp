@@ -1368,17 +1368,30 @@ static U64 DetSiteUpdate(U64 world, U64 building, float a3, U64 a4)
     // must not change that input. Ordered commands may still update sites.
     if (g_on && Determinism_IsActive() && !Commands_Applying() &&
         (GetCurrentThreadId() != g_simThread || !Determinism_InStepFrame())) return 0;
-    SiteWatch_UpdateBefore((BYTE*)building);
+    // A tick's Late runs with this PC's view (VisibleIn: +115a = 1 on the
+    // buildings on its camera, for the tools and hints), and 159070 reads the
+    // site's +115a at 15b8b6: a site on the camera took the workers' branch
+    // (15b8d8..15ba4c: their targets and positions through 82e590, random
+    // draws) on that PC only - the workers of one home stood elsewhere on
+    // each PC and the citizens differed. The update sees what the simulation
+    // stores on every PC (0, the off-camera branch); VisibleOut puts 0 on
+    // every building after Late anyway, so the word is not written back (the
+    // update may have finished the site).
+    BYTE* b = (BYTE*)building;
+    bool viewed = g_on && Determinism_IsActive() && b && b[0x115A];
+    if (viewed) b[0x115A] = 0;
+    SiteWatch_UpdateBefore(b);
+    U64 r;
     if (!g_on || !Determinism_GetMoneyTrace()) {
-        U64 r = original(world, building, a3, a4);
-        SiteWatch_UpdateAfter((BYTE*)building);
-        return r;
+        r = original(world, building, a3, a4);
+        SiteWatch_UpdateAfter(b);
+    } else {
+        double rub = *(double*)(world + 0x588), usd = *(double*)(world + 0x580);
+        Determinism_NoteSiteInputs(b, a3);
+        r = original(world, building, a3, a4);
+        SiteWatch_UpdateAfter(b);
+        Determinism_NoteSitePayment(b, *(double*)(world + 0x588) - rub, *(double*)(world + 0x580) - usd);
     }
-    double rub = *(double*)(world + 0x588), usd = *(double*)(world + 0x580);
-    Determinism_NoteSiteInputs((BYTE*)building, a3);
-    U64 r = original(world, building, a3, a4);
-    SiteWatch_UpdateAfter((BYTE*)building);
-    Determinism_NoteSitePayment((BYTE*)building, *(double*)(world + 0x588) - rub, *(double*)(world + 0x580) - usd);
     return r;
 }
 
