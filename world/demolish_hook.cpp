@@ -63,8 +63,17 @@ static bool DemolishAsCommand(__int64 thisPtr, __int64 building, const unsigned 
 {
     BuildingMsg msg = {};
     __try {
-        if (thisPtr != (__int64)(g_exeBase + WORLD_THIS_RVA) || !building || !IsInBuildingsVector(building))
+        if (thisPtr != (__int64)(g_exeBase + WORLD_THIS_RVA) || !building || !IsInBuildingsVector(building)) {
+            // Then the game demolishes it on this PC only: said in the log.
+            static int s_logged = 0;
+            if (s_logged < 20) {
+                ++s_logged;
+                Logf("republicmp  DEMOLISH: not made a command - %s; demolished on this PC only",
+                     thisPtr != (__int64)(g_exeBase + WORLD_THIS_RVA) ? "another world object"
+                     : !building ? "no building" : "the building is not in the building list");
+            }
             return false;
+        }
         const float* p = (const float*)(building + OBJ_POS_OFFSET);
         msg.kind = BUILDING_DEMOLISH;
         msg.x = p[0];

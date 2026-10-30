@@ -521,7 +521,18 @@ static bool TakeCommitAsCommand(__int64 manager, int category)
             bool multi = *(unsigned char*)(manager + MGR_UPG_MULTI_OFFSET) != 0;
             __int64 seg = *(__int64*)(manager + MGR_UPG_SEGMENT_OFFSET);
             // No piece under the brush: the commit removes only with +0x390 set (518a80).
-            if (*(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) == 0) return true;
+            // Said in the log: a click on a piece the bulldozer does not pick
+            // left no trace before (a player whose demolitions did nothing).
+            if (*(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) == 0) {
+                static int s_logged = 0;
+                if (s_logged < 20) {
+                    ++s_logged;
+                    __int64 seg = *(__int64*)(manager + MGR_UPG_SEGMENT_OFFSET);
+                    Logf("republicmp  LOCKSTEP: bulldozer on %s - no piece picked under the cursor (segment %s), nothing removed",
+                         Networks_GetCategoryInfo(category)->name, !seg ? "none" : SegmentListed(manager, seg) ? "listed" : "not in the network");
+                }
+                return true;
+            }
             bool listed = multi || SegmentListed(manager, seg);
             NetDemolishMsg m = {};
             __int64 thisPtr = GetPlacementManagerThisPtr();
@@ -646,6 +657,16 @@ void HookedRoadCommit(__int64 manager,
                InterlockedCompareExchange(&g_buildingPlacementDepth, 0, 0) == 0;
     if (own && Commands_TakeLocal() && TakeCommitAsCommand(manager, category)) return;
     if (own && CommitRefusedHere(manager, category)) return;
+    // A bulldozer commit on a network this mod does not carry is made on this
+    // PC only: said in the log, as the other PCs keep the piece.
+    if (category < 0 && Commands_TakeLocal() && IsDemolishToolActive()) {
+        static int s_logged = 0;
+        if (s_logged < 20) {
+            ++s_logged;
+            Logf("republicmp  LOCKSTEP: bulldozer on a network this mod does not carry (manager %p) - made on this PC only",
+                 (void*)manager);
+        }
+    }
     g_origRoadCommit(manager, p2, p3, p4, p5, p6, p7);
 }
 

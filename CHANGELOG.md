@@ -27,6 +27,10 @@ DLL, 0.7.3 included).
   a construction site whose progress, stage or materials change outside a
   tick, with the frame's phase and thread, or become invalid - to find the
   sites that go their own way on one PC with no command (#55).
+- **Logs for a bulldozer that does nothing** - a click with no piece picked
+  under the cursor, a building demolition that could not become a command,
+  and a bulldozer on a network the mod does not carry are now said in the
+  log; before, a player's demolitions could do nothing without a trace.
 - **Faster frames in big cities** - putting back the buildings' camera fields
   after this PC's view made a set of every building, about 9 times a frame;
   it now looks up only the buildings that were on the camera.
