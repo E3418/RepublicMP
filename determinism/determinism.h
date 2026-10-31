@@ -46,6 +46,7 @@
 #pragma once
 
 #include "tesmio_plugin.h"
+#include <vector>
 
 #define DETERMINISM_FIXED_FPS 30.0f
 
@@ -102,6 +103,14 @@ float Determinism_CommandRandFloat(unsigned site, float a, float b);
 // PC whatever each one drew before at the same sites.
 void Determinism_CommandBegin(unsigned long long seq);
 void Determinism_CommandEnd();
+// The shared stream's draws so far per call site (an exe RVA), sorted by site:
+// which 0 the simulation thread, 1 the early worker. Main thread, between
+// ticks. False: no such thread.
+struct DetSiteCount {
+    unsigned site;
+    unsigned count;
+};
+bool Determinism_SiteCounts(int which, std::vector<DetSiteCount>& out);
 
 // Probe control (UI). steps: complete ticks per run, interval: ticks between hashes.
 // Fuzz: run 2 inserts held frames; both runs change speed every 300 ticks.

@@ -20,6 +20,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <unordered_map>
+#include <algorithm>
 
 #pragma intrinsic(_ReturnAddress)
 
@@ -120,6 +121,15 @@ struct SiteCounters {
 };
 static thread_local SiteCounters* t_sites = nullptr;
 static thread_local SiteCounters* t_privateSites = nullptr;
+// Each thread's shared-stream counters, for the desync reports: two logs show
+// the first site whose count differs (a draw made on one PC only).
+struct SiteThread {
+    DWORD thread;
+    SiteCounters* counters;
+};
+#define SITE_THREADS 32
+static SiteThread g_siteThreads[SITE_THREADS];
+static volatile LONG g_siteThreadCount = 0;
 static thread_local unsigned t_privateDepth = 0;
 static volatile LONG g_privateWorker = 0;
 // A command's stream: the counts start over for each command and its number
@@ -158,7 +168,13 @@ static int SiteRand(void* returnAddress)
     bool privateDraw = t_privateDepth || GetCurrentThreadId() == (DWORD)g_privateWorker;
     bool command = t_inCommand && !privateDraw;
     SiteCounters*& counters = command ? t_commandSites : privateDraw ? t_privateSites : t_sites;
-    if (!counters) counters = new SiteCounters{ 0, {} };
+    if (!counters) {
+        counters = new SiteCounters{ 0, {} };
+        if (&counters == &t_sites) {
+            LONG i = InterlockedIncrement(&g_siteThreadCount) - 1;
+            if (i < SITE_THREADS) g_siteThreads[i] = { GetCurrentThreadId(), counters };
+        }
+    }
     LONG epoch = g_epoch;
     if (counters->epoch != epoch) {
         counters->calls.clear();
@@ -321,6 +337,7 @@ static uintptr_t __cdecl H_beginThread(void (__cdecl* start)(void*), unsigned st
 #define FILLING_OBJ_RVA 0x995290       // DAT_140995290: the worker's object
 #define FILLING_DONE_OFFSET 0x59       // byte: 1 when the step's work is finished
 #define FILLING_START_EVENT_OFFSET 0x60
+#define FILLING_THREAD_ID_OFFSET 0xC8  // the worker's thread id
 
 typedef BOOL (WINAPI* SetEventFn)(HANDLE);
 static SetEventFn o_setEvent;
@@ -338,6 +355,30 @@ static BOOL WINAPI H_setEvent(HANDLE h)
         }
     }
     return r;
+}
+
+bool Determinism_SiteCounts(int which, std::vector<DetSiteCount>& out)
+{
+    out.clear();
+    DWORD thread = 0;
+    if (which == 0) {
+        thread = g_simThread;
+    } else {
+        BYTE* obj = *(BYTE**)(g_exeBase + FILLING_OBJ_RVA);
+        if (!obj) return false;
+        thread = *(DWORD*)(obj + FILLING_THREAD_ID_OFFSET);
+    }
+    if (!thread) return false;
+    LONG n = g_siteThreadCount;
+    for (LONG i = 0; i < n && i < SITE_THREADS; i++) {
+        const SiteThread& t = g_siteThreads[i];
+        if (t.thread != thread || !t.counters) continue;
+        if (t.counters->epoch != g_epoch) return true; // nothing drawn since the generator restarted
+        for (const auto& c : t.counters->calls) out.push_back({ c.first, c.second });
+        std::sort(out.begin(), out.end(), [](const DetSiteCount& a, const DetSiteCount& b) { return a.site < b.site; });
+        return true;
+    }
+    return true;
 }
 
 // ---------------------------------------------------------------------------

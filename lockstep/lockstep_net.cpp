@@ -114,6 +114,8 @@ struct OwnRecords {
     std::vector<CitizenRecord> citizens;
     std::vector<StorageRecord> storage;
     bool storageEnabled = false, storageValid = false;
+    std::vector<DetSiteCount> draws[2]; // the shared stream's draws per site: simulation thread, early worker
+    bool drawsValid[2] = {};
 };
 static OwnRecords g_records[LS_RECORD_KEEP];
 static SRWLOCK g_recordsLock = SRWLOCK_INIT;
@@ -128,6 +130,7 @@ static void KeepRecords(unsigned long long tick)
     if (!r.storageEnabled) r.storage.clear();
     r.valid = StateHash_BuildingRecords(r.buildings) && StateHash_VehicleRecords(r.vehicles) &&
               StateHash_CitizenRecords(r.citizens);
+    for (int k = 0; k < 2; k++) r.drawsValid[k] = Determinism_SiteCounts(k, r.draws[k]);
     ReleaseSRWLockExclusive(&g_recordsLock);
 }
 
@@ -225,6 +228,25 @@ static void DumpRecords(unsigned long long tick, const char* what)
         for (size_t i = 0; i < r.citizens.size(); i++) {
             const CitizenRecord& c = r.citizens[i];
             out.Add("C %d %d %.9g %.9g %.9g %.9g", (int)i, c.home, c.age, c.pos[0], c.pos[1], c.pos[2]);
+        }
+    }
+    // Whatever differs: a site drawn more often on one PC (camera, interface)
+    // gives every later draw there another number.
+    static const char* const kDrawThreads[2] = { "simulation thread", "early worker" };
+    for (int k = 0; k < 2; k++) {
+        if (!r.drawsValid[k]) continue;
+        out.Add("tick %llu, random numbers drawn per site on the %s: %d site(s) (R%d exe+site:count ...)", tick,
+                kDrawThreads[k], (int)r.draws[k].size(), k);
+        char line[400];
+        size_t used = 0;
+        for (size_t i = 0; i < r.draws[k].size(); i++) {
+            int n = _snprintf_s(line + used, sizeof(line) - used, _TRUNCATE, "%s%X:%u", used ? " " : "", r.draws[k][i].site,
+                                r.draws[k][i].count);
+            if (n > 0) used += n;
+            if (used > 300 || i + 1 == r.draws[k].size()) {
+                out.Add("R%d %s", k, line);
+                used = 0;
+            }
         }
     }
     out.Flush();

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **Debug: desync reports count the random numbers per site** - a desync's
+  records now also list, for the simulation thread and the early worker, how
+  many random numbers each game call site has drawn so far. Two logs then show
+  the first site drawn more often on one PC (a draw made for that PC's camera
+  or interface), which gives every later draw there another number - the
+  candidate for the vehicles and citizens that drift apart with no command.
+
 ## 0.7.4
 
 Fewer desyncs in construction, Workshop sync at a join, and fewer ways to
