@@ -218,10 +218,21 @@ static void DumpRecords(unsigned long long tick, const char* what)
             out.Add("S %d %d %d [%s] %.9g %08X", s.building, s.slot, s.entry, s.resource, s.amount, bits);
         }
     }
-    if (strstr(subsystems, "vehicles")) {
-        out.Add("tick %llu, %d vehicles (index x y z cargo type)", tick, (int)r.vehicles.size());
+    // Fields and vehicles also with the citizens: a farm sends its workers to a field
+    // from the field's work words and its vehicles' crews, none of them hashed.
+    bool citizens = strstr(subsystems, "citizens") != nullptr;
+    if (strstr(subsystems, "buildings") || citizens) {
+        out.Add("tick %llu, fields' work words (index +e34 +e38 +e3c +e40 +e44 +e48 +e4c)", tick);
+        for (const BuildingRecord& b : r.buildings)
+            if (b.category == 8)
+                out.Add("F %d %.9g %.9g %.9g %.9g %.9g %.9g %.9g", b.index, b.field[0], b.field[1], b.field[2], b.field[3],
+                        b.field[4], b.field[5], b.field[6]);
+    }
+    if (strstr(subsystems, "vehicles") || citizens) {
+        out.Add("tick %llu, %d vehicles (index x y z cargo type +1778 riders)", tick, (int)r.vehicles.size());
         for (const VehicleRecord& v : r.vehicles)
-            out.Add("V %d %.9g %.9g %.9g %016llX %s", v.index, v.pos[0], v.pos[1], v.pos[2], v.cargo, v.type);
+            out.Add("V %d %.9g %.9g %.9g %016llX %s %.9g %d", v.index, v.pos[0], v.pos[1], v.pos[2], v.cargo, v.type, v.wander,
+                    v.riders);
     }
     if (strstr(subsystems, "citizens")) {
         out.Add("tick %llu, %d citizens (n home age x y z)", tick, (int)r.citizens.size());

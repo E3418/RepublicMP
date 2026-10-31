@@ -26,7 +26,9 @@
 // the fourth argument only: it travels in xmm2 or xmm3), A the world address
 // world+worldPointer or null, R a building's address plus worldPointer (a list
 // inside it), D one of a building's citizens' destinations lists (the
-// building plus +f18, +f30, +f48 or +f60).
+// building plus +f18, +f30, +f48 or +f60), S a window slider the routine reads
+// itself (the double at +0x10 of the object world+worldPointer points to; the
+// last letter: the routine gets nothing for it, the double travels in two words).
 struct GameCallSite {
     unsigned site, target;
     const char* name;
@@ -233,6 +235,11 @@ static const GameCallSite kSites[] = {
     { 0x6FAD83, 0x161440, "building window header: fund in dollars", "WO", 0, 0, false, CALL_FUND },
     { 0x775A8D, 0x161440, "construction panel: fund in rubles", "WO", 0, 0, false, CALL_FUND },
     { 0x775D61, 0x161440, "construction panel: fund in dollars", "WO", 0, 0, false, CALL_FUND },
+    // The loan windows' "Borrow money" (by SoylentGreed): 4b9140(world, currency, duration) reads
+    // the amount from the slider [world+10bf8] itself, then adds the loan record (+10bd0) and the
+    // money. Carried as plain money, the loan was on the clicking PC only and so were its payments.
+    { 0x4AF8F7, 0x4B9140, "loan window: borrow money", "WIIS", 0x10BF8, 0, false },
+    { 0x4B5B79, 0x4B9140, "loan window (second): borrow money", "WIIS", 0x10BF8, 0, false },
 };
 #define SITE_COUNT (sizeof(kSites) / sizeof(kSites[0]))
 
@@ -370,6 +377,17 @@ static const char* Capture(unsigned index, const U64* a, GameCallMsg& m)
             if (!m.values[j]) return "a destinations list's building is not in the world's list";
             m.kinds[j] = OBJ_BUILDING;
             break;
+        case 'S': {
+            U64 slider = Q(world + s.worldPointer);
+            if (!slider) return "the window has no slider";
+            double v = *(double*)(slider + 0x10);
+            if (!(v >= -1.0e6 && v <= 1.0e6) || j + 1 >= MAX_ARGS) return "the slider's value is not a number";
+            U64 bits;
+            memcpy(&bits, &v, 8);
+            m.values[j] = (unsigned)bits;
+            m.values[j + 1] = (unsigned)(bits >> 32);
+            break;
+        }
         default: return "unknown argument kind";
         }
     }
@@ -404,10 +422,33 @@ static const char* Rebuild(const GameCallMsg& m, U64* a)
             if (!(a[j] = Ref_BuildingAt(m.refs[j]))) return "a destinations list's building is gone";
             a[j] += m.values[j];
             break;
+        case 'S': {
+            U64 bits = (U64)m.values[j] | ((U64)m.values[j + 1] << 32);
+            double v;
+            memcpy(&v, &bits, 8);
+            if (!(v >= -1.0e6 && v <= 1.0e6)) return "the slider's value is not a number";
+            break;
+        }
         }
     }
     return nullptr;
 }
+
+// The S argument's value, or -1 when the site has none.
+static int SliderArg(const GameCallSite& s)
+{
+    for (int j = 0; s.schema[j]; j++)
+        if (s.schema[j] == 'S') return j;
+    return -1;
+}
+
+// The routine reads the slider itself, and a PC that never opened the window has
+// none: for the call the world points to a slider of this command's value.
+struct SliderObject {
+    U64 head[2];
+    double value;
+    U64 tail[5];
+};
 
 // CALL_REPEATING: the calls seen lately (the interface thread only).
 struct RepeatSeen {
@@ -562,6 +603,14 @@ bool GameCalls_ApplyCommand(const void* data, size_t size)
     U64 r = 0;
     U64* drag = nullptr;
     U64 dragged = 0;
+    U64* sliderAt = nullptr;
+    U64 sliderWas = 0;
+    SliderObject slider = {};
+    int k = SliderArg(s);
+    if (k >= 0) {
+        U64 bits = (U64)m.values[k] | ((U64)m.values[k + 1] << 32);
+        memcpy(&slider.value, &bits, 8);
+    }
     __try {
         why = Rebuild(m, a);
         if (!why && s.special != CALL_PLAIN && s.special != CALL_DELETE_LINE && s.special != CALL_DRAG &&
@@ -574,8 +623,14 @@ bool GameCalls_ApplyCommand(const void* data, size_t size)
                 dragged = *drag;
                 *drag = a[0];
             }
+            if (k >= 0) {
+                sliderAt = (U64*)((U64)World() + s.worldPointer);
+                sliderWas = *sliderAt;
+                *sliderAt = (U64)&slider;
+            }
             r = CallSite(s, a);
             if (drag) *drag = dragged;
+            if (sliderAt) *sliderAt = sliderWas;
             if (s.special == CALL_DELETE_LINE) {
                 typedef void (*CleanupFn)(U64, U64);
                 ((CleanupFn)(g_exeBase + DELETE_CLEANUP))(Q((U64)World() + LINES_OFFSET), 1);
@@ -588,6 +643,7 @@ bool GameCalls_ApplyCommand(const void* data, size_t size)
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         why = "the call faulted";
         if (drag) *drag = dragged;
+        if (sliderAt) *sliderAt = sliderWas;
     }
     Logf("republicmp  GAME CALL: %s: %s", s.name, why ? why : "made");
     return why == nullptr;

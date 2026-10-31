@@ -111,6 +111,19 @@ static bool IsPresentationSite(unsigned site)
     return false;
 }
 
+// Shared sites drawn a different number of times on PCs that stay alike (the
+// vehicles' eased random number 67e6b0, +1778): each draw is counted once more
+// under the routine's caller, key SITE_CALLER | its offset (never a site), so
+// two desync reports show which caller ran more often on one PC.
+#define SITE_CALLER 0x80000000u
+static const unsigned kCallerSites[] = { 0x67E6FA };
+static bool IsCallerSite(unsigned site)
+{
+    for (unsigned s : kCallerSites)
+        if (s == site) return true;
+    return false;
+}
+
 // ---------------------------------------------------------------------------
 // Call-site generator
 // ---------------------------------------------------------------------------
@@ -181,6 +194,15 @@ static int SiteRand(void* returnAddress)
         counters->epoch = epoch;
     }
     unsigned n = counters->calls[site]++;
+    if (&counters == &t_sites && IsCallerSite(site)) {
+        void* frames[8];
+        USHORT got = RtlCaptureStackBackTrace(0, 8, frames, nullptr);
+        for (USHORT i = 0; i + 1 < got; i++)
+            if (frames[i] == returnAddress) {
+                counters->calls[SITE_CALLER | (unsigned)((BYTE*)frames[i + 1] - g_exeBase)]++;
+                break;
+            }
+    }
     unsigned long long seed = command ? g_seed ^ SplitMix(t_commandSeq) : g_seed;
     unsigned long long x = SplitMix(seed ^ ((unsigned long long)site << 32) ^ n);
     int value = (int)((x >> 33) & 0x7FFF);

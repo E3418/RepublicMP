@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Fix: a loan on one PC only** - "Borrow money" in the loan windows
+  reached the other PCs as money alone: the loan itself was on the clicking
+  PC only, and so were its daily payments, and the money differed at the
+  next day. The button is now a carried window call with the amount slider's
+  value, and every PC takes the same loan, also a PC that never opened the
+  window (by SoylentGreed).
+- **Debug: fields, farm vehicles and the vehicles' random number in desync
+  reports** - with buildings or citizens differing, a report lists each
+  field's work words (the farm's planting test reads them); with vehicles or
+  citizens, each vehicle's line also has its eased random number (+1778) and
+  its crew count. The vehicles' random number is also counted per caller,
+  next to the site counts, to show which caller ran more often on one PC.
+  None of these are in the hash.
 - **Debug: desync reports count the random numbers per site** - a desync's
   records now also list, for the simulation thread and the early worker, how
   many random numbers each game call site has drawn so far. Two logs then show
