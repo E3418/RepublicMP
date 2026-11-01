@@ -304,11 +304,39 @@ static void AddToForest(const QueuedSapling* q, size_t n)
     }
 }
 
+// The planting list's entries and those waiting to start (timer 0).
+static void SaplingCounts(__int64 world, int& entries, int& waiting)
+{
+    entries = waiting = 0;
+    __try {
+        BYTE* begin = *(BYTE**)(world + SAPLING_LIST);
+        BYTE* end = *(BYTE**)(world + SAPLING_LIST + 8);
+        if (!begin || end < begin || (end - begin) % SAPLING_ENTRY) return;
+        for (BYTE* e = begin; e < end; e += SAPLING_ENTRY) {
+            ++entries;
+            if (*(float*)(e + SAPLING_TIMER) == 0.0f) ++waiting;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
 // Late, at its growth call (rcx = world).
 static void DetSaplingLate(__int64 world)
 {
     if (g_on && Determinism_IsActive() && !Determinism_IsStepFrame()) return;
-    if (g_on && GetCurrentThreadId() == g_simThread && TreesLoaded()) StartSaplings(world);
+    // The start is gated on the engine's tree list (as the game's own start is): engine state,
+    // outside the world and the save. Logged when it changes, so two logs show whether a PC
+    // started its saplings at another tick (the forest growth's draws 2f909a then differ).
+    static int s_trees = -1;
+    int trees = g_on && GetCurrentThreadId() == g_simThread ? (TreesLoaded() ? 1 : 0) : s_trees;
+    if (trees != s_trees && trees >= 0) {
+        int entries = 0, waiting = 0;
+        SaplingCounts(world, entries, waiting);
+        Logf("republicmp  SAPLINGS: the engine's tree list is %s at step %llu (planting list %d, %d waiting to start)",
+             trees ? "loaded" : "empty", Determinism_StepCount(), entries, waiting);
+        s_trees = trees;
+    }
+    if (g_on && GetCurrentThreadId() == g_simThread && trees == 1) StartSaplings(world);
     ((SaplingGrowthFn)(g_exeBase + SAPLING_GROWTH_RVA))(world);
 }
 
