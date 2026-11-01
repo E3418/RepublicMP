@@ -588,6 +588,9 @@ static const char* Replay(const PurchaseMsg& m, BYTE** bought)
         if (!type) return "the vehicle type is not in this PC's list";
         BYTE* depot = BuildingAt(world, m.depot);
         if (!depot) return "the depot differs";
+        // A building without a type is still a construction site: the depot was finished on the
+        // clicking PC only (the games had split), and 3e3f40 faulted on its type here.
+        if (!*(BYTE**)(depot + 0x318)) return "the depot is not finished here";
         if (!WriteVariants(type, m)) return "the trailers differ";
         int campaign = *(int*)(g_exeBase + CAMPAIGN_RVA);
         if (m.kind >= 5) return ReplayBlueprint(world, m, type, depot, campaign);
