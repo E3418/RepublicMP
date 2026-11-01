@@ -80,7 +80,7 @@ struct VehicleRecord {
     unsigned long long cargo; // hash of the cargo entries
     char type[32];          // its type's name (+0x1708, the name at +0x200), cut
     float wander;           // +0x1778: eased toward a random number (67e6b0); not hashed
-    int riders;             // the people list +0x680 (a farm vehicle's crew); not hashed
+    int stops;              // its stations +0x680 (a farm vehicle's first is its field); not hashed
 };
 struct CitizenRecord {
     int home;               // home building's index (-1: none)

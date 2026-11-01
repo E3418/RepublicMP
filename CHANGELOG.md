@@ -1,18 +1,20 @@
 # Changelog
 
-## Unreleased
+## 0.7.5
+
+Many window actions that acted on the clicking PC only are now shared (by
+SoylentGreed), loans, the copy sources tool and resuming construction no
+longer split the games, and leaving a session right after it loaded no
+longer crashes. Protocol 57 - every player needs this build (the build
+check refuses another DLL, 0.7.4 included).
+
+**Fewer desyncs**
 
 - **Fix: the copy sources tool on one PC only** - the tool copies the
   source rows the player ticked, and that choice is the tool's own state on
   the clicking PC: the other PCs copied nothing. Vehicles bought later at
   that depot took other stops there (3 against 1) and the money and
   vehicles differed. The ticked rows now travel with the command.
-- **Fix: a crash when leaving a session right after it loaded** - the game's
-  vehicle worker keeps a list of the vehicles it updates, refilled at every
-  step; a session starts paused, so after its load the list still held the
-  earlier world's vehicles, and leaving the game woke the worker on them
-  (the crash came while the game wrote saved_last). The list is emptied at
-  every load.
 - **Fix: a loan on one PC only** - "Borrow money" in the loan windows
   reached the other PCs as money alone: the loan itself was on the clicking
   PC only, and so were its daily payments, and the money differed at the
@@ -70,11 +72,23 @@
   a placed signal on the left or the right of the track, so a shared signal
   was placed differently on each PC. A join is refused when the two values
   differ (by SoylentGreed).
+
+**Fewer crashes**
+
+- **Fix: a crash when leaving a session right after it loaded** - the game's
+  vehicle worker keeps a list of the vehicles it updates, refilled at every
+  step; a session starts paused, so after its load the list still held the
+  earlier world's vehicles, and leaving the game woke the worker on them
+  (the crash came while the game wrote saved_last). The list is emptied at
+  every load.
+
+**Debug**
+
 - **Debug: fields, farm vehicles and the vehicles' random number in desync
   reports** - with buildings or citizens differing, a report lists each
   field's work words (the farm's planting test reads them); with vehicles or
   citizens, each vehicle's line also has its eased random number (+1778) and
-  its crew count. The vehicles' random number is also counted per caller,
+  its number of stations. The vehicles' random number is also counted per caller,
   next to the site counts, to show which caller ran more often on one PC.
   None of these are in the hash.
 - **Debug: desync reports count the random numbers per site** - a desync's

@@ -177,7 +177,7 @@ bool StateHash_Compute(StateSummary* out)
 #define BLD_FIELD_CATEGORY 8
 #define BLD_FIELD_WORK_OFFSET 0xE34
 #define VEH_WANDER_OFFSET 0x1778
-#define VEH_RIDERS_OFFSET 0x680
+#define VEH_STATIONS_OFFSET 0x680
 
 static long long ListCount(int listOffset)
 {
@@ -263,7 +263,7 @@ static bool FillVehicles(VehicleRecord* out, long long n)
             MixEntries(h, v + VEH_CARGO_OFFSET, unused);
             r.cargo = h;
             r.wander = *(float*)(v + VEH_WANDER_OFFSET);
-            r.riders = (int)Count(v + VEH_RIDERS_OFFSET, 8);
+            r.stops = (int)Count(v + VEH_STATIONS_OFFSET, 8);
             if (const char* name = *(const char**)(v + VEH_TYPE_OFFSET)) {
                 name += VEH_TYPE_NAME;
                 for (int k = 0; k < (int)sizeof(r.type) - 1 && name[k]; k++) r.type[k] = name[k];
