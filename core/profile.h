@@ -10,10 +10,13 @@
 //                          host included (2..4); a host that is full stops
 //                          listening
 //             dlc_check    refuse a join when the DLCs differ (session/save_sync)
+//             workshop_sync download the host's Workshop items at a join (session/workshop)
 //   [overlay] show_cursors, ping_key (a virtual-key code; lockstep/presence)
 //   [debug]   money_trace (determinism), field_diff (lockstep/building_settings),
 //             terrain_log (world/terrain_hook),
 //             construction_log (determinism/construction_view),
+//             site_watch (determinism/site_watch),
+//             frame_timing (core/frame_timing),
 //             storage_trace (determinism/state_hash, off unless remembered)
 //
 // Each module reads its own setting when it is bound and writes it when it

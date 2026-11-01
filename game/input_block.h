@@ -27,6 +27,11 @@ bool InstallInputBlockHooks();
 // button bytes, so this PC's own keyboard and mouse cannot change it.
 void InputBlock_BeginNeutral();
 void InputBlock_EndNeutral();
+// One binding (CommonInterfaceGetButtonDown) that reads held while a command
+// is made - the clicking PC's, carried in the command; nullptr: none.
+void InputBlock_HoldInNeutral(const char* binding);
+// A binding as the game reads it now (with the captures above applied).
+bool InputBlock_ButtonDown(const char* binding);
 
 // The mod's own windows (render thread, every frame): the mouse is over one,
 // so the game sees no button, wheel or camera drag; keys go to one (a text

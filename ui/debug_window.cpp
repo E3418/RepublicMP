@@ -8,6 +8,7 @@
 #include "../session/save_sync.h"
 #include "../determinism/determinism.h"
 #include "../determinism/construction_view.h"
+#include "../determinism/site_watch.h"
 #include "../determinism/state_hash.h"
 #include "../lockstep/building_settings.h"
 #include "debug_log.h"
@@ -147,6 +148,11 @@ void DebugWindow::Draw()
         if (ImGui::Checkbox("Log construction sites (every 2 s)", &siteLog)) ConstructionView_SetLog(siteLog);
         ImGui::TextWrapped("The stages are always drawn with this PC's view; the log shows the sites the drawer sees, "
                            "with the simulation's and this PC's camera fields.");
+        bool siteWatch = SiteWatch_GetOn();
+        if (ImGui::Checkbox("Watch construction sites (SITE_WATCH)", &siteWatch)) SiteWatch_SetOn(siteWatch);
+        ImGui::TextWrapped("Off by default: in a session or a probe, logs a site whose progress, stage or materials "
+                           "change outside a tick (with the frame's phase and thread), or become invalid. Turn it on "
+                           "on every PC before the test.");
         ImGui::Spacing();
 
         // --- Field diff (lockstep/building_settings) ---

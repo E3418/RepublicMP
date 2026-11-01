@@ -7,12 +7,15 @@
 #include "../save/save_zip.h"
 #include "../ui/ui_log.h"
 #include "../ui/sync_block.h"
+#include "../ui/chat.h"
 #include "../third_party/miniz/miniz.h" // mz_crc32 for the build check
 #include "../transport/network.h"
 #include "../determinism/determinism.h"
 #include "../game/world.h"
 #include "../lockstep/lockstep_net.h"
 #include "../core/profile.h"
+#include "../core/guard.h"
+#include "workshop.h"
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -22,6 +25,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <system_error>
+#include <wctype.h>
 
 #pragma comment(lib, "User32.lib")
 
@@ -98,6 +102,8 @@ static void SetSessionError(const char* fmt, ...)
     EnterCriticalSection(&g_lock);
     strncpy_s(g_lastError, body, _TRUNCATE);
     LeaveCriticalSection(&g_lock);
+    // The log too: an error shown only on the page left nothing behind.
+    if (body[0]) Logf("republicmp  SESSION: error shown - %s", body);
 }
 
 // Writes to tesmioloader.log and the in-game UI log.
@@ -163,7 +169,8 @@ struct SessionHello {
     int protocol;      // REPUBLICMP_PROTOCOL
     char version[16];  // REPUBLICMP_VERSION
     unsigned int dllCrc;
-    int gameMode;      // the host's SESSION_MODE_*, its variant << 8, its side << 16; a player's is not read
+    int gameMode;      // the host's SESSION_MODE_*, its variant << 8, its side << 16; a player's is not read;
+                       // both: the rail signals' side << 24 (TrainsLeft)
 };
 
 // Step reports in both directions after the hello.
@@ -197,6 +204,29 @@ static bool RecvMsg(NetLink sock, SessionMsg* m)
     return true;
 }
 
+// config.ini's TRAINS_ON_LEFT_SIDE puts a placed rail signal on the left or the
+// right of the track (4184c0 at 418c9b: the signal tool and the area paste): a
+// carried signal was made on each PC with its own value. Both sides must match
+// (by SoylentGreed). 0 or 1, 2: the pinned read or the getter is not as expected.
+#define CONFIGURATOR_RVA 0x9BDFC0
+#define CONFIG_GET_INT_SLOT 0x86C0C0
+#define TRAINS_SIDE_READ 0x418C9B
+static int TrainsLeft()
+{
+    static const unsigned char kRead[26] = { 0x48, 0x8d, 0x15, 0x5e, 0x49, 0x4b, 0x00, 0x48, 0x8d, 0x0d, 0x17, 0x53, 0x5a,
+                                             0x00, 0xff, 0x15, 0x11, 0x34, 0x45, 0x00, 0x85, 0xc0, 0x40, 0x0f, 0x95, 0xc6 };
+    typedef int (*GetIntFn)(void* configurator, char* key);
+    __try {
+        if (memcmp(g_exeBase + TRAINS_SIDE_READ, kRead, sizeof(kRead)) != 0) return 2;
+        GetIntFn get = *(GetIntFn*)(g_exeBase + CONFIG_GET_INT_SLOT);
+        if (!get) return 2;
+        char key[32] = "TRAINS_ON_LEFT_SIDE";
+        return get(g_exeBase + CONFIGURATOR_RVA, key) ? 1 : 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 2;
+    }
+}
+
 static void MakeHello(SessionHello* h)
 {
     memset(h, 0, sizeof(*h));
@@ -204,7 +234,7 @@ static void MakeHello(SessionHello* h)
     h->protocol = REPUBLICMP_PROTOCOL;
     strncpy_s(h->version, REPUBLICMP_VERSION, _TRUNCATE);
     h->dllCrc = SaveSync_GetLocalDllCrc();
-    h->gameMode = g_gameMode | g_gameVariant << 8 | g_hostSide << 16;
+    h->gameMode = g_gameMode | g_gameVariant << 8 | g_hostSide << 16 | TrainsLeft() << 24;
 }
 
 // Compares the peer's hello with ours; fills why on a mismatch.
@@ -222,6 +252,14 @@ static bool HelloMatches(const SessionHello& peer, char* why, size_t whySize)
                     "different builds: yours %s (%08X, protocol %d), theirs %s (%08X, protocol %d). Use the same RepublicMP.dll",
                     REPUBLICMP_VERSION, SaveSync_GetLocalDllCrc(), REPUBLICMP_PROTOCOL,
                     peerVersion, peer.dllCrc, peer.protocol);
+        return false;
+    }
+    int theirs = peer.gameMode >> 24 & 0xFF, ours = TrainsLeft();
+    if (theirs != ours) {
+        static const char* const kSide[3] = { "right", "left", "unread" };
+        _snprintf_s(why, whySize, _TRUNCATE,
+                    "rail signals on different sides: yours %s, theirs %s. Set TRAINS_ON_LEFT_SIDE in config.ini the same",
+                    kSide[ours], kSide[theirs < 3 ? theirs : 2]);
         return false;
     }
     return true;
@@ -357,7 +395,7 @@ static bool GetGameSaveDir(char* outPath, size_t outSize, const char* saveName)
 // and vehicles, and in lockstep the vehicle type table (commands name types by
 // their index in it) differs. After the version check both sides send their
 // list and their checker choice; the join is refused when the lists differ
-// and both players keep the checker on.
+// and the host keeps the checker on.
 
 struct SessionDlcs {
     char magic[8];  // "RPMPDLC"
@@ -365,24 +403,32 @@ struct SessionDlcs {
     char list[248]; // the dlcN folder names, sorted, comma-separated
 };
 
+// Wide names and a walk that never throws: path::string() throws on a name
+// the code page cannot hold, and one such file or folder anywhere in
+// media_soviet ended the player's game at the join's DLC check.
 static void ListDlcs(char* out, size_t outSize)
 {
     out[0] = 0;
-    char exePath[MAX_PATH] = {};
-    DWORD len = GetModuleFileNameA(g_exe, exePath, MAX_PATH);
+    wchar_t exePath[MAX_PATH] = {};
+    DWORD len = GetModuleFileNameW(g_exe, exePath, MAX_PATH);
     if (len == 0 || len == MAX_PATH) return;
-    char* lastSlash = strrchr(exePath, '\\');
+    wchar_t* lastSlash = wcsrchr(exePath, L'\\');
     if (!lastSlash) return;
-    *lastSlash = '\0';
+    *lastSlash = L'\0';
     std::vector<std::string> names;
     std::error_code ec;
-    for (const auto& e : std::filesystem::directory_iterator(std::string(exePath) + "\\media_soviet", ec)) {
-        std::string name = e.path().filename().string();
-        if (_strnicmp(name.c_str(), "dlc", 3) != 0 || !e.is_directory(ec)) continue;
-        if (std::filesystem::directory_iterator(e.path(), ec) == std::filesystem::directory_iterator()) continue; // empty
-        for (char& c : name) c = (char)tolower((unsigned char)c);
-        names.push_back(name);
+    std::filesystem::directory_iterator it(std::filesystem::path(exePath) / L"media_soviet", ec), end;
+    for (; !ec && it != end; it.increment(ec)) {
+        const std::wstring name = it->path().filename().wstring();
+        if (name.size() < 3 || _wcsnicmp(name.c_str(), L"dlc", 3) != 0) continue;
+        std::error_code dirEc;
+        if (!it->is_directory(dirEc) || dirEc) continue;
+        if (std::filesystem::directory_iterator(it->path(), dirEc) == std::filesystem::directory_iterator()) continue; // empty
+        std::string ascii;
+        for (wchar_t c : name) ascii += c < 128 ? (char)towlower(c) : '?';
+        names.push_back(ascii);
     }
+    if (ec) Logf("republicmp  SESSION: the DLC folders could not be listed completely: %s", ec.message().c_str());
     std::sort(names.begin(), names.end());
     for (const std::string& n : names) {
         if (out[0]) strncat_s(out, outSize, ",", _TRUNCATE);
@@ -407,7 +453,10 @@ static bool DlcsMatch(const SessionDlcs& mine, const SessionDlcs& theirs, bool h
     const char* playerList = host ? peer : mine.list;
     Logf("republicmp  SESSION: DLCs - host [%s], player [%s]", hostList[0] ? hostList : "none", playerList[0] ? playerList : "none");
     if (strcmp(mine.list, peer) == 0) return true;
-    bool refuse = mine.check && theirs.check;
+    // The host's checker decides, as for the content check after the load: a
+    // player with it off was let in with other DLCs and refused only once the
+    // shared world had loaded.
+    bool refuse = (host ? mine.check : theirs.check) != 0;
     _snprintf_s(why, whySize, _TRUNCATE,
                 "different DLCs: host [%s], player [%s]. %s",
                 hostList[0] ? hostList : "none", playerList[0] ? playerList : "none",
@@ -425,6 +474,97 @@ static bool DlcsMatch(const SessionDlcs& mine, const SessionDlcs& theirs, bool h
 //
 // After the DLC check both sides send the name their player chose (core/
 // profile; "Player" when none): only for showing who is who.
+
+// ---------------------------------------------------------------------------
+// Workshop items (session/workshop)
+// ---------------------------------------------------------------------------
+//
+// After the DLCs both send their Steam Workshop list; the player compares,
+// tells the host whether it goes on (and why not), and downloads what it
+// lacks. Each side's Sync Workshop is its own: a host with it off offers
+// nothing, a player with it off downloads nothing - neither refuses a join.
+
+struct SessionWorkshopHead {
+    char magic[8];  // "RPMPWSL"
+    unsigned count; // WorkshopItem entries that follow
+    unsigned steam; // WORKSHOP_LIST_*
+};
+enum { WORKSHOP_LIST_NONE = 0, WORKSHOP_LIST_SENT = 1, WORKSHOP_LIST_NOT_OFFERED = 2 }; // no Steam / a list / Sync Workshop off
+struct SessionWorkshopVerdict {
+    char magic[8]; // "RPMPWSV"
+    int ok;        // the player goes on
+    char why[248]; // why not, or what it was warned about
+};
+
+static bool SendWorkshop(NetLink sock, const std::vector<WorkshopItem>& items, unsigned state)
+{
+    SessionWorkshopHead h = {};
+    memcpy(h.magic, "RPMPWSL", 8);
+    h.count = state == WORKSHOP_LIST_SENT ? (unsigned)items.size() : 0;
+    h.steam = state;
+    return NetworkSendExact(sock, &h, sizeof(h)) &&
+           (!h.count || NetworkSendExact(sock, items.data(), h.count * sizeof(WorkshopItem)));
+}
+
+static bool RecvWorkshop(NetLink sock, std::vector<WorkshopItem>& items, unsigned* state)
+{
+    SessionWorkshopHead h = {};
+    if (!NetworkRecvExact(sock, &h, sizeof(h)) || memcmp(h.magic, "RPMPWSL", 8) != 0 || h.count > 20000) return false;
+    items.resize(h.count);
+    *state = h.steam;
+    return items.empty() || NetworkRecvExact(sock, items.data(), items.size() * sizeof(WorkshopItem));
+}
+
+// Player: whether to go on with the host's items. With Sync Workshop on,
+// what it lacks opens the choice screen (ui/workshop_panel) and this join
+// ends; the screen downloads and joins again, or joins again without them.
+// Only that screen stops a join: the differences are otherwise only said.
+static bool WorkshopVerdict(const std::vector<WorkshopItem>& host, const std::vector<WorkshopItem>& mine, unsigned hostState,
+                            bool mySteam, char* why, size_t whySize)
+{
+    why[0] = 0;
+    if (hostState == WORKSHOP_LIST_NOT_OFFERED) {
+        _snprintf_s(why, whySize, _TRUNCATE, "the host does not offer its Workshop items (its Sync Workshop is off)");
+        return true;
+    }
+    if (hostState != WORKSHOP_LIST_SENT || !mySteam) {
+        _snprintf_s(why, whySize, _TRUNCATE, "Workshop items not compared (no Steam Workshop on one side)");
+        return true;
+    }
+    WorkshopDiff d = Workshop_Compare(host, mine);
+    Logf("republicmp  SESSION: Workshop - host %zu item(s), player %zu; missing %zu, older %zu, extra %zu", host.size(),
+         mine.size(), d.missing.size(), d.older.size(), d.extra.size());
+    if (!d.missing.empty()) Logf("republicmp  SESSION:   missing: %s", Workshop_Ids(Workshop_IdsOf(d.missing), 200).c_str());
+    if (!d.older.empty()) Logf("republicmp  SESSION:   older here: %s", Workshop_Ids(Workshop_IdsOf(d.older), 200).c_str());
+    if (!d.extra.empty()) Logf("republicmp  SESSION:   extra here (the host has not): %s", Workshop_Ids(d.extra, 200).c_str());
+    // What the player declined on the screen is not offered again.
+    std::vector<WorkshopItem> need;
+    size_t declined = 0;
+    for (const std::vector<WorkshopItem>* list : { &d.missing, &d.older })
+        for (const WorkshopItem& i : *list) {
+            if (Workshop_Declined(i.id)) declined++;
+            else need.push_back(i);
+        }
+    size_t lacking = need.size();
+    if (!lacking && declined) {
+        _snprintf_s(why, whySize, _TRUNCATE, "joined without %zu of the host's Workshop item(s) (the player's choice)", declined);
+        return true;
+    }
+    if (lacking && Workshop_GetSync()) {
+        Workshop_Offer(need, d.extra.size());
+        _snprintf_s(why, whySize, _TRUNCATE, "choosing %zu Workshop item(s) of the host to download", need.size());
+        return false;
+    }
+    if (lacking) {
+        _snprintf_s(why, whySize, _TRUNCATE, "%zu Workshop item(s) of the host missing or older here - not downloaded "
+                    "(Sync Workshop is off): %s", lacking, Workshop_Ids(Workshop_IdsOf(need), 5).c_str());
+        return true;
+    }
+    if (!d.extra.empty())
+        _snprintf_s(why, whySize, _TRUNCATE, "%zu Workshop item(s) here the host has not - they may change the content: %s",
+                    d.extra.size(), Workshop_Ids(d.extra, 5).c_str());
+    return true;
+}
 
 struct SessionNick {
     char magic[8]; // "RPMPNIK"
@@ -460,12 +600,15 @@ static void GenerateRandomSaveName(char* out, size_t outSize)
 // The host's newest join save. Each join (and so each re-sync) writes a new
 // one; every older one is deleted, so they do not pile up - also those left
 // by earlier runs of the game (one per run had stayed, ~150 MB each).
-static bool IsHostJoinSaveName(const std::string& name)
+// Wide: the save folder also holds the player's own saves, whose names the
+// code page may not hold (path::string() throws on them).
+static bool IsHostJoinSaveName(const std::wstring& name)
 {
-    const char* prefix = "mp_syncsave_";
-    if (name.size() != strlen(prefix) + 8 || name.compare(0, strlen(prefix), prefix) != 0) return false;
-    for (size_t i = strlen(prefix); i < name.size(); i++)
-        if (!isxdigit((unsigned char)name[i])) return false;
+    const wchar_t* prefix = L"mp_syncsave_";
+    size_t n = wcslen(prefix);
+    if (name.size() != n + 8 || name.compare(0, n, prefix) != 0) return false;
+    for (size_t i = n; i < name.size(); i++)
+        if (!iswxdigit(name[i])) return false;
     return true;
 }
 
@@ -473,15 +616,17 @@ static void KeepOnlyNewestHostSave(const char* newSaveDir)
 {
     std::error_code ec;
     std::filesystem::path keep(newSaveDir);
+    const std::wstring keepName = keep.filename().wstring();
     std::filesystem::directory_iterator it(keep.parent_path(), ec), end;
     int deleted = 0;
     for (; !ec && it != end; it.increment(ec)) {
-        if (!it->is_directory(ec)) continue;
-        std::string name = it->path().filename().string();
-        if (!IsHostJoinSaveName(name) || _stricmp(name.c_str(), keep.filename().string().c_str()) == 0) continue;
+        std::error_code dirEc;
+        if (!it->is_directory(dirEc) || dirEc) continue;
+        const std::wstring name = it->path().filename().wstring();
+        if (!IsHostJoinSaveName(name) || _wcsicmp(name.c_str(), keepName.c_str()) == 0) continue;
         std::error_code rm;
         std::filesystem::remove_all(it->path(), rm);
-        if (rm) Logf("republicmp  SESSION: couldn't delete the old join save [%s]: %s", name.c_str(), rm.message().c_str());
+        if (rm) Logf("republicmp  SESSION: couldn't delete the old join save [%ls]: %s", name.c_str(), rm.message().c_str());
         else deleted++;
     }
     if (deleted) Logf("republicmp  SESSION: deleted %d old join save(s)", deleted);
@@ -597,6 +742,24 @@ static bool CheckJoiner(Joiner& j)
         SaveStatus("[HOST] %s: join refused: %s", j.ip, dlcWhy);
         return false;
     }
+    // With Sync Workshop off the host offers nothing (session/workshop).
+    std::vector<WorkshopItem> myItems, theirItems;
+    unsigned myState = !Workshop_GetSync() ? WORKSHOP_LIST_NOT_OFFERED
+                       : Workshop_List(myItems) ? WORKSHOP_LIST_SENT : WORKSHOP_LIST_NONE;
+    unsigned theirState = WORKSHOP_LIST_NONE;
+    SessionWorkshopVerdict verdict = {};
+    if (!SendWorkshop(j.sock, myItems, myState) || !RecvWorkshop(j.sock, theirItems, &theirState) ||
+        !NetworkRecvExact(j.sock, &verdict, sizeof(verdict)) || memcmp(verdict.magic, "RPMPWSV", 8) != 0) {
+        SetSessionError("%s dropped during the Workshop check", j.ip);
+        return false;
+    }
+    verdict.why[sizeof(verdict.why) - 1] = 0;
+    if (!verdict.ok) {
+        SetSessionError("join refused: %s", verdict.why);
+        SaveStatus("[HOST] %s: join refused: %s", j.ip, verdict.why);
+        return false;
+    }
+    if (verdict.why[0]) SaveStatus("[HOST] %s: %s", j.ip, verdict.why);
     if (!ExchangeNicks(j.sock, j.nick, sizeof(j.nick))) {
         SetSessionError("%s dropped during the name exchange", j.ip);
         return false;
@@ -621,8 +784,11 @@ static void WorldSendProgress(unsigned long long done, unsigned long long total,
 static DWORD WINAPI WorldSendThread(LPVOID param)
 {
     WorldSend* w = (WorldSend*)param;
-    w->ok = SendMsg(w->j->sock, MSG_FILE_FOLLOWS, 4, -1, "") &&
-            NetworkSendFile(w->j->sock, w->zipPath, WorldSendProgress, w);
+    w->ok = false;
+    Guard_Call("sending the world", [w] {
+        w->ok = SendMsg(w->j->sock, MSG_FILE_FOLLOWS, 4, -1, "") &&
+                NetworkSendFile(w->j->sock, w->zipPath, WorldSendProgress, w);
+    });
     return 0;
 }
 
@@ -797,7 +963,12 @@ static int RunHostJoin(std::vector<Joiner>& js)
         HostStep(7, ready > 1 ? "Waiting for the players' lockstep connections" : "Waiting for the player's lockstep connection");
         joined = LockstepNet_HostAccept(ready, LOCKSTEP_CONNECT_TIMEOUT_MS, &g_disconnectRequested, JoinersStillThere, &js);
         if (!joined) {
-            if (!g_disconnectRequested) SetSessionError("the player's game link didn't arrive - TCP port %d must reach this PC", LOCKSTEP_PORT);
+            if (g_disconnectRequested) {
+            } else if (LockstepNet_LastRefusal()[0]) {
+                SetSessionError("join refused: %s", LockstepNet_LastRefusal());
+            } else {
+                SetSessionError("the player's game link didn't arrive - TCP port %d must reach this PC", LOCKSTEP_PORT);
+            }
             CloseLockstep();
         } else if (joined < ready) {
             SaveStatus("[HOST] %d of %d player(s) opened the lockstep connection - going on without the rest", joined, ready);
@@ -1145,6 +1316,7 @@ static bool RunClientJoin(bool rejoin)
         SaveStatus("[CLIENT] the host plays %s", g_gameMode != SESSION_MODE_REPUBLICS ? "co-op"
                                                  : g_gameVariant == SESSION_REPUBLICS_EQUAL ? "Republics, equal"
                                                                                             : "Republics, East vs West");
+        SyncBlock_SetStep(1, JOIN_STEPS, "Checking the DLCs", -1);
         SessionDlcs myDlcs, theirDlcs;
         MakeDlcs(&myDlcs);
         if (!NetworkSendExact(sock, &myDlcs, sizeof(myDlcs)) || !NetworkRecvExact(sock, &theirDlcs, sizeof(theirDlcs)) ||
@@ -1158,6 +1330,30 @@ static bool RunClientJoin(bool rejoin)
             SaveStatus("[CLIENT] join refused: %s", dlcWhy);
             break;
         }
+        SyncBlock_SetStep(1, JOIN_STEPS, "Checking the Workshop items", -1);
+        std::vector<WorkshopItem> myItems, hostItems;
+        bool mySteam = Workshop_List(myItems);
+        unsigned hostState = WORKSHOP_LIST_NONE;
+        if (!SendWorkshop(sock, myItems, mySteam ? WORKSHOP_LIST_SENT : WORKSHOP_LIST_NONE) ||
+            !RecvWorkshop(sock, hostItems, &hostState)) {
+            SetSessionError("the host dropped during the Workshop check");
+            break;
+        }
+        SessionWorkshopVerdict verdict = {};
+        memcpy(verdict.magic, "RPMPWSV", 8);
+        verdict.ok = WorkshopVerdict(hostItems, myItems, hostState, mySteam, verdict.why, sizeof(verdict.why)) ? 1 : 0;
+        bool sent = NetworkSendExact(sock, &verdict, sizeof(verdict));
+        if (!verdict.ok) {
+            // The choice screen says what to do; nothing on the page.
+            if (Workshop_Phase() == WORKSHOP_CLOSED) SetSessionError("%s", verdict.why);
+            SaveStatus("[CLIENT] %s", verdict.why);
+            break;
+        }
+        if (!sent) {
+            SetSessionError("the host dropped during the Workshop check");
+            break;
+        }
+        if (verdict.why[0]) SaveStatus("[CLIENT] %s", verdict.why);
         char hostNick[PROFILE_NICK_BYTES];
         if (!ExchangeNicks(sock, hostNick, sizeof(hostNick))) {
             SetSessionError("the host dropped during the name exchange");
@@ -1269,7 +1465,9 @@ static bool RunClientJoin(bool rejoin)
             Sleep(100);
         }
         if (!LockstepNet_SessionStarted()) {
-            if (!g_disconnectRequested) SetSessionError("the host dropped while waiting for the other players");
+            // The host may have said why (the games' content differs).
+            if (!g_disconnectRequested)
+                SetSessionError("%s", LockstepNet_Desync()[0] ? LockstepNet_Desync() : "the host dropped while waiting for the other players");
             break;
         }
         joined = true;
@@ -1294,6 +1492,7 @@ static void RunClientSession()
         if (!joined) {
             CloseLockstep();
             if (g_disconnectRequested) SaveStatus("[CLIENT] cancelled");
+            else if (Workshop_Phase() != WORKSHOP_CLOSED) SaveStatus("[CLIENT] the join waits for the Workshop screen");
             else SaveStatus("[CLIENT] couldn't join: %s", SaveSync_GetLastError());
             return;
         }
@@ -1321,16 +1520,40 @@ static void RunClientSession()
 // Entry points
 // ---------------------------------------------------------------------------
 
+// After an exception left a session (core/guard.h): what the session's own
+// ends do, each step guarded too - the game goes on outside a session.
+static void EndFailedSession()
+{
+    SetSessionError("the session stopped on an error - see the log (GUARD)");
+    SaveStatus("[%s] the session stopped on an error (see the GUARD line above)", g_isHost ? "HOST" : "CLIENT");
+    Guard_Call("the failed session's cleanup", [] {
+        NetLink s = g_activeSock;
+        g_activeSock = NET_NO_LINK;
+        if (s != NET_NO_LINK) NetworkClose(s);
+        if (g_listener != NET_NO_LINK) {
+            NetworkClose(g_listener);
+            g_listener = NET_NO_LINK;
+        }
+        EnterCriticalSection(&g_lock);
+        for (int i = 0; i < g_joinSockCount; i++) NetworkShutdown(g_joinSocks[i]);
+        g_joinSockCount = 0;
+        LeaveCriticalSection(&g_lock);
+        CloseLockstep();
+        SyncBlock_SetActive(false, nullptr);
+        EnsureGameUnpaused();
+    });
+}
+
 static DWORD WINAPI HostSessionThread(LPVOID)
 {
-    RunHostSession();
+    if (!Guard_Call("the host session", [] { RunHostSession(); })) EndFailedSession();
     SetState(SESSION_IDLE);
     return 0;
 }
 
 static DWORD WINAPI ClientSessionThread(LPVOID)
 {
-    RunClientSession();
+    if (!Guard_Call("the join", [] { RunClientSession(); })) EndFailedSession();
     SetPeerIp("");
     SetState(SESSION_IDLE);
     return 0;
@@ -1375,6 +1598,11 @@ void SaveSync_StartHost(int gameMode)
     g_hostSide = Profile_GetInt("profile", "republics_side", 0) == 1 ? 1 : 0;
     g_resyncRequested = false;
     g_resyncing = false;
+    // A session this PC was a player in before showed its host, its ping and
+    // its re-sync countdown here while this host waited for players.
+    g_desyncSince = 0;
+    LockstepNet_ForgetSession();
+    Chat_ResetSession();
     g_sessionStartTick = GetTickCount64();
     SetSessionError("");
     SetState(SESSION_HOST_LISTENING);
@@ -1391,6 +1619,9 @@ void SaveSync_StartClient(const char* hostIp)
     g_isHost = false;
     g_gameMode = SESSION_MODE_COOP; // the host's hello says
     g_resyncing = false;
+    g_desyncSince = 0;
+    LockstepNet_ForgetSession();
+    Chat_ResetSession();
     g_sessionStartTick = GetTickCount64();
     SetSessionError("");
     SetState(SESSION_CLIENT_JOINING);

@@ -26,11 +26,13 @@
 #include "construction_view.h"
 #include "office_guard.h"
 #include "../core/frame_timing.h"
+#include "site_watch.h"
 #include <string.h>
 #include <intrin.h>
 #include <limits.h>
 #include <vector>
 #include <unordered_set>
+#include <algorithm>
 
 #define WORLD_RVA 0x9D4F10
 
@@ -516,12 +518,25 @@ static void VisibleOut(bool swapped)
     // this PC only - the probe found it, and the sessions split on it.
     BYTE** listed = *(BYTE***)(g_exeBase + BUILDINGS_BEGIN_RVA);
     BYTE** listedEnd = *(BYTE***)(g_exeBase + BUILDINGS_END_RVA);
-    std::unordered_set<BYTE*> still(listed, listedEnd);
+    // Which kept buildings are still listed: one pass over the list against
+    // the few kept ones (sorted). A set of every building, made on each of
+    // the ~9 calls a frame, cost a big city its frame rate.
+    static thread_local std::vector<BYTE*> kept;
+    static thread_local std::vector<char> still;
+    kept.clear();
+    for (const VisibleKept& k : g_visibleKept) kept.push_back(k.building);
+    std::sort(kept.begin(), kept.end());
+    still.assign(kept.size(), 0);
+    if (!kept.empty())
+        for (BYTE** it = listed; it && it < listedEnd; ++it) {
+            auto at = std::lower_bound(kept.begin(), kept.end(), *it);
+            if (at != kept.end() && *at == *it) still[at - kept.begin()] = 1;
+        }
     // What the simulation's own building pass writes with no building on the
     // camera (13ce61/13ce6d; a construction site keeps its distance, 13d963):
     // the same on every PC, whatever this phase or an earlier one left.
     for (const VisibleKept& k : g_visibleKept) {
-        if (!still.count(k.building)) continue;
+        if (!still[std::lower_bound(kept.begin(), kept.end(), k.building) - kept.begin()]) continue;
         bool typed = *(void**)(k.building + 0x318) != nullptr;
         k.building[0x115A] = 0;
         *(float*)(k.building + 0x115C) = typed ? 100000.0f : k.distance;
@@ -649,8 +664,10 @@ static void HookedLate(__int64 world)
             o_late(world);
             g_inPhase = false;
             VisibleOut(visible);
+            SiteWatch_Check("Late", true);
         } else {
             PrivateLate(world);
+            SiteWatch_Check("Late (held, this PC's tools)", false);
         }
     }
     *(float*)(world + AUTOSAVE_TIMER_OFFSET) = 0.0f;
@@ -1014,6 +1031,7 @@ static __int64 DetUiRoutine(void* world)
     memcpy(g_privateSearch, shared, sizeof(saved));
     memcpy(shared, saved, sizeof(saved));
     InterlockedIncrement(&g_uiEnclosed);
+    SiteWatch_Check("interface", false);
     return r;
 }
 
@@ -1064,6 +1082,7 @@ static void DetPrepare(__int64 world)
         return;
     }
     long long commandsBegin = FrameTiming_Begin();
+    SiteWatch_Check("between frames", false); // the render thread, the windows outside the hooks
     OfficeSelection_Poll(); // a change of the assign tool's selection becomes a command at this boundary
     BYTE** buildingsBegin = *(BYTE***)(g_exeBase + BUILDINGS_BEGIN_RVA);
     BYTE** buildingsEnd = *(BYTE***)(g_exeBase + BUILDINGS_END_RVA);
@@ -1073,6 +1092,9 @@ static void DetPrepare(__int64 world)
     g_commandFrame = false;
     CommandViewOut(emptied, buildingsBegin, buildingsEnd);
     FrameTiming_End(FRAME_COMMANDS, commandsBegin);
+    // Commands lay and remove sites on every PC alike (their log says so): as
+    // a tick's, only invalid values count, so they do not use up the lines.
+    SiteWatch_Check("commands", true);
     // Keep the native tool for previews. Held frames have no Early pass,
     // so refresh the local preview list before Prepare.
     g_visibleFresh = false;
@@ -1098,6 +1120,7 @@ static void DetPrepare(__int64 world)
     memcpy(timer, tickTimer, sizeof(tickTimer));
     if (scope) Determinism_ToolScopeEnd();
     PrivateViewOut(kept);
+    SiteWatch_Check("Prepare", false);
 }
 
 // The game's cursor pick (2f0f10, called by the frame loop at 105f39 right
@@ -1126,6 +1149,7 @@ static void DetCursorPick(__int64 world, __int64 a2, __int64 a3, __int64 a4)
         original(world, a2, a3, a4);
     }
     PrivateViewOut(kept);
+    SiteWatch_Check("cursor pick", false);
 }
 
 // Late runs even at speed 0: 547ef0 clamps road speeds without time passing;
@@ -1157,15 +1181,24 @@ static void DetRoadWeather(void* world, unsigned long long init)
 // frames looked harmless; after a construction command the PC with more
 // held frames worked the queues off first. On the save path (42cd57) 12fd80
 // stays native.
+// The construction site watch looks at the sites around both: a site whose
+// progress went wrong a few ticks after a road command (#55) is put on the
+// routine that did it.
 static void DetBuildingLinks(void* world, unsigned long long all)
 {
-    if (!Determinism_IsActive() || Determinism_IsStepFrame())
+    if (!Determinism_IsActive() || Determinism_IsStepFrame()) {
+        SiteWatch_Check("Late, before the building links", true);
         ((void (*)(void*, unsigned long long))(g_exeBase + 0x12FD80))(world, all);
+        SiteWatch_Check("the building links (12fd80)", true);
+    }
 }
 static void DetConnectionChecks(void* world)
 {
-    if (!Determinism_IsActive() || Determinism_IsStepFrame())
+    if (!Determinism_IsActive() || Determinism_IsStepFrame()) {
+        SiteWatch_Check("Late, before the connection checks", true);
         ((void (*)(void*))(g_exeBase + 0x12EC40))(world);
+        SiteWatch_Check("the connection checks (12ec40)", true);
+    }
 }
 // The ground-paint queue world+130d0 (filled by 40eaa0 when roads and
 // buildings are built) is drained by 40ece0 at 3155f4 on every frame too: a
@@ -1313,6 +1346,21 @@ typedef U64 (*SiteUpdateFn)(U64 world, U64 building, float a3, U64 a4);
 static U64 DetSiteUpdate(U64 world, U64 building, float a3, U64 a4)
 {
     SiteUpdateFn original = (SiteUpdateFn)(g_exeBase + SITE_UPDATE_RVA);
+    // The building pass passes its xmm8 (zeroed at 137c91, never written
+    // after) as the step: always 0. After a site finished in a tick the next
+    // sites of that tick got another value in it, different on each PC
+    // (-2.3e32 here, 4.4e18 there), and their progress jumped to 1 or to a
+    // huge negative number - the roads drawn running off (#55). It is put
+    // back to 0.
+    if (g_on && Determinism_IsActive() && a3 != 0.0f) {
+        static int s_logged = 0;
+        if (s_logged < 20) {
+            ++s_logged;
+            Logf("republicmp  SIM_PATCHES: construction update of site %p got step %.9g from the building pass - made with 0",
+                 (void*)building, a3);
+        }
+        a3 = 0.0f;
+    }
     // 159070 writes +ddc = 0 at 15921c BEFORE its pause test at 159234,
     // then +898/+fc0 on the paused return. Held Late therefore changed the
     // last productivity even with zero time. The next tick compares it while
@@ -1320,10 +1368,30 @@ static U64 DetSiteUpdate(U64 world, U64 building, float a3, U64 a4)
     // must not change that input. Ordered commands may still update sites.
     if (g_on && Determinism_IsActive() && !Commands_Applying() &&
         (GetCurrentThreadId() != g_simThread || !Determinism_InStepFrame())) return 0;
-    if (!g_on || !Determinism_GetMoneyTrace()) return original(world, building, a3, a4);
-    double rub = *(double*)(world + 0x588), usd = *(double*)(world + 0x580);
-    U64 r = original(world, building, a3, a4);
-    Determinism_NoteSitePayment((BYTE*)building, *(double*)(world + 0x588) - rub, *(double*)(world + 0x580) - usd);
+    // A tick's Late runs with this PC's view (VisibleIn: +115a = 1 on the
+    // buildings on its camera, for the tools and hints), and 159070 reads the
+    // site's +115a at 15b8b6: a site on the camera took the workers' branch
+    // (15b8d8..15ba4c: their targets and positions through 82e590, random
+    // draws) on that PC only - the workers of one home stood elsewhere on
+    // each PC and the citizens differed. The update sees what the simulation
+    // stores on every PC (0, the off-camera branch); VisibleOut puts 0 on
+    // every building after Late anyway, so the word is not written back (the
+    // update may have finished the site).
+    BYTE* b = (BYTE*)building;
+    bool viewed = g_on && Determinism_IsActive() && b && b[0x115A];
+    if (viewed) b[0x115A] = 0;
+    SiteWatch_UpdateBefore(b);
+    U64 r;
+    if (!g_on || !Determinism_GetMoneyTrace()) {
+        r = original(world, building, a3, a4);
+        SiteWatch_UpdateAfter(b);
+    } else {
+        double rub = *(double*)(world + 0x588), usd = *(double*)(world + 0x580);
+        Determinism_NoteSiteInputs(b, a3);
+        r = original(world, building, a3, a4);
+        SiteWatch_UpdateAfter(b);
+        Determinism_NoteSitePayment(b, *(double*)(world + 0x588) - rub, *(double*)(world + 0x580) - usd);
+    }
     return r;
 }
 
@@ -1352,6 +1420,7 @@ static U64 DetSiteDraw(U64 world, U64 pass)
     }
     ConstructionView_After(privateDraw);
     VisibleOut(view);
+    SiteWatch_Check("site drawer", false);
     return r;
 }
 

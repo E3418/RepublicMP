@@ -30,7 +30,17 @@
 #include "office_selection.h"
 #include "new_city.h"
 #include "join_tool.h"
+#include "cancel_tool.h"
+#include "world_workers.h"
+#include "cancel_plans.h"
+#include "plan_remove.h"
+#include "car_owners.h"
+#include "line_spacing.h"
+#include "crime_cancel.h"
+#include "call_home.h"
+#include "popups.h"
 #include "presence.h"
+#include "../core/guard.h"
 #include <vector>
 #include <string.h>
 
@@ -57,6 +67,15 @@ void Commands_Bind(const TsmHost* host)
     OfficeSelection_Bind(host);
     NewCity_Bind(host);
     JoinTool_Bind(host);
+    CancelTool_Bind(host);
+    WorldWorkers_Bind(host);
+    CancelPlans_Bind(host);
+    PlanRemove_Bind(host);
+    CarOwners_Bind(host);
+    LineSpacing_Bind(host);
+    CrimeCancel_Bind(host);
+    CallHome_Bind(host);
+    Popups_Bind(host);
     Presence_Bind(host);
 }
 
@@ -97,6 +116,12 @@ static void Unlock()
 {
     LeaveCriticalSection(&g_commandsLock);
 }
+
+// Lock() for a scope: a failed push (core/guard.h) cannot leave the queue locked.
+struct CommandsLockScope {
+    CommandsLockScope() { Lock(); }
+    ~CommandsLockScope() { Unlock(); }
+};
 
 bool Commands_Capturing()
 {
@@ -153,6 +178,15 @@ static const char* KindName(int kind)
     case LS_CMD_OFFICE_SELECTION: return "office selection";
     case LS_CMD_NEW_CITY: return "new city";
     case LS_CMD_JOIN: return "join";
+    case LS_CMD_NET_CANCEL: return "network cancel";
+    case LS_CMD_WORKERS: return "workers without an office";
+    case LS_CMD_CANCEL_PLANS: return "cancel all plans";
+    case LS_CMD_PLAN_REMOVE: return "plan removal";
+    case LS_CMD_CAR_OWNERS: return "car owners";
+    case LS_CMD_LINE_SPACING: return "line spacing";
+    case LS_CMD_CRIME_CANCEL: return "crime cancel";
+    case LS_CMD_CALL_HOME: return "call home";
+    case LS_CMD_POPUP: return "popup";
     }
     return "?";
 }
@@ -166,15 +200,18 @@ static bool Frequent(int kind)
 void Commands_Submit(int kind, const void* data, size_t size)
 {
     if (!g_capturing) return;
-    Command c;
-    c.kind = kind;
-    c.afterTick = 0;
-    c.seq = 0;
-    c.data.assign((const BYTE*)data, (const BYTE*)data + size);
-    Lock();
-    g_outbox.push_back(std::move(c));
-    Unlock();
-    if (!Frequent(kind)) Logf("republicmp  LOCKSTEP: %s captured - made at the next boundary", KindName(kind));
+    // Called from the game's tools and windows: nothing may leave it.
+    bool ok = Guard_Call("capturing a command", [&] {
+        Command c;
+        c.kind = kind;
+        c.afterTick = 0;
+        c.seq = 0;
+        c.data.assign((const BYTE*)data, (const BYTE*)data + size);
+        CommandsLockScope lock;
+        g_outbox.push_back(std::move(c));
+    });
+    if (!ok) Logf("republicmp  LOCKSTEP: %s NOT captured - it stays on this PC only", KindName(kind));
+    else if (!Frequent(kind)) Logf("republicmp  LOCKSTEP: %s captured - made at the next boundary", KindName(kind));
 }
 
 // The republic's balances: world +0x588 rubles, +0x580 dollars (doubles).
@@ -255,35 +292,12 @@ bool Commands_PointRefusedHere(const float pos[3])
     return Commands_ChecksHere() && !g_areaRule(COMMANDS_LOCAL_PLAYER, pos);
 }
 
-// Makes one command through the module of its kind. A payload whose size does
-// not match the kind's message refuses it.
-static void Apply(const Command& c)
+// The module of a command's kind makes it; false: not made.
+static bool ApplyKind(const Command& c)
 {
-    if (g_areaRule && !InArea(c.kind, c.player, c.data.data(), c.data.size())) {
-        Logf("republicmp  LOCKSTEP: #%u %s of player %d after tick %llu - refused: outside their area", c.seq,
-             KindName(c.kind), c.player, c.afterTick);
-        return;
-    }
-    std::vector<StorageRecord> recipes;
-    bool recipeAudit = StateHash_GetStorageTrace() && StateHash_RecipeRecords(recipes);
-    unsigned recipeLoad = Determinism_WorldLoads();
     const void* p = c.data.data();
     size_t n = c.data.size();
     bool ok = false;
-    g_applyThread = GetCurrentThreadId();
-    InterlockedIncrement(&g_applying);
-    InterlockedIncrement64(&g_applyEpoch);
-    double rubBefore = *Rubles(), usdBefore = *Dollars();
-    InputBlock_BeginNeutral();
-    // A drag the local player has under way would share the tool manager with
-    // the replay and change what it builds on this PC only: it is cancelled.
-    if (c.kind == LS_CMD_SEGMENT || c.kind == LS_CMD_UPGRADE || c.kind == LS_CMD_NET_DEMOLISH || c.kind == LS_CMD_PLACE)
-        Networks_CancelLocalDrag();
-    // This PC's open menus or a window under its cursor (+fbc/+fbe/+fc3) make
-    // the tools return at once: a command is made with them closed, as the
-    // replays are (menus_closed.h). A road from the host was refused on the
-    // player only because its cursor was over a window.
-    MenusClosedScope menus;
     switch (c.kind) {
     case LS_CMD_SEGMENT:
         if (n == sizeof(NetSegmentMsg)) ok = Networks_ApplyCommandSegment(*(const NetSegmentMsg*)p);
@@ -388,9 +402,74 @@ static void Apply(const Command& c)
     case LS_CMD_JOIN:
         ok = JoinTool_ApplyCommand(p, n);
         break;
+    case LS_CMD_NET_CANCEL:
+        ok = CancelTool_ApplyCommand(p, n);
+        break;
+    case LS_CMD_WORKERS:
+        ok = WorldWorkers_ApplyCommand(p, n);
+        break;
+    case LS_CMD_CANCEL_PLANS:
+        ok = CancelPlans_ApplyCommand(p, n);
+        break;
+    case LS_CMD_PLAN_REMOVE:
+        ok = PlanRemove_ApplyCommand(p, n);
+        break;
+    case LS_CMD_CAR_OWNERS:
+        ok = CarOwners_ApplyCommand(p, n);
+        break;
+    case LS_CMD_LINE_SPACING:
+        ok = LineSpacing_ApplyCommand(p, n);
+        break;
+    case LS_CMD_CRIME_CANCEL:
+        ok = CrimeCancel_ApplyCommand(p, n);
+        break;
+    case LS_CMD_CALL_HOME:
+        ok = CallHome_ApplyCommand(p, n);
+        break;
+    case LS_CMD_POPUP:
+        ok = Popups_ApplyCommand(p, n);
+        break;
     }
+    return ok;
+}
+
+// Makes one command through the module of its kind. A payload whose size does
+// not match the kind's message refuses it.
+static void Apply(const Command& c)
+{
+    if (g_areaRule && !InArea(c.kind, c.player, c.data.data(), c.data.size())) {
+        Logf("republicmp  LOCKSTEP: #%u %s of player %d after tick %llu - refused: outside their area", c.seq,
+             KindName(c.kind), c.player, c.afterTick);
+        return;
+    }
+    std::vector<StorageRecord> recipes;
+    bool recipeAudit = false;
+    if (StateHash_GetStorageTrace())
+        Guard_Call("the construction recipe report", [&] { recipeAudit = StateHash_RecipeRecords(recipes); });
+    unsigned recipeLoad = Determinism_WorldLoads();
+    bool ok = false;
+    g_applyThread = GetCurrentThreadId();
+    InterlockedIncrement(&g_applying);
+    InterlockedIncrement64(&g_applyEpoch);
+    double rubBefore = *Rubles(), usdBefore = *Dollars();
+    InputBlock_BeginNeutral();
+    // A drag the local player has under way would share the tool manager with
+    // the replay and change what it builds on this PC only: it is cancelled.
+    if (c.kind == LS_CMD_SEGMENT || c.kind == LS_CMD_UPGRADE || c.kind == LS_CMD_NET_DEMOLISH || c.kind == LS_CMD_PLACE)
+        Networks_CancelLocalDrag();
+    // This PC's open menus or a window under its cursor (+fbc/+fbe/+fc3) make
+    // the tools return at once: a command is made with them closed, as the
+    // replays are (menus_closed.h). A road from the host was refused on the
+    // player only because its cursor was over a window.
+    MenusClosedScope menus;
+    // A module that throws (core/guard.h) leaves this command not made here,
+    // logged, instead of ending the game.
+    Determinism_CommandBegin(c.seq);
+    Guard_Call(KindName(c.kind), [&] { ok = ApplyKind(c); });
+    Determinism_CommandEnd();
     InputBlock_EndNeutral();
-    if (recipeAudit && recipeLoad == Determinism_WorldLoads()) StateHash_LogRecipeChanges(recipes, c.seq, c.afterTick);
+    if (recipeAudit && recipeLoad == Determinism_WorldLoads())
+        Guard_Call("the construction recipe report", [&] { StateHash_LogRecipeChanges(recipes, c.seq, c.afterTick); });
     InterlockedDecrement(&g_applying);
     g_madeThisFrame = true;
     // What the command paid or got: compared between the PCs' logs when the money differs.
@@ -448,6 +527,7 @@ void Commands_Boundary(unsigned long long completed)
     // world and broadcasts to nobody; the player drains requests into no link.
     // Keep both queues intact until the transport has finished its setup.
     if ((g_session == COMMANDS_HOST || g_session == COMMANDS_PLAYER) && !LockstepNet_CommandsReady()) return;
+    if (g_session == COMMANDS_HOST || g_session == COMMANDS_PLAYER) Rename_LogCities();
     if (g_session == COMMANDS_PLAYER) {
         PlayerBoundary(completed);
         return;
@@ -463,6 +543,7 @@ void Commands_Boundary(unsigned long long completed)
         }
         return;
     }
+    if (g_session == COMMANDS_HOST) Rename_ShareNewCities();
     std::vector<Command> due;
     Lock();
     due.swap(g_outbox);
@@ -643,6 +724,7 @@ static bool ApplyGameRules(const void* data, size_t size)
 
 void Commands_Collect()
 {
+    WorldWorkers_Collect(); // also releases the session's value outside a session
     if (!g_capturing) return;
     Commands_GuardSettings();
     PutAwayUncarriedTool();
@@ -711,6 +793,7 @@ void Commands_SetSession(int role)
     g_replaying = false;
     g_seq = 0;
     g_session = role;
+    Rename_ResetCities();
     g_capturing = role != COMMANDS_OFF;
     Logf("republicmp  LOCKSTEP: commands %s", role == COMMANDS_HOST ? "ordered here (host)"
                                               : role == COMMANDS_PLAYER ? "ordered by the host" : "off");
@@ -725,9 +808,10 @@ void Commands_SubmitRemote(int kind, int player, const void* data, size_t size)
     c.afterTick = 0;
     c.seq = 0;
     c.data.assign((const BYTE*)data, (const BYTE*)data + size);
-    Lock();
-    g_outbox.push_back(std::move(c));
-    Unlock();
+    {
+        CommandsLockScope lock;
+        g_outbox.push_back(std::move(c));
+    }
     Logf("republicmp  LOCKSTEP: %s from the player - made at the next boundary", KindName(kind));
 }
 

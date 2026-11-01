@@ -36,7 +36,11 @@
 #include "../core/profile.h"
 
 #define LOCKSTEP_PORT 5560
-#define LOCKSTEP_WINDOW 10      // ticks the host may run ahead of the slowest player
+// Ticks the host may run ahead of the slowest player. It needs about the round
+// trip times 30 ticks a second plus ~1.5 ticks of frames: 10 ran out near
+// 290 ms, so a 280 ms link with its jitter made every PC wait now and then;
+// 20 lasts to ~620 ms. A player keeps only the lead the round trip needs.
+#define LOCKSTEP_WINDOW 20
 #define LOCKSTEP_HASH_TICKS 60  // ticks between state comparisons
 #define LOCKSTEP_MAX_PEERS (PROFILE_MAX_PLAYERS - 1) // players besides the host
 
@@ -53,6 +57,11 @@ bool LockstepNet_Join(const char* hostIp, DWORD timeoutMs, volatile bool* cancel
 // the session runs (the host sends none while it still waits for some).
 bool LockstepNet_SessionStarted();
 void LockstepNet_Close();
+// A new session (host or player) starts: the last session's player list and
+// desync are forgotten, so the page does not show them while it waits.
+void LockstepNet_ForgetSession();
+// Host: why the last accept refused a player ("" none) - the content check.
+const char* LockstepNet_LastRefusal();
 // Host: at least one player is connected; player: connected to the host.
 bool LockstepNet_IsConnected();
 // Commands/ticks wait until the host has finished accepting its roster.

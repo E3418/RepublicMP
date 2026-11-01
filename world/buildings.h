@@ -33,9 +33,12 @@ struct BuildingMsg {
     int demolishCategory;       // *(obj+0x318)+0x360, -1 = unknown
     unsigned long long demolishArgs[5]; // FUN_140168730's p3..p7, raw
     // PLACE: the clicking PC's pick modes, world +f600 (bit 0) and +f698 (bit 1) -
-    // two of the player's own switches the network pick 3c4850 reads when the access road is laid
+    // two of the player's own switches the network pick 3c4850 reads when the access road is laid;
+    // bit 2: the slow-rotate binding (Ctrl) held, which leaves out the automatic connections
     int pickModes;
 };
+#define BUILDING_PICK_NO_LINKS 4
+#define BUILDING_NO_LINKS_BINDING "BUILDING_SLOW_ROTATE"
 
 void Buildings_Bind(const TsmHost* host);
 
@@ -44,4 +47,6 @@ bool Buildings_IsApplyingCommand();
 
 // Main thread, at a tick boundary. True when the engine made it.
 bool Buildings_ApplyPlacementCommand(const BuildingMsg& msg);
+// The building tool's searches for buildings to connect to (see buildings.cpp).
+bool Buildings_InstallLinkSearch();
 bool Buildings_ApplyDemolishCommand(const BuildingMsg& msg);

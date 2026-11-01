@@ -81,6 +81,15 @@
     <ClCompile Include="core\frame_timing.cpp">
       <Filter>core</Filter>
     </ClCompile>
+    <ClCompile Include="determinism\site_watch.cpp">
+      <Filter>determinism</Filter>
+    </ClCompile>
+    <ClCompile Include="session\workshop.cpp">
+      <Filter>session</Filter>
+    </ClCompile>
+    <ClCompile Include="ui\workshop_panel.cpp">
+      <Filter>ui</Filter>
+    </ClCompile>
     <ClCompile Include="world\local_builds.cpp">
       <Filter>world</Filter>
     </ClCompile>
@@ -288,6 +297,33 @@
     <ClCompile Include="lockstep\join_tool.cpp">
       <Filter>lockstep</Filter>
     </ClCompile>
+    <ClCompile Include="lockstep\cancel_tool.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\world_workers.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\cancel_plans.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\plan_remove.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\car_owners.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\line_spacing.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\crime_cancel.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\call_home.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\popups.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
     <ClCompile Include="lockstep\presence.cpp">
       <Filter>lockstep</Filter>
     </ClCompile>
@@ -358,6 +394,18 @@
     </ClInclude>
     <ClInclude Include="core\frame_timing.h">
       <Filter>core</Filter>
+    </ClInclude>
+    <ClInclude Include="core\guard.h">
+      <Filter>core</Filter>
+    </ClInclude>
+    <ClInclude Include="determinism\site_watch.h">
+      <Filter>determinism</Filter>
+    </ClInclude>
+    <ClInclude Include="session\workshop.h">
+      <Filter>session</Filter>
+    </ClInclude>
+    <ClInclude Include="ui\workshop_panel.h">
+      <Filter>ui</Filter>
     </ClInclude>
     <ClInclude Include="game\present_hook.h">
       <Filter>game</Filter>
@@ -567,6 +615,33 @@
       <Filter>lockstep</Filter>
     </ClInclude>
     <ClInclude Include="lockstep\join_tool.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\cancel_tool.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\world_workers.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\cancel_plans.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\plan_remove.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\car_owners.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\line_spacing.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\crime_cancel.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\call_home.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\popups.h">
       <Filter>lockstep</Filter>
     </ClInclude>
     <ClInclude Include="lockstep\presence.h">

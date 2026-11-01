@@ -19,15 +19,27 @@
 #include "../determinism/determinism.h"
 #include "../determinism/sim_patches.h"
 #include "../determinism/construction_view.h"
+#include "../determinism/site_watch.h"
 #include "../determinism/probe_trace.h"
 #include "../determinism/citizen_trace.h"
 #include "../determinism/probe_watch.h"
 #include "../save/save_zip.h"
 #include "../transport/network.h"
 #include "../session/save_sync.h"
+#include "../session/workshop.h"
 #include "../world/buildings.h"
 #include "../world/networks.h"
 #include "../lockstep/building_settings.h"
+#include "../lockstep/cancel_tool.h"
+#include "../lockstep/world_workers.h"
+#include "../lockstep/cancel_plans.h"
+#include "../lockstep/plan_remove.h"
+#include "../lockstep/car_owners.h"
+#include "../lockstep/line_spacing.h"
+#include "../lockstep/crime_cancel.h"
+#include "../lockstep/call_home.h"
+#include "../lockstep/popups.h"
+#include "../lockstep/rename.h"
 
 #include "../game/world.h"
 #include "../game/camera.h"
@@ -64,6 +76,7 @@ extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPlugi
     SaveZip_Bind(host);
     Network_Bind(host);
     SaveSync_Bind(host);
+    Workshop_Bind(host);
     Buildings_Bind(host);
     Networks_Bind(host);
     ImGuiHook_Bind(host);
@@ -80,6 +93,7 @@ extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPlugi
     Determinism_Bind(host);
     SimPatches_Bind(host);
     ConstructionView_Bind(host);
+    SiteWatch_Bind(host);
     ProbeTrace_Bind(host);
     CitizenTrace_Bind(host);
     ProbeWatch_Bind(host);
@@ -124,6 +138,45 @@ extern "C" __declspec(dllexport) int TsmPluginStart(void)
     bool okGroupTool = Networks_InstallGroupToolHook();
     Logf("republicmp  group tool hook: %d%s", okGroupTool,
          okGroupTool ? "" : " - the group construction tools will NOT be synced");
+
+    bool okSiteWatch = SiteWatch_Install();
+    Logf("republicmp  site watch hooks: %d%s", okSiteWatch,
+         okSiteWatch ? "" : " - the construction site watch does not see sites made or destroyed");
+
+    bool okLabels = Rename_InstallLabelRefresh();
+    Logf("republicmp  city label refresh: %d%s", okLabels, okLabels ? "" : " - a shared city name shows when its card is opened");
+
+    bool okCancel = CancelTool_Install();
+    Logf("republicmp  network cancel tool: %d%s", okCancel, okCancel ? "" : " - the cancel tools are made on one PC only");
+
+    bool okWorkers = WorldWorkers_Install();
+    Logf("republicmp  workers without an office: %d%s", okWorkers,
+         okWorkers ? "" : " - the construction menu's field stays each PC's own");
+
+    bool okCancelPlans = CancelPlans_Install();
+    Logf("republicmp  cancel all plans buttons: %d%s", okCancelPlans, okCancelPlans ? "" : " - cancel all plans acts on the clicking PC only");
+
+    bool okPlanRemove = PlanRemove_Install();
+    Logf("republicmp  factory plan removal: %d%s", okPlanRemove, okPlanRemove ? "" : " - the factory's remove from plan acts on the clicking PC only");
+
+    bool okCarOwners = CarOwners_Install();
+    Logf("republicmp  car owners reset: %d%s", okCarOwners, okCarOwners ? "" : " - the car window's reset acts on the clicking PC only");
+
+    bool okLineSpacing = LineSpacing_Install();
+    Logf("republicmp  line spacing button: %d%s", okLineSpacing, okLineSpacing ? "" : " - line spacing acts on the clicking PC only");
+
+    bool okCrimeCancel = CrimeCancel_Install();
+    Logf("republicmp  crime cancel button: %d%s", okCrimeCancel, okCrimeCancel ? "" : " - the crime list's cancel acts on the clicking PC only");
+
+    bool okCallHome = CallHome_Install();
+    Logf("republicmp  partner call home: %d%s", okCallHome, okCallHome ? "" : " - a partner building's call home acts on one PC");
+
+    bool okPopups = Popups_Install();
+    Logf("republicmp  popup callbacks: %d%s", okPopups, okPopups ? "" : " - popups act on the clicking PC only");
+
+    bool okLinkSearch = Buildings_InstallLinkSearch();
+    Logf("republicmp  building link search: %d%s", okLinkSearch,
+         okLinkSearch ? "" : " - placed buildings get no conveyor, pipe or factory connections in a session");
 
     bool okCollision = InstallPlacementCollisionHook();
     Logf("republicmp  placement collision hook: %d%s", okCollision,

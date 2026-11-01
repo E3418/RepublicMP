@@ -46,6 +46,7 @@
 #pragma once
 
 #include "tesmio_plugin.h"
+#include <vector>
 
 #define DETERMINISM_FIXED_FPS 30.0f
 
@@ -89,12 +90,27 @@ void Determinism_DumpMoneyTrace(unsigned long long tick);
 // The money trace's per-site part: what one construction site's update paid
 // in the tick being run (main thread, the tick's Late).
 void Determinism_NoteSitePayment(unsigned char* building, double rubles, double dollars);
+// Right before the same update: what it reads besides progress and materials.
+void Determinism_NoteSiteInputs(unsigned char* building, float step);
 
 // A command's own draws from the shared random stream, keyed by a fixed exe RVA
 // instead of the caller (a call from this DLL has another address on every PC).
 // Same arithmetic as rand() and C3DRandom_Float.
 int Determinism_CommandRand(unsigned site);
 float Determinism_CommandRandFloat(unsigned site, float a, float b);
+// Around one command made at a boundary (lockstep/commands): the game's draws
+// come from a stream of that command alone (its number), the same on every
+// PC whatever each one drew before at the same sites.
+void Determinism_CommandBegin(unsigned long long seq);
+void Determinism_CommandEnd();
+// The shared stream's draws so far per call site (an exe RVA), sorted by site:
+// which 0 the simulation thread, 1 the early worker. Main thread, between
+// ticks. False: no such thread.
+struct DetSiteCount {
+    unsigned site;
+    unsigned count;
+};
+bool Determinism_SiteCounts(int which, std::vector<DetSiteCount>& out);
 
 // Probe control (UI). steps: complete ticks per run, interval: ticks between hashes.
 // Fuzz: run 2 inserts held frames; both runs change speed every 300 ticks.

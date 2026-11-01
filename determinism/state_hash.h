@@ -71,11 +71,16 @@ struct BuildingRecord {
     int slots;              // storage slots (+0x970), up to RECORD_SLOTS described below
     int slotEntries[RECORD_SLOTS];
     float slotAmount[RECORD_SLOTS];
+    float field[7];         // a field's (category 8) work words +0xe34..+0xe4c, read by the
+                            // farm's planting test (16fcd0); not hashed. 0 for other buildings
 };
 struct VehicleRecord {
     int index;              // +0x04
     float pos[3];           // +0xde0
     unsigned long long cargo; // hash of the cargo entries
+    char type[32];          // its type's name (+0x1708, the name at +0x200), cut
+    float wander;           // +0x1778: eased toward a random number (67e6b0); not hashed
+    int stops;              // its stations +0x680 (a farm vehicle's first is its field); not hashed
 };
 struct CitizenRecord {
     int home;               // home building's index (-1: none)

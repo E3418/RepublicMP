@@ -6,6 +6,7 @@
 #include "demolish_hook.h" // DemolishHook_CallOriginal
 #include "view_list_scope.h"
 #include "menus_closed.h"
+#include "../game/input_block.h" // InputBlock_HoldInNeutral
 #include <vector>
 #include <algorithm>
 #include <stdio.h>
@@ -186,6 +187,99 @@ static __int64 FindBuildingAt(float x, float y, float z, int category)
 }
 
 // ---------------------------------------------------------------------------
+// Buildings to connect to
+// ---------------------------------------------------------------------------
+//
+// Besides the access roads, the building tool lays a new building's other
+// connections itself: to the points of the buildings around it, footpaths
+// (2be0c0), conveyors (2c00fe, 2c15ca), factory connections (2c2ac0), pipes
+// (2c3e82) and fences (2c52bb), each within its distance of the point
+// (250 m for a conveyor, 150 m for a footpath). It walks the frame's
+// visible-buildings list world+11dc0 for them - the buildings on this PC's
+// camera, which reads empty while commands are made (determinism/
+// sim_patches), so a command placed none of these. At those six sites the
+// list's address is taken through a relay: the native one, or while a
+// placement command is made the buildings near its cursor in the order of
+// the building list - the same on every PC. The other reads of the visible
+// list (preview hints, the new building's push) stay native.
+#define VISIBLE_LIST_OFFSET 0x11dc0
+#define LINK_SEARCH_RADIUS 400.0f
+static const unsigned kLinkSearchSites[] = { 0x2be0c0, 0x2c00fe, 0x2c15ca, 0x2c2ac0, 0x2c3e82, 0x2c52bb };
+// lea rax, [r13 + 11dc0h]
+static const unsigned char kLinkSearchOriginal[7] = { 0x49, 0x8d, 0x85, 0xc0, 0x1d, 0x01, 0x00 };
+// The relay: the native address, replaced by the slot's (at +32) when set.
+static const unsigned char kLinkSearchRelay[] = {
+    0x49, 0x8d, 0x85, 0xc0, 0x1d, 0x01, 0x00,       // lea rax, [r13 + 11dc0h]
+    0x48, 0x83, 0x3d, 0x11, 0x00, 0x00, 0x00, 0x00, // cmp qword [rip + 17], 0
+    0x74, 0x07,                                     // je ret
+    0x48, 0x8b, 0x05, 0x08, 0x00, 0x00, 0x00,       // mov rax, [rip + 8]
+    0xc3 };                                         // ret
+#define LINK_RELAY_SLOT 32
+static BYTE* g_linkRelay = nullptr;
+static std::vector<BYTE*> g_nearBuildings;
+static BYTE* g_nearList[3]; // a vector header over g_nearBuildings: begin, end, capacity
+
+bool Buildings_InstallLinkSearch()
+{
+    for (unsigned site : kLinkSearchSites)
+        if (memcmp(g_exeBase + site, kLinkSearchOriginal, sizeof(kLinkSearchOriginal)) != 0) {
+            Logf("republicmp  BUILDINGS: unexpected bytes at 0x%X - commands place no connections to other buildings", site);
+            return false;
+        }
+    BYTE* relay = AllocNear(g_exeBase, 4096);
+    if (!relay) return false;
+    DWORD old;
+    if (!VirtualProtect(relay, 4096, PAGE_EXECUTE_READWRITE, &old)) return false;
+    memcpy(relay, kLinkSearchRelay, sizeof(kLinkSearchRelay));
+    *(BYTE**)(relay + LINK_RELAY_SLOT) = nullptr;
+    FlushInstructionCache(GetCurrentProcess(), relay, sizeof(kLinkSearchRelay));
+    for (unsigned site : kLinkSearchSites) {
+        long long rel = (long long)relay - (long long)(g_exeBase + site + 5);
+        if (rel < INT_MIN || rel > INT_MAX) return false;
+    }
+    for (unsigned site : kLinkSearchSites) {
+        BYTE* at = g_exeBase + site;
+        int rel32 = (int)((long long)relay - (long long)(at + 5));
+        unsigned char patch[7] = { 0xe8, 0, 0, 0, 0, 0x66, 0x90 }; // call relay; nop
+        memcpy(patch + 1, &rel32, 4);
+        if (!VirtualProtect(at, sizeof(patch), PAGE_EXECUTE_READWRITE, &old)) return false;
+        memcpy(at, patch, sizeof(patch));
+        VirtualProtect(at, sizeof(patch), old, &old);
+        FlushInstructionCache(GetCurrentProcess(), at, sizeof(patch));
+    }
+    g_linkRelay = relay;
+    return true;
+}
+
+static void NearBuildingsBegin(float x, float z)
+{
+    if (!g_linkRelay) return;
+    g_nearBuildings.clear();
+    __try {
+        BYTE** it = *(BYTE***)(g_exeBase + VEC_BUILDINGS_BEGIN_RVA);
+        BYTE** end = *(BYTE***)(g_exeBase + VEC_BUILDINGS_END_RVA);
+        for (; it && it < end; ++it) {
+            BYTE* b = *it;
+            if (!b) continue;
+            float dx = *(float*)(b + OBJ_POS_OFFSET) - x;
+            float dz = *(float*)(b + OBJ_POS_OFFSET + 8) - z;
+            if (dx * dx + dz * dz < LINK_SEARCH_RADIUS * LINK_SEARCH_RADIUS) g_nearBuildings.push_back(b);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        g_nearBuildings.clear();
+    }
+    BYTE** data = g_nearBuildings.data();
+    g_nearList[0] = (BYTE*)data;
+    g_nearList[1] = g_nearList[2] = (BYTE*)(data + g_nearBuildings.size());
+    *(BYTE* volatile*)(g_linkRelay + LINK_RELAY_SLOT) = (BYTE*)g_nearList;
+}
+
+static void NearBuildingsEnd()
+{
+    if (g_linkRelay) *(BYTE* volatile*)(g_linkRelay + LINK_RELAY_SLOT) = nullptr;
+}
+
+// ---------------------------------------------------------------------------
 // Placement
 // ---------------------------------------------------------------------------
 //
@@ -200,7 +294,9 @@ static __int64 FindBuildingAt(float x, float y, float z, int category)
 // nothing, a second call with param_4 = 1, param_8 = 1 (confirm without a
 // click) places the building without its roads - the same outcome on every
 // PC either way. No rotation is written afterwards: every PC smooths the same
-// yaw input alike.
+// yaw input alike. With the clicking PC's Ctrl held the tool lays no
+// connection at all, as in the base game (each of its connection passes first
+// asks the binding BUILDING_SLOW_ROTATE).
 
 bool Buildings_ApplyPlacementCommand(const BuildingMsg& msg)
 {
@@ -259,6 +355,10 @@ bool Buildings_ApplyPlacementCommand(const BuildingMsg& msg)
             bool scoped = ViewListScope_Begin(msg.cursorX - PLACE_SCOPE_MARGIN, msg.cursorZ - PLACE_SCOPE_MARGIN,
                                               msg.cursorX + PLACE_SCOPE_MARGIN, msg.cursorZ + PLACE_SCOPE_MARGIN);
             LocalBuilds_BeginBuildingPlacement();
+            // The clicking PC's Ctrl (the tool reads it as the slow-rotate binding) leaves
+            // out every automatic connection; the buildings to connect to are the same here.
+            InputBlock_HoldInNeutral((msg.pickModes & BUILDING_PICK_NO_LINKS) ? BUILDING_NO_LINKS_BINDING : nullptr);
+            NearBuildingsBegin(msg.cursorX, msg.cursorZ);
             InterlockedIncrement(&g_applyingRemote);
             const int* result = (const int*)(thisPtr + PLACEMENT_RESULT_OFFSET);
             int clickResult[3] = { 0, 0, 0 };
@@ -280,14 +380,17 @@ bool Buildings_ApplyPlacementCommand(const BuildingMsg& msg)
             } __finally {
                 *pressed = 0;
                 InterlockedDecrement(&g_applyingRemote);
+                NearBuildingsEnd();
+                InputBlock_HoldInNeutral(nullptr);
                 LocalBuilds_EndBuildingPlacement();
                 if (scoped) ViewListScope_End();
             }
             char modeText[96];
             char made[320];
             DescribeNewObjects(msg.cursorX, msg.cursorZ, made, sizeof(made));
-            Logf("republicmp  BUILDINGS: command placement type=[%s] pay=%s cursor=(%.2f,%.2f,%.2f) - %s (objects %d, click result %d,%d,%d, result %d,%d,%d) %s",
+            Logf("republicmp  BUILDINGS: command placement type=[%s] pay=%s cursor=(%.2f,%.2f,%.2f)%s - %s (objects %d, click result %d,%d,%d, result %d,%d,%d) %s",
                  typeName, BuildMode_Describe(msg.mode, modeText, sizeof(modeText)), msg.cursorX, msg.cursorY, msg.cursorZ,
+                 (msg.pickModes & BUILDING_PICK_NO_LINKS) ? " Ctrl: no connections" : "",
                  withRoads ? "placed by the click frame" : placed ? "placed by the second call, without access roads" : "refused by the engine",
                  newCount, clickResult[0], clickResult[1], clickResult[2], result[0], result[1], result[2], made);
         } __finally {

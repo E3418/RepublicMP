@@ -7,6 +7,9 @@
 #include "../determinism/determinism.h"
 #include "../determinism/citizen_trace.h"
 #include "../transport/network.h"
+#include "../core/guard.h"
+#include "../session/workshop.h"
+#include "../session/save_sync.h"
 #include <deque>
 #include <vector>
 #include <string.h>
@@ -44,7 +47,7 @@ struct LsCommandHead { unsigned long long afterTick; int kind; int player; }; //
 struct LsHash { unsigned long long tick; StateSummary s; };
 struct LsState { int paused; int speed; };
 struct LsPing { unsigned long long sentMs; int reply; };
-struct LsHello { char magic[8]; char nick[PROFILE_NICK_BYTES]; };
+struct LsHello { char magic[8]; char nick[PROFILE_NICK_BYTES]; WorkshopContent content; }; // content: session/workshop
 struct LsPlayerEntry { char nick[PROFILE_NICK_BYTES]; int rttMs; unsigned behind; unsigned char host, self, pad[2]; };
 struct LsPlayers { unsigned count; LsPlayerEntry e[PROFILE_MAX_PLAYERS]; };
 struct LsMark { int player; int kind; float pos[3]; char nick[PROFILE_NICK_BYTES]; };
@@ -111,6 +114,8 @@ struct OwnRecords {
     std::vector<CitizenRecord> citizens;
     std::vector<StorageRecord> storage;
     bool storageEnabled = false, storageValid = false;
+    std::vector<DetSiteCount> draws[2]; // the shared stream's draws per site: simulation thread, early worker
+    bool drawsValid[2] = {};
 };
 static OwnRecords g_records[LS_RECORD_KEEP];
 static SRWLOCK g_recordsLock = SRWLOCK_INIT;
@@ -125,6 +130,7 @@ static void KeepRecords(unsigned long long tick)
     if (!r.storageEnabled) r.storage.clear();
     r.valid = StateHash_BuildingRecords(r.buildings) && StateHash_VehicleRecords(r.vehicles) &&
               StateHash_CitizenRecords(r.citizens);
+    for (int k = 0; k < 2; k++) r.drawsValid[k] = Determinism_SiteCounts(k, r.draws[k]);
     ReleaseSRWLockExclusive(&g_recordsLock);
 }
 
@@ -212,10 +218,21 @@ static void DumpRecords(unsigned long long tick, const char* what)
             out.Add("S %d %d %d [%s] %.9g %08X", s.building, s.slot, s.entry, s.resource, s.amount, bits);
         }
     }
-    if (strstr(subsystems, "vehicles")) {
-        out.Add("tick %llu, %d vehicles (index x y z cargo)", tick, (int)r.vehicles.size());
+    // Fields and vehicles also with the citizens: a farm sends its workers to a field
+    // from the field's work words and its vehicles' stations, none of them hashed.
+    bool citizens = strstr(subsystems, "citizens") != nullptr;
+    if (strstr(subsystems, "buildings") || citizens) {
+        out.Add("tick %llu, fields' work words (index +e34 +e38 +e3c +e40 +e44 +e48 +e4c)", tick);
+        for (const BuildingRecord& b : r.buildings)
+            if (b.category == 8)
+                out.Add("F %d %.9g %.9g %.9g %.9g %.9g %.9g %.9g", b.index, b.field[0], b.field[1], b.field[2], b.field[3],
+                        b.field[4], b.field[5], b.field[6]);
+    }
+    if (strstr(subsystems, "vehicles") || citizens) {
+        out.Add("tick %llu, %d vehicles (index x y z cargo type +1778 stations)", tick, (int)r.vehicles.size());
         for (const VehicleRecord& v : r.vehicles)
-            out.Add("V %d %.9g %.9g %.9g %016llX", v.index, v.pos[0], v.pos[1], v.pos[2], v.cargo);
+            out.Add("V %d %.9g %.9g %.9g %016llX %s %.9g %d", v.index, v.pos[0], v.pos[1], v.pos[2], v.cargo, v.type, v.wander,
+                    v.stops);
     }
     if (strstr(subsystems, "citizens")) {
         out.Add("tick %llu, %d citizens (n home age x y z)", tick, (int)r.citizens.size());
@@ -224,9 +241,29 @@ static void DumpRecords(unsigned long long tick, const char* what)
             out.Add("C %d %d %.9g %.9g %.9g %.9g", (int)i, c.home, c.age, c.pos[0], c.pos[1], c.pos[2]);
         }
     }
+    // Whatever differs: a site drawn more often on one PC (camera, interface)
+    // gives every later draw there another number.
+    static const char* const kDrawThreads[2] = { "simulation thread", "early worker" };
+    for (int k = 0; k < 2; k++) {
+        if (!r.drawsValid[k]) continue;
+        out.Add("tick %llu, random numbers drawn per site on the %s: %d site(s) (R%d exe+site:count ...)", tick,
+                kDrawThreads[k], (int)r.draws[k].size(), k);
+        char line[400];
+        size_t used = 0;
+        for (size_t i = 0; i < r.draws[k].size(); i++) {
+            int n = _snprintf_s(line + used, sizeof(line) - used, _TRUNCATE, "%s%X:%u", used ? " " : "", r.draws[k][i].site,
+                                r.draws[k][i].count);
+            if (n > 0) used += n;
+            if (used > 300 || i + 1 == r.draws[k].size()) {
+                out.Add("R%d %s", k, line);
+                used = 0;
+            }
+        }
+    }
     out.Flush();
 }
 static char g_desync[256] = "";
+static char g_lastRefusal[320] = ""; // the host's last accept: why a player was refused
 static unsigned long long g_desyncTick = 0; // the tick of g_desync
 
 // Player side.
@@ -366,9 +403,8 @@ static void Dispatch(LsMessage& m)
         }
         return;
     }
-    EnterCriticalSection(&g_inLock);
+    LockScope lock(g_inLock);
     g_inbox.push_back(std::move(m));
-    LeaveCriticalSection(&g_inLock);
 }
 
 // ---------------------------------------------------------------------------
@@ -394,15 +430,16 @@ static DWORD WINAPI DelayThread(LPVOID)
 {
     for (;;) {
         DWORD wait = INFINITE;
-        EnterCriticalSection(&g_delayLock);
-        ULONGLONG now = GetTickCount64();
-        while (!g_delayed.empty() && g_delayed.front().due <= now) {
-            LsMessage m = std::move(g_delayed.front().m);
-            g_delayed.pop_front();
-            Dispatch(m);
-        }
-        if (!g_delayed.empty()) wait = (DWORD)(g_delayed.front().due - now);
-        LeaveCriticalSection(&g_delayLock);
+        Guard_Call("the latency emulation", [&wait] {
+            LockScope lock(g_delayLock);
+            ULONGLONG now = GetTickCount64();
+            while (!g_delayed.empty() && g_delayed.front().due <= now) {
+                LsMessage m = std::move(g_delayed.front().m);
+                g_delayed.pop_front();
+                Guard_Call("a received lockstep message", [&m] { Dispatch(m); });
+            }
+            if (!g_delayed.empty()) wait = (DWORD)(g_delayed.front().due - now);
+        });
         WaitForSingleObject(g_delayWake, wait);
     }
 }
@@ -412,7 +449,7 @@ static DWORD WINAPI DelayThread(LPVOID)
 static bool Delay(LsMessage& m)
 {
     LONG ms = g_delayMs;
-    EnterCriticalSection(&g_delayLock);
+    LockScope lock(g_delayLock);
     bool queued = ms > 0 || !g_delayed.empty();
     if (queued) {
         ULONGLONG due = GetTickCount64() + (ULONGLONG)ms;
@@ -421,7 +458,6 @@ static bool Delay(LsMessage& m)
         if (!g_delayThread) g_delayThread = CreateThread(nullptr, 0, DelayThread, nullptr, 0, nullptr);
         SetEvent(g_delayWake);
     }
-    LeaveCriticalSection(&g_delayLock);
     return queued;
 }
 
@@ -435,9 +471,8 @@ void LockstepNet_SetAddedDelay(int ms)
 
 int LockstepNet_GetAddedDelay() { return (int)g_delayMs; }
 
-static DWORD WINAPI RecvThread(LPVOID param)
+static void ReceiveLoop(int index)
 {
-    int index = (int)(intptr_t)param;
     Peer& peer = g_peers[index];
     while (peer.connected) {
         LsHeader h;
@@ -458,8 +493,19 @@ static DWORD WINAPI RecvThread(LPVOID param)
             g_resyncReceived = true;
             continue;
         }
-        if (!Delay(m)) Dispatch(m);
+        // One message that fails is lost, not the connection.
+        Guard_Call("a received lockstep message", [&m] {
+            if (!Delay(m)) Dispatch(m);
+        });
     }
+}
+
+// A failure outside one message ends this connection as a lost one would.
+static DWORD WINAPI RecvThread(LPVOID param)
+{
+    int index = (int)(intptr_t)param;
+    Peer& peer = g_peers[index];
+    Guard_Call("the lockstep receive thread", [index] { ReceiveLoop(index); });
     if (peer.connected)
         Logf(g_isHost ? "republicmp  LOCKSTEP: the connection to %s is closed" : "republicmp  LOCKSTEP: the connection is closed", peer.nick);
     peer.connected = false;
@@ -532,6 +578,7 @@ int LockstepNet_HostAccept(int expected, DWORD timeoutMs, volatile bool* cancel,
     LockstepNet_Close();
     if (!NetworkInit()) return 0;
     ResetState();
+    g_lastRefusal[0] = 0;
     g_isHost = true;
     if (expected > LOCKSTEP_MAX_PEERS) expected = LOCKSTEP_MAX_PEERS;
     NetLink listener = NetworkListen(LOCKSTEP_PORT, LOCKSTEP_MAX_PEERS);
@@ -561,7 +608,34 @@ int LockstepNet_HostAccept(int expected, DWORD timeoutMs, volatile bool* cancel,
         NetworkSetTimeouts(s, 0);
         char ip[48];
         NetworkPeerAddress(s, ip, sizeof(ip));
+        // The loaded content (session/workshop): other Workshop items, their
+        // load order or DLCs give other type numbers, which commands use.
+        // The vehicle types refuse (commands name them by number); the build
+        // menu only warns until it is known to match on PCs that agree.
+        char differs[256] = "";
+        WorkshopContent mine = Workshop_Content();
+        bool vehiclesDiffer = mine.vehicles != hello.content.vehicles || mine.vehicleHash != hello.content.vehicleHash;
+        if (memcmp(&mine, &hello.content, sizeof(mine)) != 0)
+            _snprintf_s(differs, sizeof(differs), _TRUNCATE,
+                        "the games' content differs (vehicle types %u here, %u there; build menu %u here, %u there) - "
+                        "the Workshop items, their load order or the DLCs",
+                        mine.vehicles, hello.content.vehicles, mine.buildings, hello.content.buildings);
+        if (differs[0]) {
+            Logf("republicmp  LOCKSTEP: %s: %s (hashes %08X/%08X here, %08X/%08X there)", hello.nick, differs, mine.vehicleHash,
+                 mine.buildingHash, hello.content.vehicleHash, hello.content.buildingHash);
+            if (vehiclesDiffer && SaveSync_GetDlcCheck()) {
+                // The player shows why, then its join ends.
+                LsHeader h = { LS_DESYNC, (unsigned)strlen(differs) };
+                NetworkSendExact(s, &h, sizeof(h));
+                NetworkSendExact(s, differs, h.size);
+                Logf("republicmp  LOCKSTEP: %s refused - set Check DLCs to OFF to play anyway", hello.nick);
+                _snprintf_s(g_lastRefusal, sizeof(g_lastRefusal), _TRUNCATE, "%s: %s", hello.nick, differs);
+                NetworkClose(s);
+                continue;
+            }
+        }
         StartPeer(s, hello.nick, ip);
+        if (differs[0]) Send(g_peers[g_peerSlots - 1], LS_DESYNC, differs, strlen(differs)); // playing anyway: said on its page
         Logf("republicmp  LOCKSTEP: %s (%s) connected - %d of %d", hello.nick, ip, g_peerSlots, expected);
     }
     NetworkClose(listener);
@@ -600,6 +674,7 @@ bool LockstepNet_Join(const char* hostIp, DWORD timeoutMs, volatile bool* cancel
             first.h = { LS_HELLO, sizeof(LsHello) };
             memcpy(first.hello.magic, kHelloMagic, sizeof(kHelloMagic));
             strncpy_s(first.hello.nick, Profile_GetNick(), _TRUNCATE);
+            first.hello.content = Workshop_Content();
             if (!NetworkSendExact(s, &first, sizeof(first))) {
                 NetworkClose(s);
                 return false;
@@ -640,6 +715,19 @@ void LockstepNet_Close()
         }
     }
     g_peerSlots = 0;
+}
+
+const char* LockstepNet_LastRefusal() { return g_lastRefusal; }
+
+void LockstepNet_ForgetSession()
+{
+    g_isHost = false;
+    g_desync[0] = 0;
+    g_desyncTick = 0;
+    if (!g_locksReady) return;
+    EnterCriticalSection(&g_listLock);
+    memset(&g_list, 0, sizeof(g_list));
+    LeaveCriticalSection(&g_listLock);
 }
 
 int LockstepNet_PeerCount()
@@ -760,54 +848,60 @@ void LockstepNet_StateAfter(unsigned long long tick, const StateSummary& s)
 // Game thread
 // ---------------------------------------------------------------------------
 
+// One received message on the game thread.
+static void HandleMessage(LsMessage& m)
+{
+    const BYTE* p = m.data.data();
+    size_t n = m.data.size();
+    Peer& peer = g_peers[m.peer];
+    switch (m.type) {
+    case LS_GRANT:
+        if (n == sizeof(LsGrant)) g_grants.push_back(*(const LsGrant*)p);
+        g_grantBacklog = (LONG)g_grants.size();
+        break;
+    case LS_CMD:
+        if (n >= sizeof(LsCommandHead))
+            Commands_SubmitRemote(((const LsCommandHead*)p)->kind, m.peer + 1, p + sizeof(LsCommandHead),
+                                  n - sizeof(LsCommandHead));
+        break;
+    case LS_CMDS:
+        if (n >= sizeof(LsCommandHead))
+            Commands_Receive(((const LsCommandHead*)p)->kind, ((const LsCommandHead*)p)->player,
+                             ((const LsCommandHead*)p)->afterTick,
+                             p + sizeof(LsCommandHead), n - sizeof(LsCommandHead));
+        break;
+    case LS_ACK:
+        if (n == sizeof(unsigned long long) && *(const unsigned long long*)p > peer.completed)
+            peer.completed = *(const unsigned long long*)p;
+        break;
+    case LS_HASH:
+        if (n == sizeof(LsHash)) Compare(m.peer, *(const LsHash*)p);
+        break;
+    case LS_PAUSE:
+        g_pauseToggles++;
+        break;
+    case LS_SPEED:
+        if (n == sizeof(int)) g_speedRequest = *(const int*)p;
+        break;
+    case LS_STATE:
+        if (n == sizeof(LsState)) {
+            g_hostState = *(const LsState*)p;
+            g_hostStateKnown = true;
+        }
+        break;
+    }
+}
+
 void LockstepNet_Poll()
 {
     if (!g_locksReady) return;
     std::deque<LsMessage> in;
-    EnterCriticalSection(&g_inLock);
-    in.swap(g_inbox);
-    LeaveCriticalSection(&g_inLock);
-    for (LsMessage& m : in) {
-        const BYTE* p = m.data.data();
-        size_t n = m.data.size();
-        Peer& peer = g_peers[m.peer];
-        switch (m.type) {
-        case LS_GRANT:
-            if (n == sizeof(LsGrant)) g_grants.push_back(*(const LsGrant*)p);
-            g_grantBacklog = (LONG)g_grants.size();
-            break;
-        case LS_CMD:
-            if (n >= sizeof(LsCommandHead))
-                Commands_SubmitRemote(((const LsCommandHead*)p)->kind, m.peer + 1, p + sizeof(LsCommandHead),
-                                      n - sizeof(LsCommandHead));
-            break;
-        case LS_CMDS:
-            if (n >= sizeof(LsCommandHead))
-                Commands_Receive(((const LsCommandHead*)p)->kind, ((const LsCommandHead*)p)->player,
-                                 ((const LsCommandHead*)p)->afterTick,
-                                 p + sizeof(LsCommandHead), n - sizeof(LsCommandHead));
-            break;
-        case LS_ACK:
-            if (n == sizeof(unsigned long long) && *(const unsigned long long*)p > peer.completed)
-                peer.completed = *(const unsigned long long*)p;
-            break;
-        case LS_HASH:
-            if (n == sizeof(LsHash)) Compare(m.peer, *(const LsHash*)p);
-            break;
-        case LS_PAUSE:
-            g_pauseToggles++;
-            break;
-        case LS_SPEED:
-            if (n == sizeof(int)) g_speedRequest = *(const int*)p;
-            break;
-        case LS_STATE:
-            if (n == sizeof(LsState)) {
-                g_hostState = *(const LsState*)p;
-                g_hostStateKnown = true;
-            }
-            break;
-        }
+    {
+        LockScope lock(g_inLock);
+        in.swap(g_inbox);
     }
+    // One message that fails (core/guard.h) is lost, not the session.
+    for (LsMessage& m : in) Guard_Call("a lockstep message", [&m] { HandleMessage(m); });
 }
 
 bool LockstepNet_MayRun(unsigned long long tick)

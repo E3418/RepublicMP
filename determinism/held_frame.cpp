@@ -98,7 +98,11 @@ public:
                 // A pointer becoming null (or the reverse) can free or replace
                 // its allocation too. Refuse it without reviving the old value.
                 if (HeapPointer(before) || HeapPointer(now)) {
-                    Logf("republicmp  HELD FRAME: vehicle pointer changed at +0x%zX - probe refused", o);
+                    // Each line goes through to the file: a pointer that
+                    // changes on every held frame must not flood the log.
+                    static LONG s_logged = 0;
+                    if (InterlockedIncrement(&s_logged) <= 16)
+                        Logf("republicmp  HELD FRAME: vehicle pointer changed at +0x%zX - not restored", o);
                     ok = false;
                 } else memcpy(p + o, &before, 8);
             }

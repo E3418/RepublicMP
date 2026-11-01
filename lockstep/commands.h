@@ -59,6 +59,15 @@ enum LockstepCommandKind {
     LS_CMD_OFFICE_SELECTION = 30, // office_selection.cpp: the construction offices assign tool's selection
     LS_CMD_NEW_CITY = 31,       // new_city.cpp: a city made with the city tool (position and name)
     LS_CMD_JOIN = 32,           // join_tool.cpp: the join tool's node (two edges made one)
+    LS_CMD_NET_CANCEL = 33,     // cancel_tool.cpp: an edge a network's cancel tool removes
+    LS_CMD_WORKERS = 34,        // world_workers.cpp: the construction menu's "Max. workers without CO"
+    LS_CMD_POPUP = 35,          // popups.cpp: a confirm or value popup's callback (its building and values)
+    LS_CMD_CALL_HOME = 36,      // call_home.cpp: a partner building's "Call all vehicles home" (both buildings)
+    LS_CMD_CRIME_CANCEL = 37,   // crime_cancel.cpp: the crime list's "Cancel assignment" (building, case)
+    LS_CMD_LINE_SPACING = 38,   // line_spacing.cpp: the line window's line spacing button (the line)
+    LS_CMD_CAR_OWNERS = 39,     // car_owners.cpp: the car building window's "Reset owners" (the building)
+    LS_CMD_PLAN_REMOVE = 40,    // plan_remove.cpp: the factory window's "Remove from plan" (factory, entry)
+    LS_CMD_CANCEL_PLANS = 41,   // cancel_plans.cpp: "Cancel all plans" (the networks by world field)
 };
 
 // Money a local action changed on this PC (an interface purchase, a terrain

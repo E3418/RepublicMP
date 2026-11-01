@@ -10,8 +10,11 @@
 #include "../ui/chat.h"
 #include "../lockstep/presence.h"
 #include "../modes/mode.h"
+#include "../core/guard.h"
+#include "../ui/workshop_panel.h"
 
 #include "imgui.h"
+#include "imgui_internal.h" // ErrorRecoveryStoreState / TryToRecoverState
 #include "imgui_impl_win32.h"
 #include "imgui_impl_dx11.h"
 
@@ -61,7 +64,7 @@ static LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
     // The sync-block screen must keep receiving input even while the overlay is
     // hidden with INSERT.
     bool syncBlocking = SyncBlock_IsActive();
-    bool page = MultiplayerPage_IsOpen(); // the MULTIPLAYER page, over the main menu or a city
+    bool page = MultiplayerPage_IsOpen() || WorkshopPanel_IsOpen(); // the MULTIPLAYER page or the join's Workshop screen
     // ...and its button beside the game's Escape menu takes clicks too.
     bool menuButton = MultiplayerPage_MenuButtonShown();
     // ...and so does the chat, over the game, while it is on screen.
@@ -165,6 +168,8 @@ void ImGuiHook_NewFrameAndRender()
         MultiplayerPage_Open();
     MultiplayerPage_Tick();
     bool page = MultiplayerPage_IsOpen();
+    bool workshop = WorkshopPanel_IsOpen(); // the join's Workshop screen: modal, as the page
+    bool modal = page || workshop;
 
     // The sync-block screen renders even while the overlay is hidden.
     bool syncBlocking = SyncBlock_IsActive();
@@ -173,7 +178,7 @@ void ImGuiHook_NewFrameAndRender()
     ImGuiIO& io = ImGui::GetIO();
     bool chat = Chat_Shown();
     io.MouseDrawCursor =
-        syncBlocking || ((g_imguiVisible || page || MultiplayerPage_MenuButtonShown() || chat) && io.WantCaptureMouse);
+        syncBlocking || ((g_imguiVisible || modal || MultiplayerPage_MenuButtonShown() || chat) && io.WantCaptureMouse);
     // What goes to the mod's windows does not reach the game too (game/input_block).
     // The page is modal, like the game's own menus: while it is up the game gets
     // no click and no key. The Escape that closed it stays ours until released,
@@ -184,32 +189,45 @@ void ImGuiHook_NewFrameAndRender()
     // typed are its (the Escape that stops typing too, until released).
     static bool s_escapeHeld = false, s_mouseHeld = false;
     bool chatTyping = Chat_Typing();
-    s_escapeHeld = (page || chatTyping || s_escapeHeld) && (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
-    s_mouseHeld = (page || s_mouseHeld) && (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+    s_escapeHeld = (modal || chatTyping || s_escapeHeld) && (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
+    s_mouseHeld = (modal || s_mouseHeld) && (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
     bool menuButton = MultiplayerPage_MenuButtonShown(); // beside the game's Escape menu
-    InputBlock_SetUiCapture(page || s_mouseHeld || ((g_imguiVisible || menuButton || chat) && io.WantCaptureMouse),
-                            page || s_escapeHeld || chatTyping || (g_imguiVisible && io.WantTextInput));
+    InputBlock_SetUiCapture(modal || s_mouseHeld || ((g_imguiVisible || menuButton || chat) && io.WantCaptureMouse),
+                            modal || s_escapeHeld || chatTyping || (g_imguiVisible && io.WantTextInput));
 
     // The other players' cursors and pings show while the overlay is hidden too.
     bool presence = Presence_Active();
     bool modeOverlay = Modes_WantsOverlay();
-    if (!g_imguiVisible && !syncBlocking && !presence && !modeOverlay && !page && !menuButton)
+    if (!g_imguiVisible && !syncBlocking && !presence && !modeOverlay && !modal && !menuButton)
         return;
 
     ImGui_ImplDX11_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
 
-    if (page) MultiplayerPage_Draw(); // under the overlay's windows
-    if (menuButton) MultiplayerPage_DrawMenuButton();
-    if (g_imguiVisible) {
-        g_mainMenu.Draw();
-        g_debug_window.Draw();
+    // A window that throws (core/guard.h) leaves a Begin without its End: the
+    // stacks are put back before Render, so the next frame starts clean.
+    ImGuiErrorRecoveryState recovery;
+    ImGui::ErrorRecoveryStoreState(&recovery);
+    bool drawn = Guard_Call("the overlay's windows", [&] {
+        if (page) MultiplayerPage_Draw(); // under the overlay's windows
+        if (menuButton) MultiplayerPage_DrawMenuButton();
+        if (g_imguiVisible) {
+            g_mainMenu.Draw();
+            g_debug_window.Draw();
+        }
+        if (presence) Presence_Frame(); // under the windows (background draw list)
+        if (modeOverlay) Modes_DrawOverlay();
+        if (presence) Chat_Frame(); // over the windows above; the chat key works while it is hidden too
+        SyncBlock_Draw(); // drawn last (on top), independent of g_imguiVisible
+        if (workshop) WorkshopPanel_Draw(); // the join's Workshop screen, over the join screen
+    });
+    if (!drawn) {
+        bool assertOn = io.ConfigErrorRecoveryEnableAssert;
+        io.ConfigErrorRecoveryEnableAssert = false;
+        ImGui::ErrorRecoveryTryToRecoverState(&recovery);
+        io.ConfigErrorRecoveryEnableAssert = assertOn;
     }
-    if (presence) Presence_Frame(); // under the windows (background draw list)
-    if (modeOverlay) Modes_DrawOverlay();
-    if (presence) Chat_Frame(); // over the windows above; the chat key works while it is hidden too
-    SyncBlock_Draw(); // drawn last (on top), independent of g_imguiVisible
 
     ImGui::Render();
     g_pd3dContext->OMSetRenderTargets(1, &g_mainRenderTargetView, nullptr);

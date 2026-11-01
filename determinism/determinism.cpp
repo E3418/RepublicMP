@@ -14,10 +14,13 @@
 #include "../session/save_sync.h" // SaveSync_IsBusy - no probe during a session
 #include "../core/profile.h"
 #include "../core/frame_timing.h"
+#include "../core/guard.h"
+#include "site_watch.h"
 #include <intrin.h>           // _ReturnAddress
 #include <math.h>
 #include <stdio.h>
 #include <unordered_map>
+#include <algorithm>
 
 #pragma intrinsic(_ReturnAddress)
 
@@ -108,6 +111,19 @@ static bool IsPresentationSite(unsigned site)
     return false;
 }
 
+// Shared sites drawn a different number of times on PCs that stay alike (the
+// vehicles' eased random number 67e6b0, +1778): each draw is counted once more
+// under the routine's caller, key SITE_CALLER | its offset (never a site), so
+// two desync reports show which caller ran more often on one PC.
+#define SITE_CALLER 0x80000000u
+static const unsigned kCallerSites[] = { 0x67E6FA };
+static bool IsCallerSite(unsigned site)
+{
+    for (unsigned s : kCallerSites)
+        if (s == site) return true;
+    return false;
+}
+
 // ---------------------------------------------------------------------------
 // Call-site generator
 // ---------------------------------------------------------------------------
@@ -118,8 +134,32 @@ struct SiteCounters {
 };
 static thread_local SiteCounters* t_sites = nullptr;
 static thread_local SiteCounters* t_privateSites = nullptr;
+// Each thread's shared-stream counters, for the desync reports: two logs show
+// the first site whose count differs (a draw made on one PC only).
+struct SiteThread {
+    DWORD thread;
+    SiteCounters* counters;
+};
+#define SITE_THREADS 32
+static SiteThread g_siteThreads[SITE_THREADS];
+static volatile LONG g_siteThreadCount = 0;
 static thread_local unsigned t_privateDepth = 0;
 static volatile LONG g_privateWorker = 0;
+// A command's stream: the counts start over for each command and its number
+// is in the seed. The counts of the shared stream are kept per site for the
+// whole session, so one call more on one PC (the building tool's city lookup
+// 330690 outside a command, say) gave a placement's new city another name
+// there.
+static thread_local SiteCounters* t_commandSites = nullptr;
+static thread_local bool t_inCommand = false;
+static thread_local unsigned long long t_commandSeq = 0;
+void Determinism_CommandBegin(unsigned long long seq)
+{
+    t_inCommand = true;
+    t_commandSeq = seq;
+    if (t_commandSites) t_commandSites->calls.clear();
+}
+void Determinism_CommandEnd() { t_inCommand = false; }
 void Determinism_PrivateBegin() { ++t_privateDepth; }
 void Determinism_PrivateEnd() { --t_privateDepth; }
 void Determinism_SetPrivateWorker(DWORD thread) { InterlockedExchange(&g_privateWorker, (LONG)thread); }
@@ -139,15 +179,32 @@ static int SiteRand(void* returnAddress)
     // Held presentation and UI can call the same native routines as a tick.
     // Separate counters keep any number of local frames out of that stream.
     bool privateDraw = t_privateDepth || GetCurrentThreadId() == (DWORD)g_privateWorker;
-    SiteCounters*& counters = privateDraw ? t_privateSites : t_sites;
-    if (!counters) counters = new SiteCounters{ 0, {} };
+    bool command = t_inCommand && !privateDraw;
+    SiteCounters*& counters = command ? t_commandSites : privateDraw ? t_privateSites : t_sites;
+    if (!counters) {
+        counters = new SiteCounters{ 0, {} };
+        if (&counters == &t_sites) {
+            LONG i = InterlockedIncrement(&g_siteThreadCount) - 1;
+            if (i < SITE_THREADS) g_siteThreads[i] = { GetCurrentThreadId(), counters };
+        }
+    }
     LONG epoch = g_epoch;
     if (counters->epoch != epoch) {
         counters->calls.clear();
         counters->epoch = epoch;
     }
     unsigned n = counters->calls[site]++;
-    unsigned long long x = SplitMix(g_seed ^ ((unsigned long long)site << 32) ^ n);
+    if (&counters == &t_sites && IsCallerSite(site)) {
+        void* frames[8];
+        USHORT got = RtlCaptureStackBackTrace(0, 8, frames, nullptr);
+        for (USHORT i = 0; i + 1 < got; i++)
+            if (frames[i] == returnAddress) {
+                counters->calls[SITE_CALLER | (unsigned)((BYTE*)frames[i + 1] - g_exeBase)]++;
+                break;
+            }
+    }
+    unsigned long long seed = command ? g_seed ^ SplitMix(t_commandSeq) : g_seed;
+    unsigned long long x = SplitMix(seed ^ ((unsigned long long)site << 32) ^ n);
     int value = (int)((x >> 33) & 0x7FFF);
     if (!privateDraw && g_inEarly && !IsPresentationSite(site)) {
         if (GetCurrentThreadId() == g_simThread) {
@@ -302,6 +359,7 @@ static uintptr_t __cdecl H_beginThread(void (__cdecl* start)(void*), unsigned st
 #define FILLING_OBJ_RVA 0x995290       // DAT_140995290: the worker's object
 #define FILLING_DONE_OFFSET 0x59       // byte: 1 when the step's work is finished
 #define FILLING_START_EVENT_OFFSET 0x60
+#define FILLING_THREAD_ID_OFFSET 0xC8  // the worker's thread id
 
 typedef BOOL (WINAPI* SetEventFn)(HANDLE);
 static SetEventFn o_setEvent;
@@ -319,6 +377,30 @@ static BOOL WINAPI H_setEvent(HANDLE h)
         }
     }
     return r;
+}
+
+bool Determinism_SiteCounts(int which, std::vector<DetSiteCount>& out)
+{
+    out.clear();
+    DWORD thread = 0;
+    if (which == 0) {
+        thread = g_simThread;
+    } else {
+        BYTE* obj = *(BYTE**)(g_exeBase + FILLING_OBJ_RVA);
+        if (!obj) return false;
+        thread = *(DWORD*)(obj + FILLING_THREAD_ID_OFFSET);
+    }
+    if (!thread) return false;
+    LONG n = g_siteThreadCount;
+    for (LONG i = 0; i < n && i < SITE_THREADS; i++) {
+        const SiteThread& t = g_siteThreads[i];
+        if (t.thread != thread || !t.counters) continue;
+        if (t.counters->epoch != g_epoch) return true; // nothing drawn since the generator restarted
+        for (const auto& c : t.counters->calls) out.push_back({ c.first, c.second });
+        std::sort(out.begin(), out.end(), [](const DetSiteCount& a, const DetSiteCount& b) { return a.site < b.site; });
+        return true;
+    }
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -752,6 +834,22 @@ static void EmptySearchPool()
     Logf("republicmp  PROBE: search pool after the load: %lld / %lld / %lld entries - emptied", counts[0], counts[1], counts[2]);
 }
 
+// The early worker's vehicle list (world +12828: Early's 3fab10 fills it from
+// +12810 right before it starts the worker) still held the earlier world's
+// vehicles after a load. A session starts paused, with no Early until a player
+// resumes: leaving the game then woke the worker (its loop tests the quit flag
+// before the wait only) and it updated those freed vehicles - a crash while
+// the game wrote saved_last. Emptied at every load (capacity kept).
+#define WORKER_VEHICLES_OFFSET 0x12828
+static void EmptyWorkerVehicles()
+{
+    __try {
+        BYTE** v = (BYTE**)(g_exeBase + WORLD_RVA_PROBE + WORKER_VEHICLES_OFFSET);
+        v[1] = v[0];
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
 static volatile LONG g_worldLoads = 0;
 
 unsigned Determinism_WorldLoads()
@@ -774,6 +872,7 @@ static void HookedLoadWorld(void)
                 InterlockedExchange(&g_probeState, PROBE_FAILED);
             }
             o_loadWorld();
+            EmptyWorkerVehicles();
             return;
         }
         Determinism_Restart();
@@ -790,6 +889,8 @@ static void HookedLoadWorld(void)
         }
     }
     o_loadWorld();
+    EmptyWorkerVehicles();
+    if (session || g_probeState == PROBE_WAIT_LOAD) SiteWatch_Reset();
     if (session) {
         // The same start on both PCs as a probe run gets: the shared
         // simulation begins at this load, paused until a player resumes.
@@ -812,6 +913,9 @@ static void HookedLoadWorld(void)
         SimPatches_ResetSearches();
         g_runStep = 0;
         ResetFrames();
+        // As a session's load does: the weather is not in the save, and run 2
+        // began with the weather run 1 left (the probe differed on it).
+        Weather_StartShared();
         WriteGameSpeed(g_probeSpeed); // the first step already at the probe's speed
         if (g_probeRun == 0) {
             g_dataSnapshot.assign(g_exeBase + DATA_RVA, g_exeBase + DATA_RVA + DATA_SIZE);
@@ -1014,6 +1118,20 @@ static MoneyTick g_moneyTicks[MONEY_TRACE_TICKS];
 static unsigned long long g_moneyTickCount = 0;
 static bool g_moneyTrace = true;
 
+// The construction update's inputs besides progress and materials
+// (Determinism_NoteSiteInputs).
+struct SiteInputs {
+    float step;              // its time step (xmm2)
+    float ddc, df4, f898;    // site +ddc, +df4, +898
+    int workers, listC20;    // counts of the site's lists +bc0 and +c20
+    int i628, i62c;
+    unsigned flags;          // 1 +879, 2 +ea8, 4 +608, 8 +609, 16 +115a, 32 world +1004, 64 world +9
+    int nodeState;           // [+5d0]+12c, -1 without a node
+    int stages;
+    int world5bc;
+    long long worldCb88;
+};
+
 // What each construction site paid, tick by tick (see Determinism_NoteSitePayment).
 struct SitePayment {
     unsigned long long tick;
@@ -1021,7 +1139,10 @@ struct SitePayment {
     float x, z, progress;
     double rub, usd;
     double have, need; // the stage's materials: sums of entry +8 and +c
+    SiteInputs in;     // what the update read, before it ran
 };
+static BYTE* g_inputsSite = nullptr;
+static SiteInputs g_inputs;
 #define SITE_PAYMENTS 8192
 #define SITE_TICKS_DUMPED MONEY_TRACE_DUMPED
 // A site's construction stages: [+610] + stage * 0x21b8, the current one +634;
@@ -1043,10 +1164,45 @@ void Determinism_SetMoneyTrace(bool on)
     Profile_SetInt("debug", "money_trace", on ? 1 : 0);
 }
 
+// Before 159070 runs for a site (sim_patches): besides its progress and
+// materials, the fields it decides the step by. The two PCs' dumps then show
+// which of them differed the tick a site finished at once on one PC only.
+void Determinism_NoteSiteInputs(unsigned char* b, float step)
+{
+    g_inputsSite = nullptr;
+    if (!g_moneyTrace || !g_sessionRunning) return;
+    SiteInputs& in = g_inputs;
+    in = {};
+    in.step = step;
+    __try {
+        BYTE* world = g_exeBase + 0x9D4F10;
+        in.ddc = *(float*)(b + 0xDDC);
+        in.df4 = *(float*)(b + 0xDF4);
+        in.f898 = *(float*)(b + 0x898);
+        in.workers = (int)((*(BYTE**)(b + 0xBC8) - *(BYTE**)(b + 0xBC0)) / 8);
+        in.listC20 = (int)((*(BYTE**)(b + 0xC28) - *(BYTE**)(b + 0xC20)) / 8);
+        in.i628 = *(int*)(b + 0x628);
+        in.i62c = *(int*)(b + 0x62C);
+        in.flags = (b[0x879] ? 1 : 0) | (b[0xEA8] ? 2 : 0) | (b[0x608] ? 4 : 0) | (b[0x609] ? 8 : 0) |
+                   (b[0x115A] ? 16 : 0) | (world[0x1004] ? 32 : 0) | (world[9] ? 64 : 0);
+        BYTE* node = *(BYTE**)(b + 0x5D0);
+        in.nodeState = node && ((unsigned long long)node >> 32) ? *(int*)(node + 0x12C) : -1;
+        in.world5bc = *(int*)(world + 0x5BC);
+        in.worldCb88 = *(long long*)(world + 0xCB88);
+        BYTE* stages = *(BYTE**)(b + SITE_STAGES);
+        BYTE* stagesEnd = *(BYTE**)(b + SITE_STAGES + 8);
+        in.stages = stages && stagesEnd >= stages ? (int)((stagesEnd - stages) / STAGE_BYTES) : 0;
+        g_inputsSite = b;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
 void Determinism_NoteSitePayment(unsigned char* b, double rubles, double dollars)
 {
     if (!g_moneyTrace || !g_sessionRunning || (rubles == 0 && dollars == 0)) return;
     SitePayment p = {};
+    if (b == g_inputsSite) p.in = g_inputs;
+    g_inputsSite = nullptr;
     p.tick = g_stepCount + 1; // the tick being run (counted after its Late)
     p.rub = rubles;
     p.usd = dollars;
@@ -1165,9 +1321,13 @@ void Determinism_DumpMoneyTrace(unsigned long long tick)
     for (unsigned long long i = firstPay; i < g_sitePaymentCount; i++) {
         const SitePayment& p = g_sitePayments[i % SITE_PAYMENTS];
         if (p.tick > tick || p.tick + SITE_TICKS_DUMPED <= tick) continue;
+        const SiteInputs& in = p.in;
         Logf("republicmp  MONEY_TRACE: tick %llu site #%d (category %d at %.1f,%.1f) paid %.6f rubles %.6f dollars, progress %.9g,"
-             " stage %d: %d material(s) %.9g of %.9g",
-             p.tick, p.index, p.category, p.x, p.z, p.rub, p.usd, p.progress, p.stage, p.entries, p.have, p.need);
+             " stage %d: %d material(s) %.9g of %.9g | before: step %.9g ddc %.9g df4 %.9g 898 %.9g workers %d c20 %d"
+             " 628 %d 62c %d flags %X node %d stages %d world 5bc %d cb88 %llX",
+             p.tick, p.index, p.category, p.x, p.z, p.rub, p.usd, p.progress, p.stage, p.entries, p.have, p.need,
+             in.step, in.ddc, in.df4, in.f898, in.workers, in.listC20, in.i628, in.i62c, in.flags, in.nodeState, in.stages,
+             in.world5bc, (unsigned long long)in.worldCb88);
     }
     LogPrices();
 }
@@ -1333,9 +1493,21 @@ static void HookedSimStep(__int64 world)
         if (g_probeState == PROBE_RUNNING) ++g_holdCount[g_probeRun];
         FrameTimingScope timing(FRAME_HELD);
         if (!g_frameFault && g_probeState != PROBE_WAIT_LOAD && !g_sessionLoadPending && !HeldFrame_Draw(g_haveStep)) {
-            g_frameFault = true;
-            Logf("republicmp  PROBE: held presentation failed - no successful result can be reported");
+            // A refused held frame (held_frame: a vehicle pointer the drawing
+            // changed, left as it is) fails a probe, whose runs can no longer
+            // be compared. In a session it stopped the ticks for good - the
+            // game froze on that PC and the others waited for it: there the
+            // session goes on, and a difference it leaves is the state hash's.
+            if (g_probeState == PROBE_RUNNING) {
+                g_frameFault = true;
+                Logf("republicmp  PROBE: held presentation failed - no successful result can be reported");
+            } else {
+                static LONG s_logged = 0;
+                if (InterlockedIncrement(&s_logged) <= 8)
+                    Logf("republicmp  HELD FRAME: refused at tick %llu - the session goes on", g_stepCount);
+            }
         }
+        SiteWatch_Check("held frame draw", false);
         g_framePhase = 4;
         return;
     }
@@ -1350,6 +1522,7 @@ static void HookedSimStep(__int64 world)
     o_simStep(world);
     g_inEarly = false;
     SimPatches_AfterEarly();
+    SiteWatch_Check("Early", true);
     WriteGameSpeed(0);
     *(int*)(g_exeBase + 0x9D54BC) = kSpeedSentinel;
     memcpy(g_tickTimer, g_exeBase + GAME_TIMER_RVA, sizeof(g_tickTimer));
@@ -1677,7 +1850,7 @@ static bool WaitState(LONG want, DWORD timeoutMs)
     return true;
 }
 
-static DWORD WINAPI ProbeThread(LPVOID)
+static void ProbeRun()
 {
     do {
         char dir[MAX_PATH];
@@ -1729,6 +1902,13 @@ static DWORD WINAPI ProbeThread(LPVOID)
         }
         ResetDetail();
     } while (false);
+}
+
+// A probe that throws (core/guard.h) ends as a failed one; the game goes on.
+static DWORD WINAPI ProbeThread(LPVOID)
+{
+    if (!Guard_Call("the determinism probe", [] { ProbeRun(); }))
+        SetProbeStatus("stopped on an error - see the log (GUARD)");
     InterlockedExchange(&g_probeState, PROBE_IDLE);
     Commands_ProbeEnd(nullptr, nullptr);
     if (g_active) Determinism_SetActive(false, 0);

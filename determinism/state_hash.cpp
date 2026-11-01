@@ -30,6 +30,8 @@
 #define VEH_INDEX_OFFSET 0x04
 #define VEH_CARGO_OFFSET 0x3B8
 #define VEH_POS_OFFSET 0xDE0
+#define VEH_TYPE_OFFSET 0x1708   // the vehicle type's record
+#define VEH_TYPE_NAME 0x200      // a type's name
 
 #define CIT_HOME_OFFSET 0x20
 #define CIT_AGE_OFFSET 0xD4
@@ -172,6 +174,10 @@ bool StateHash_Compute(StateSummary* out)
 #define BLD_TYPE_OFFSET 0x318
 #define BLD_POS_OFFSET 0x3A0
 #define TYPE_CATEGORY_OFFSET 0x360
+#define BLD_FIELD_CATEGORY 8
+#define BLD_FIELD_WORK_OFFSET 0xE34
+#define VEH_WANDER_OFFSET 0x1778
+#define VEH_STATIONS_OFFSET 0x680
 
 static long long ListCount(int listOffset)
 {
@@ -213,6 +219,7 @@ static bool FillBuildings(BuildingRecord* out, long long n)
             }
             r.slots = (int)ns;
             r.storage = h;
+            if (r.category == BLD_FIELD_CATEGORY) memcpy(r.field, b + BLD_FIELD_WORK_OFFSET, sizeof(r.field));
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
@@ -255,6 +262,12 @@ static bool FillVehicles(VehicleRecord* out, long long n)
             double unused = 0;
             MixEntries(h, v + VEH_CARGO_OFFSET, unused);
             r.cargo = h;
+            r.wander = *(float*)(v + VEH_WANDER_OFFSET);
+            r.stops = (int)Count(v + VEH_STATIONS_OFFSET, 8);
+            if (const char* name = *(const char**)(v + VEH_TYPE_OFFSET)) {
+                name += VEH_TYPE_NAME;
+                for (int k = 0; k < (int)sizeof(r.type) - 1 && name[k]; k++) r.type[k] = name[k];
+            }
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;

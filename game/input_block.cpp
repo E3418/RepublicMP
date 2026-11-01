@@ -2,10 +2,12 @@
 // See input_block.h.
 #include "input_block.h"
 #include "../ui/sync_block.h"
+#include <string.h>
 
 #define LMB_HELD_RVA 0xA54E90         // byte: left mouse button held
 #define LMB_JUST_PRESSED_RVA 0xA54E91 // byte: left mouse button pressed this frame
 #define ESCAPE_LATCH_RVA 0xA54C91     // byte: Escape pressed, set by the window message handler
+#define INPUT_RVA 0xA54B90            // the game's C3D_INPUT
 
 void InputBlock_Bind(const TsmHost* host)
 {
@@ -73,7 +75,22 @@ BOOL_NOARG_HOOK(H_MiddleDown, o_MiddleDown)
 static bool H_KeyDown(void* self, int key)       { bool r = o_KeyDown(self, key); return KeysTaken() || Neutral() ? false : r; }
 static bool H_KeyPress(void* self, int key)      { bool r = o_KeyPress(self, key); return KeysTaken() || Neutral() ? false : r; }
 // Bindings and axes can be keys or mouse (camera, zoom): either capture takes them.
-static bool H_ButtonDown(void* self, char* fn)   { bool r = o_ButtonDown(self, fn); return KeysTaken() || MouseTaken() || Neutral() ? false : r; }
+static const char* volatile g_neutralHeld = nullptr;
+void InputBlock_HoldInNeutral(const char* binding) { g_neutralHeld = binding; }
+static bool HeldInNeutral(const char* fn)
+{
+    const char* held = g_neutralHeld;
+    return held && fn && strcmp(fn, held) == 0;
+}
+static bool H_ButtonDown(void* self, char* fn)
+{
+    bool r = o_ButtonDown(self, fn);
+    return Neutral() ? HeldInNeutral(fn) : KeysTaken() || MouseTaken() ? false : r;
+}
+bool InputBlock_ButtonDown(const char* binding)
+{
+    return o_ButtonDown && H_ButtonDown(g_exeBase + INPUT_RVA, (char*)binding);
+}
 static bool H_ButtonPress(void* self, char* fn)  { bool r = o_ButtonPress(self, fn); return KeysTaken() || MouseTaken() || Neutral() ? false : r; }
 
 static float H_AxisValue(void* self, char* fn, int* out, float a, float b)

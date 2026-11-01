@@ -7,6 +7,7 @@
 #include "view_list_scope.h"
 #include "demolish_hook.h" // DemolishHook_InDemolish
 #include "../ui/sync_block.h"
+#include "../game/input_block.h" // InputBlock_ButtonDown
 #include "../lockstep/commands.h"
 #include "../determinism/determinism.h"
 #include <stdio.h>
@@ -521,7 +522,18 @@ static bool TakeCommitAsCommand(__int64 manager, int category)
             bool multi = *(unsigned char*)(manager + MGR_UPG_MULTI_OFFSET) != 0;
             __int64 seg = *(__int64*)(manager + MGR_UPG_SEGMENT_OFFSET);
             // No piece under the brush: the commit removes only with +0x390 set (518a80).
-            if (*(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) == 0) return true;
+            // Said in the log: a click on a piece the bulldozer does not pick
+            // left no trace before (a player whose demolitions did nothing).
+            if (*(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) == 0) {
+                static int s_logged = 0;
+                if (s_logged < 20) {
+                    ++s_logged;
+                    __int64 seg = *(__int64*)(manager + MGR_UPG_SEGMENT_OFFSET);
+                    Logf("republicmp  LOCKSTEP: bulldozer on %s - no piece picked under the cursor (segment %s), nothing removed",
+                         Networks_GetCategoryInfo(category)->name, !seg ? "none" : SegmentListed(manager, seg) ? "listed" : "not in the network");
+                }
+                return true;
+            }
             bool listed = multi || SegmentListed(manager, seg);
             NetDemolishMsg m = {};
             __int64 thisPtr = GetPlacementManagerThisPtr();
@@ -587,7 +599,15 @@ static bool TakeCommitAsCommand(__int64 manager, int category)
             NetUpgradeMsg m = {};
             if (FillUpgrade(manager, category, m)) {
                 m.mode = BuildMode_Read();
+                // What the tool chose: one piece or a whole path (Ctrl with the cancel tool should be the whole road).
+                Logf("republicmp  LOCKSTEP: upgrade of %d piece(s) (multi %d, type %d, Ctrl %d)", m.pieceCount,
+                     *(unsigned char*)(manager + MGR_UPG_MULTI_OFFSET), m.newType,
+                     InputBlock_ButtonDown(BUILDING_NO_LINKS_BINDING) || *(g_exeBase + 0xA54BAD) ? 1 : 0);
                 Commands_Submit(LS_CMD_UPGRADE, &m, sizeof(m));
+            } else {
+                NoteCommitSkip(category, "lockstep: the upgrade piece cannot be read - made nowhere (type, multi, path index)",
+                               m.newType, *(unsigned char*)(manager + MGR_UPG_MULTI_OFFSET),
+                               *(int*)(manager + MGR_UPG_PATH_INDEX_OFFSET));
             }
             return true;
         }
@@ -646,6 +666,28 @@ void HookedRoadCommit(__int64 manager,
                InterlockedCompareExchange(&g_buildingPlacementDepth, 0, 0) == 0;
     if (own && Commands_TakeLocal() && TakeCommitAsCommand(manager, category)) return;
     if (own && CommitRefusedHere(manager, category)) return;
+    // A tool commit on a carried network that is not taken (p2 set, inside a
+    // placement, or while a command is made) runs natively: said in the log
+    // when no command is being made, as then it is made on this PC only.
+    if (category >= 0 && !own && Commands_TakeLocal() && !Networks_IsApplyingCommand() && !Commands_Applying()) {
+        static int s_local = 0;
+        if (s_local < 20) {
+            ++s_local;
+            Logf("republicmp  LOCKSTEP: %s commit outside the capture (p2 %llu, in a placement %d, demolish %d) - made on this PC only",
+                 Networks_GetCategoryInfo(category)->name, p2, InterlockedCompareExchange(&g_buildingPlacementDepth, 0, 0) != 0,
+                 DemolishHook_InDemolish() ? 1 : 0);
+        }
+    }
+    // A bulldozer commit on a network this mod does not carry is made on this
+    // PC only: said in the log, as the other PCs keep the piece.
+    if (category < 0 && Commands_TakeLocal() && IsDemolishToolActive()) {
+        static int s_logged = 0;
+        if (s_logged < 20) {
+            ++s_logged;
+            Logf("republicmp  LOCKSTEP: bulldozer on a network this mod does not carry (manager %p) - made on this PC only",
+                 (void*)manager);
+        }
+    }
     g_origRoadCommit(manager, p2, p3, p4, p5, p6, p7);
 }
 
@@ -765,7 +807,8 @@ bool LocalBuilds_PlacementPress()
         msg.cursorRot = *(float*)(world + CURSOR_YAW_OFFSET);
         msg.param5 = (unsigned long long)g_placeParam5;
         msg.mirrored = *(unsigned char*)(world + MIRROR_EFFECTIVE_OFFSET) != 0;
-        msg.pickModes = (*(unsigned char*)(world + 0xF600) ? 1 : 0) | (*(unsigned char*)(world + 0xF698) ? 2 : 0);
+        msg.pickModes = (*(unsigned char*)(world + 0xF600) ? 1 : 0) | (*(unsigned char*)(world + 0xF698) ? 2 : 0) |
+                        (InputBlock_ButtonDown(BUILDING_NO_LINKS_BINDING) ? BUILDING_PICK_NO_LINKS : 0);
         strncpy_s(msg.typeName, typeName, _TRUNCATE);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
