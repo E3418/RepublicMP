@@ -265,6 +265,7 @@ static void DumpRecords(unsigned long long tick, const char* what)
 static char g_desync[256] = "";
 static char g_lastRefusal[320] = ""; // the host's last accept: why a player was refused
 static unsigned long long g_desyncTick = 0; // the tick of g_desync
+static bool g_moneyDriftLogged = false; // a money difference under the tolerance was logged once
 
 // Player side.
 static std::deque<LsGrant> g_grants;
@@ -541,6 +542,7 @@ static void ResetState()
     memset(g_ownHashes, 0, sizeof(g_ownHashes));
     g_desync[0] = 0;
     g_desyncTick = 0;
+    g_moneyDriftLogged = false;
     g_grants.clear();
     g_hostStateKnown = false;
     g_hostState.paused = 1;
@@ -724,6 +726,7 @@ void LockstepNet_ForgetSession()
     g_isHost = false;
     g_desync[0] = 0;
     g_desyncTick = 0;
+    g_moneyDriftLogged = false;
     if (!g_locksReady) return;
     EnterCriticalSection(&g_listLock);
     memset(&g_list, 0, sizeof(g_list));
@@ -763,6 +766,15 @@ unsigned long long LockstepNet_LastMatchedTick()
 // State comparison (host)
 // ---------------------------------------------------------------------------
 
+#define MONEY_TOLERANCE 1.0 // rubles or dollars apart that still count as the same money
+
+// The same bits (also a NaN or inf both PCs have) or within MONEY_TOLERANCE.
+static bool MoneyMatches(double a, double b)
+{
+    double d = a - b;
+    return memcmp(&a, &b, sizeof(double)) == 0 || (d > -MONEY_TOLERANCE && d < MONEY_TOLERANCE);
+}
+
 // After the first difference only that tick is still compared: the log tells
 // which players differ and which match (one PC alone or everyone).
 static void Compare(int index, const LsHash& theirs)
@@ -778,7 +790,16 @@ static void Compare(int index, const LsHash& theirs)
     const StateSummary& a = mine->s;
     const StateSummary& b = theirs.s;
     char what[160] = "";
-    if (a.hashClock != b.hashClock) strcat_s(what, "clock/money ");
+    // The clock exactly; money (hashed raw in hashClock) within MONEY_TOLERANCE, so a
+    // difference in a double's last bits (0.000000001 rubles) does not split the session.
+    bool moneyOff = !MoneyMatches(a.rub, b.rub) || !MoneyMatches(a.usd, b.usd);
+    if (a.day != b.day || a.year != b.year || a.dayProgress != b.dayProgress || moneyOff) strcat_s(what, "clock/money ");
+    if (!moneyOff && (a.rub != b.rub || a.usd != b.usd) && !g_moneyDriftLogged) {
+        g_moneyDriftLogged = true;
+        Logf("republicmp  LOCKSTEP:   %s's money differs by %.9g rubles %.9g dollars after tick %llu - under the tolerance, "
+             "money alone is not counted as a desync (logged once a session)", peer.nick, a.rub - b.rub, a.usd - b.usd,
+             theirs.tick);
+    }
     if (a.hashBuildings != b.hashBuildings) strcat_s(what, "buildings ");
     if (a.hashVehicles != b.hashVehicles) strcat_s(what, "vehicles ");
     if (a.hashCitizens != b.hashCitizens) strcat_s(what, "citizens ");
