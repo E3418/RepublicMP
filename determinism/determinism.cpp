@@ -834,6 +834,22 @@ static void EmptySearchPool()
     Logf("republicmp  PROBE: search pool after the load: %lld / %lld / %lld entries - emptied", counts[0], counts[1], counts[2]);
 }
 
+// The early worker's vehicle list (world +12828: Early's 3fab10 fills it from
+// +12810 right before it starts the worker) still held the earlier world's
+// vehicles after a load. A session starts paused, with no Early until a player
+// resumes: leaving the game then woke the worker (its loop tests the quit flag
+// before the wait only) and it updated those freed vehicles - a crash while
+// the game wrote saved_last. Emptied at every load (capacity kept).
+#define WORKER_VEHICLES_OFFSET 0x12828
+static void EmptyWorkerVehicles()
+{
+    __try {
+        BYTE** v = (BYTE**)(g_exeBase + WORLD_RVA_PROBE + WORKER_VEHICLES_OFFSET);
+        v[1] = v[0];
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
 static volatile LONG g_worldLoads = 0;
 
 unsigned Determinism_WorldLoads()
@@ -856,6 +872,7 @@ static void HookedLoadWorld(void)
                 InterlockedExchange(&g_probeState, PROBE_FAILED);
             }
             o_loadWorld();
+            EmptyWorkerVehicles();
             return;
         }
         Determinism_Restart();
@@ -872,6 +889,7 @@ static void HookedLoadWorld(void)
         }
     }
     o_loadWorld();
+    EmptyWorkerVehicles();
     if (session || g_probeState == PROBE_WAIT_LOAD) SiteWatch_Reset();
     if (session) {
         // The same start on both PCs as a probe run gets: the shared

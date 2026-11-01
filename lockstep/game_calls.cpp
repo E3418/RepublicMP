@@ -100,8 +100,13 @@ enum {
     // writes +df0 right before the call, and the window setting that carries it is made after
     // the call; the command carries the new +df0 and writes it first.
     CALL_WORKERS_RECOUNT,
+    // The copy sources tool: 1d7e10's fifth argument, world+f5c8, is a vector<bool> of the source
+    // rows the player ticked (the tool's own state, each PC's): the command carries its bits, and
+    // every PC copies with them, not with its own (empty on the other PC: nothing was copied there).
+    CALL_COPY_SOURCES,
 };
 #define WORKERS_PER_VEHICLE 0xDF0
+#define COPY_MASK_BITS 64  // the carried rows (values[5..6]; the count in kinds[5])
 #define REPEAT_MS 1500
 #define REFRESH_MS 20000
 
@@ -238,7 +243,7 @@ static const GameCallSite kSites[] = {
     { 0x1DBCBE, 0x1DC5D0, "copy waste settings tool: copy", "WBB", 0, 0, false },
     { 0x1DC00F, 0x1DC7D0, "copy transfer settings tool: copy", "WBB", 0, 0, false },
     { 0x2B8A8E, 0x2B8B10, "copy distribution tool: copy links", "xBB", 0, 0, false },
-    { 0x1D6C18, 0x1D7E10, "copy sources tool: copy", "xBBxA", 0xF5C8, 0, false },
+    { 0x1D6C18, 0x1D7E10, "copy sources tool: copy", "xBBxA", 0xF5C8, 0, false, CALL_COPY_SOURCES },
     { 0x1DB790, 0x1D4330, "distribution office tool: add to list +f18", "xBR", 0xF18, 0, false },
     { 0x1DB7A5, 0x1D4330, "distribution office tool: add to list +f48", "xBR", 0xF48, 0, false },
     { 0x1DB7BA, 0x1D4330, "distribution office tool: add to list +f30", "xBR", 0xF30, 0, false },
@@ -721,6 +726,19 @@ static U64 Run(unsigned index, const U64* a)
         if (s.special == CALL_DRAG && !(args[0] = *(U64*)(g_exeBase + DRAG_RVA))) why = "no vehicle is dragged";
         if (!why) why = Capture(index, args, m);
         if (!why && s.special == CALL_WORKERS_RECOUNT) m.values[2] = *(unsigned*)(args[1] + WORKERS_PER_VEHICLE);
+        if (!why && s.special == CALL_COPY_SOURCES && args[4]) {
+            // vector<bool>: its words (begin at +0) and its size in bits (+18).
+            U64 words = Q(args[4]), bits = Q(args[4] + 0x18);
+            if (bits > COPY_MASK_BITS || (bits && !words)) why = "more source rows than a command carries";
+            else {
+                U64 mask = 0;
+                for (U64 i = 0; i < bits; i++)
+                    if (((unsigned*)words)[i / 32] >> (i % 32) & 1) mask |= 1ull << i;
+                m.values[5] = (unsigned)mask;
+                m.values[6] = (unsigned)(mask >> 32);
+                m.kinds[5] = (unsigned char)bits;
+            }
+        }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         why = "a fault while reading the arguments";
     }
@@ -832,6 +850,10 @@ bool GameCalls_ApplyCommand(const void* data, size_t size)
     U64* sliderAt = nullptr;
     U64 sliderWas = 0;
     SliderObject slider = {};
+    // CALL_COPY_SOURCES: the carried rows as a vector<bool> of this command's (words, then begin,
+    // end, capacity and the size in bits, as MSVC lays it out).
+    unsigned maskWords[COPY_MASK_BITS / 32] = { m.values[5], m.values[6] };
+    U64 mask[4] = { (U64)maskWords, (U64)(maskWords + COPY_MASK_BITS / 32), (U64)(maskWords + COPY_MASK_BITS / 32), m.kinds[5] };
     int k = SliderArg(s);
     if (k >= 0) {
         U64 bits = (U64)m.values[k] | ((U64)m.values[k + 1] << 32);
@@ -840,8 +862,11 @@ bool GameCalls_ApplyCommand(const void* data, size_t size)
     __try {
         why = Rebuild(m, a, held);
         if (!why && s.special != CALL_PLAIN && s.special != CALL_DELETE_LINE && s.special != CALL_DRAG &&
-            s.special != CALL_REPEATING && s.special != CALL_BORDER_STOP && s.special != CALL_WORKERS_RECOUNT)
+            s.special != CALL_REPEATING && s.special != CALL_BORDER_STOP && s.special != CALL_WORKERS_RECOUNT &&
+            s.special != CALL_COPY_SOURCES)
             why = "not a command site";
+        if (!why && s.special == CALL_COPY_SOURCES && (m.kinds[5] > COPY_MASK_BITS || (!a[4] && m.kinds[5])))
+            why = "the source rows";
         if (!why) {
             if (s.special == CALL_DELETE_LINE) *(BYTE*)(a[1] + 1) = 0;
             if (s.special == CALL_DRAG) {
@@ -850,6 +875,7 @@ bool GameCalls_ApplyCommand(const void* data, size_t size)
                 *drag = a[0];
             }
             if (s.special == CALL_WORKERS_RECOUNT) *(unsigned*)(a[1] + WORKERS_PER_VEHICLE) = m.values[2];
+            if (s.special == CALL_COPY_SOURCES && a[4]) a[4] = (U64)mask;
             if (k >= 0) {
                 sliderAt = (U64*)((U64)World() + s.worldPointer);
                 sliderWas = *sliderAt;

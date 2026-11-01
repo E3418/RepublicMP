@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Fix: the copy sources tool on one PC only** - the tool copies the
+  source rows the player ticked, and that choice is the tool's own state on
+  the clicking PC: the other PCs copied nothing. Vehicles bought later at
+  that depot took other stops there (3 against 1) and the money and
+  vehicles differed. The ticked rows now travel with the command.
+- **Fix: a crash when leaving a session right after it loaded** - the game's
+  vehicle worker keeps a list of the vehicles it updates, refilled at every
+  step; a session starts paused, so after its load the list still held the
+  earlier world's vehicles, and leaving the game woke the worker on them
+  (the crash came while the game wrote saved_last). The list is emptied at
+  every load.
 - **Fix: a loan on one PC only** - "Borrow money" in the loan windows
   reached the other PCs as money alone: the loan itself was on the clicking
   PC only, and so were its daily payments, and the money differed at the
