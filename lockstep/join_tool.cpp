@@ -220,7 +220,12 @@ static int WriteOwn(U64 world, const OwnState& s)
 // The node the command names here: the same table, the node with the same
 // position. The list's order can differ between PCs (one PC's own previews
 // add and take nodes), so a node not at the sender's place is looked for by
-// its position in the whole list; *moved is its place here then.
+// its position in the whole list; *moved is its place here then. A node's
+// position can differ in its last bits between PCs (0.0001 m was seen): with
+// no exact match the nearest node within SAME_NODE counts, when no other node
+// is within OTHER_NODE.
+#define SAME_NODE 0.01f
+#define OTHER_NODE 0.5f
 static const char* Decode(U64 world, const JoinMsg& m, U64& network, U64& node, int* moved)
 {
     network = node = 0;
@@ -234,18 +239,32 @@ static const char* Decode(U64 world, const JoinMsg& m, U64& network, U64& node, 
     U64 at = m.node < c ? Q(b + (U64)m.node * 8) : 0;
     if (!at || memcmp((const void*)(at + NODE_POS), m.point, 12) != 0) {
         at = 0;
-        float nearest = 1.0e30f;
+        float nearest = 1.0e30f, second = 1.0e30f;
+        U64 closest = 0;
+        int closestAt = -1;
         for (unsigned i = 0; i < c; i++) {
             U64 p = Q(b + (U64)i * 8);
             if (!p) continue;
             const float* pos = (const float*)(p + NODE_POS);
             float dx = pos[0] - m.point[0], dy = pos[1] - m.point[1], dz = pos[2] - m.point[2];
             float d = dx * dx + dy * dy + dz * dz;
-            if (d < nearest) nearest = d;
+            if (d < nearest) {
+                second = nearest;
+                nearest = d;
+                closest = p;
+                closestAt = (int)i;
+            } else if (d < second) {
+                second = d;
+            }
             if (memcmp(pos, m.point, 12) != 0) continue;
             if (at) return "two nodes are at that position here";
             at = p;
             *moved = (int)i;
+        }
+        if (!at && closest && nearest <= SAME_NODE * SAME_NODE && second > OTHER_NODE * OTHER_NODE) {
+            at = closest;
+            *moved = closestAt != (int)m.node ? closestAt : -1;
+            Logf("republicmp  JOIN: node #%u of network %u is %.4f m from the sender's position here", m.node, m.table, sqrtf(nearest));
         }
         if (!at) {
             static char why[96];
