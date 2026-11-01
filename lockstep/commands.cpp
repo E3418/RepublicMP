@@ -31,6 +31,14 @@
 #include "new_city.h"
 #include "join_tool.h"
 #include "cancel_tool.h"
+#include "world_workers.h"
+#include "cancel_plans.h"
+#include "plan_remove.h"
+#include "car_owners.h"
+#include "line_spacing.h"
+#include "crime_cancel.h"
+#include "call_home.h"
+#include "popups.h"
 #include "presence.h"
 #include "../core/guard.h"
 #include <vector>
@@ -60,6 +68,14 @@ void Commands_Bind(const TsmHost* host)
     NewCity_Bind(host);
     JoinTool_Bind(host);
     CancelTool_Bind(host);
+    WorldWorkers_Bind(host);
+    CancelPlans_Bind(host);
+    PlanRemove_Bind(host);
+    CarOwners_Bind(host);
+    LineSpacing_Bind(host);
+    CrimeCancel_Bind(host);
+    CallHome_Bind(host);
+    Popups_Bind(host);
     Presence_Bind(host);
 }
 
@@ -163,6 +179,14 @@ static const char* KindName(int kind)
     case LS_CMD_NEW_CITY: return "new city";
     case LS_CMD_JOIN: return "join";
     case LS_CMD_NET_CANCEL: return "network cancel";
+    case LS_CMD_WORKERS: return "workers without an office";
+    case LS_CMD_CANCEL_PLANS: return "cancel all plans";
+    case LS_CMD_PLAN_REMOVE: return "plan removal";
+    case LS_CMD_CAR_OWNERS: return "car owners";
+    case LS_CMD_LINE_SPACING: return "line spacing";
+    case LS_CMD_CRIME_CANCEL: return "crime cancel";
+    case LS_CMD_CALL_HOME: return "call home";
+    case LS_CMD_POPUP: return "popup";
     }
     return "?";
 }
@@ -380,6 +404,30 @@ static bool ApplyKind(const Command& c)
         break;
     case LS_CMD_NET_CANCEL:
         ok = CancelTool_ApplyCommand(p, n);
+        break;
+    case LS_CMD_WORKERS:
+        ok = WorldWorkers_ApplyCommand(p, n);
+        break;
+    case LS_CMD_CANCEL_PLANS:
+        ok = CancelPlans_ApplyCommand(p, n);
+        break;
+    case LS_CMD_PLAN_REMOVE:
+        ok = PlanRemove_ApplyCommand(p, n);
+        break;
+    case LS_CMD_CAR_OWNERS:
+        ok = CarOwners_ApplyCommand(p, n);
+        break;
+    case LS_CMD_LINE_SPACING:
+        ok = LineSpacing_ApplyCommand(p, n);
+        break;
+    case LS_CMD_CRIME_CANCEL:
+        ok = CrimeCancel_ApplyCommand(p, n);
+        break;
+    case LS_CMD_CALL_HOME:
+        ok = CallHome_ApplyCommand(p, n);
+        break;
+    case LS_CMD_POPUP:
+        ok = Popups_ApplyCommand(p, n);
         break;
     }
     return ok;
@@ -676,6 +724,7 @@ static bool ApplyGameRules(const void* data, size_t size)
 
 void Commands_Collect()
 {
+    WorldWorkers_Collect(); // also releases the session's value outside a session
     if (!g_capturing) return;
     Commands_GuardSettings();
     PutAwayUncarriedTool();

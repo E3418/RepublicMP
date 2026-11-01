@@ -300,6 +300,30 @@
     <ClCompile Include="lockstep\cancel_tool.cpp">
       <Filter>lockstep</Filter>
     </ClCompile>
+    <ClCompile Include="lockstep\world_workers.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\cancel_plans.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\plan_remove.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\car_owners.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\line_spacing.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\crime_cancel.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\call_home.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\popups.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
     <ClCompile Include="lockstep\presence.cpp">
       <Filter>lockstep</Filter>
     </ClCompile>
@@ -594,6 +618,30 @@
       <Filter>lockstep</Filter>
     </ClInclude>
     <ClInclude Include="lockstep\cancel_tool.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\world_workers.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\cancel_plans.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\plan_remove.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\car_owners.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\line_spacing.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\crime_cancel.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\call_home.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\popups.h">
       <Filter>lockstep</Filter>
     </ClInclude>
     <ClInclude Include="lockstep\presence.h">

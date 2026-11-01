@@ -8,6 +8,57 @@
   next day. The button is now a carried window call with the amount slider's
   value, and every PC takes the same loan, also a PC that never opened the
   window (by SoylentGreed).
+- **Fix: window actions that acted on the clicking PC only** (by
+  SoylentGreed) - these now reach every PC as commands:
+  - confirm and value popups: the production queue's next and cancel all,
+    "Cancel all source buildings", the link window's order, the construction
+    office's order or copy, and the citizens' destinations' "Remove all
+    connections" and percent;
+  - "Discard cargo from all wagons", "Empty whole storage", the header's
+    cancel construction, a building's waste separation containers (add and
+    remove);
+  - "Call all vehicles home" on a building with a partner (its vehicles
+    move to the building);
+  - the crime list's "Cancel assignment" in police stations and courts;
+  - the line window's line spacing button;
+  - the car building window's "Reset owners";
+  - the factory window's "Remove from plan";
+  - "Cancel all plans" in the network tool panel and the construction menu;
+  - the vehicle window's stops beyond the borders;
+  - auto-replacement: the purchase window's choice for a type and "Replace
+    oldest vehicle";
+  - the city window's delete, and the lines at a renamed building taking
+    its name.
+- **Fix: resuming or funding a construction site twice on one PC** - the
+  building window's header button and the construction pick tools (fund
+  with rubles or dollars, start, cancel) resume a site with the game's
+  routine, which also assigns its office and vehicles. The setting sync
+  carried the site's changed flags and made that routine on every PC, after
+  the clicking PC had already made it once: there a vehicle got its stops
+  twice, its route differed and it drove off on that PC only. Each of these
+  calls is now a command, made once on every PC.
+- **Fix: a node join refused on the other PC** - a node's position can
+  differ in its last bits between PCs (0.0001 m), and the join looked for
+  the exact bits: the other PC refused it ("no node is at that position
+  here"), its rails stayed in two pieces, the next upgrades and a station
+  placed there were refused too and the buildings differed. The nearest node
+  within 1 cm now counts when no other node is within 0.5 m.
+- **Fix: workers per vehicle recounted on one PC** - the building window's
+  -/+ recounts the building's vehicle records right away (the vehicles'
+  stations come from them); the number reached every PC but the recount
+  was made on the clicking PC only, and its construction and service
+  vehicles drove off there only. The recount is now made on every PC with
+  the new number.
+- **Fix: "Max. workers without CO" was each PC's own** - the construction
+  menu's field decides how many workers a new site may have without an
+  office, and the building tool and demolition read it on each PC: a
+  player's typed number placed sites that worked otherwise on that PC only.
+  The session holds one value; a typed change reaches every PC (by
+  SoylentGreed).
+- **Rail signals on the same side** - config.ini's TRAINS_ON_LEFT_SIDE puts
+  a placed signal on the left or the right of the track, so a shared signal
+  was placed differently on each PC. A join is refused when the two values
+  differ (by SoylentGreed).
 - **Debug: fields, farm vehicles and the vehicles' random number in desync
   reports** - with buildings or citizens differing, a report lists each
   field's work words (the farm's planting test reads them); with vehicles or

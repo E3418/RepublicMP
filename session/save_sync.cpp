@@ -169,7 +169,8 @@ struct SessionHello {
     int protocol;      // REPUBLICMP_PROTOCOL
     char version[16];  // REPUBLICMP_VERSION
     unsigned int dllCrc;
-    int gameMode;      // the host's SESSION_MODE_*, its variant << 8, its side << 16; a player's is not read
+    int gameMode;      // the host's SESSION_MODE_*, its variant << 8, its side << 16; a player's is not read;
+                       // both: the rail signals' side << 24 (TrainsLeft)
 };
 
 // Step reports in both directions after the hello.
@@ -203,6 +204,29 @@ static bool RecvMsg(NetLink sock, SessionMsg* m)
     return true;
 }
 
+// config.ini's TRAINS_ON_LEFT_SIDE puts a placed rail signal on the left or the
+// right of the track (4184c0 at 418c9b: the signal tool and the area paste): a
+// carried signal was made on each PC with its own value. Both sides must match
+// (by SoylentGreed). 0 or 1, 2: the pinned read or the getter is not as expected.
+#define CONFIGURATOR_RVA 0x9BDFC0
+#define CONFIG_GET_INT_SLOT 0x86C0C0
+#define TRAINS_SIDE_READ 0x418C9B
+static int TrainsLeft()
+{
+    static const unsigned char kRead[26] = { 0x48, 0x8d, 0x15, 0x5e, 0x49, 0x4b, 0x00, 0x48, 0x8d, 0x0d, 0x17, 0x53, 0x5a,
+                                             0x00, 0xff, 0x15, 0x11, 0x34, 0x45, 0x00, 0x85, 0xc0, 0x40, 0x0f, 0x95, 0xc6 };
+    typedef int (*GetIntFn)(void* configurator, char* key);
+    __try {
+        if (memcmp(g_exeBase + TRAINS_SIDE_READ, kRead, sizeof(kRead)) != 0) return 2;
+        GetIntFn get = *(GetIntFn*)(g_exeBase + CONFIG_GET_INT_SLOT);
+        if (!get) return 2;
+        char key[32] = "TRAINS_ON_LEFT_SIDE";
+        return get(g_exeBase + CONFIGURATOR_RVA, key) ? 1 : 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 2;
+    }
+}
+
 static void MakeHello(SessionHello* h)
 {
     memset(h, 0, sizeof(*h));
@@ -210,7 +234,7 @@ static void MakeHello(SessionHello* h)
     h->protocol = REPUBLICMP_PROTOCOL;
     strncpy_s(h->version, REPUBLICMP_VERSION, _TRUNCATE);
     h->dllCrc = SaveSync_GetLocalDllCrc();
-    h->gameMode = g_gameMode | g_gameVariant << 8 | g_hostSide << 16;
+    h->gameMode = g_gameMode | g_gameVariant << 8 | g_hostSide << 16 | TrainsLeft() << 24;
 }
 
 // Compares the peer's hello with ours; fills why on a mismatch.
@@ -228,6 +252,14 @@ static bool HelloMatches(const SessionHello& peer, char* why, size_t whySize)
                     "different builds: yours %s (%08X, protocol %d), theirs %s (%08X, protocol %d). Use the same RepublicMP.dll",
                     REPUBLICMP_VERSION, SaveSync_GetLocalDllCrc(), REPUBLICMP_PROTOCOL,
                     peerVersion, peer.dllCrc, peer.protocol);
+        return false;
+    }
+    int theirs = peer.gameMode >> 24 & 0xFF, ours = TrainsLeft();
+    if (theirs != ours) {
+        static const char* const kSide[3] = { "right", "left", "unread" };
+        _snprintf_s(why, whySize, _TRUNCATE,
+                    "rail signals on different sides: yours %s, theirs %s. Set TRAINS_ON_LEFT_SIDE in config.ini the same",
+                    kSide[ours], kSide[theirs < 3 ? theirs : 2]);
         return false;
     }
     return true;

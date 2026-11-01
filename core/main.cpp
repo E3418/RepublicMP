@@ -31,6 +31,14 @@
 #include "../world/networks.h"
 #include "../lockstep/building_settings.h"
 #include "../lockstep/cancel_tool.h"
+#include "../lockstep/world_workers.h"
+#include "../lockstep/cancel_plans.h"
+#include "../lockstep/plan_remove.h"
+#include "../lockstep/car_owners.h"
+#include "../lockstep/line_spacing.h"
+#include "../lockstep/crime_cancel.h"
+#include "../lockstep/call_home.h"
+#include "../lockstep/popups.h"
 #include "../lockstep/rename.h"
 
 #include "../game/world.h"
@@ -140,6 +148,31 @@ extern "C" __declspec(dllexport) int TsmPluginStart(void)
 
     bool okCancel = CancelTool_Install();
     Logf("republicmp  network cancel tool: %d%s", okCancel, okCancel ? "" : " - the cancel tools are made on one PC only");
+
+    bool okWorkers = WorldWorkers_Install();
+    Logf("republicmp  workers without an office: %d%s", okWorkers,
+         okWorkers ? "" : " - the construction menu's field stays each PC's own");
+
+    bool okCancelPlans = CancelPlans_Install();
+    Logf("republicmp  cancel all plans buttons: %d%s", okCancelPlans, okCancelPlans ? "" : " - cancel all plans acts on the clicking PC only");
+
+    bool okPlanRemove = PlanRemove_Install();
+    Logf("republicmp  factory plan removal: %d%s", okPlanRemove, okPlanRemove ? "" : " - the factory's remove from plan acts on the clicking PC only");
+
+    bool okCarOwners = CarOwners_Install();
+    Logf("republicmp  car owners reset: %d%s", okCarOwners, okCarOwners ? "" : " - the car window's reset acts on the clicking PC only");
+
+    bool okLineSpacing = LineSpacing_Install();
+    Logf("republicmp  line spacing button: %d%s", okLineSpacing, okLineSpacing ? "" : " - line spacing acts on the clicking PC only");
+
+    bool okCrimeCancel = CrimeCancel_Install();
+    Logf("republicmp  crime cancel button: %d%s", okCrimeCancel, okCrimeCancel ? "" : " - the crime list's cancel acts on the clicking PC only");
+
+    bool okCallHome = CallHome_Install();
+    Logf("republicmp  partner call home: %d%s", okCallHome, okCallHome ? "" : " - a partner building's call home acts on one PC");
+
+    bool okPopups = Popups_Install();
+    Logf("republicmp  popup callbacks: %d%s", okPopups, okPopups ? "" : " - popups act on the clicking PC only");
 
     bool okLinkSearch = Buildings_InstallLinkSearch();
     Logf("republicmp  building link search: %d%s", okLinkSearch,

@@ -19,6 +19,22 @@
 #define DELETE_CLEANUP 0x4962C0
 #define DRAG_RVA 0x996B98        // the depot window's dragged vehicle (interface state)
 #define MAX_ARGS 7
+#define RESOURCES 0xC2B0         // resource definitions (0x340 each)
+#define RESOURCE_STRIDE 0x340
+#define TYPES 0x12840            // vehicle types (0x9f08 each)
+#define TYPE_STRIDE 0x9F08
+#define CITY_LIST 0x10348        // cities and areas (pointers; a city's position at +4)
+#define MAX_CITIES 4096
+#define BORDER_REFRESH 0x6BF1D0  // the border stop's follow-up (by SoylentGreed)
+#define RESOURCE_BY_NAME 0x2AA830
+#define BORDER_WORKERS 0x8F3438  // the name the workers' resource has
+#define LINE_REFRESH 0x499790
+#define SLOTS 0x970              // building: storage slots (0xe0 each)
+#define SLOT_BYTES 0xE0
+#define SLOT_KIND 0x90           // 0x11: a waste slot
+#define SLOT_TYPE 0x88           // its container type, 5 or 6
+#define WASTE_KIND 0x11
+#define MAX_SLOTS 64
 
 // Argument kinds: x ignored (0), W the world, M the pointer world+worldPointer
 // holds, V a vehicle, B a building, L a line, O a vehicle, building or line,
@@ -28,7 +44,11 @@
 // inside it), D one of a building's citizens' destinations lists (the
 // building plus +f18, +f30, +f48 or +f60), S a window slider the routine reads
 // itself (the double at +0x10 of the object world+worldPointer points to; the
-// last letter: the routine gets nothing for it, the double travels in two words).
+// last letter: the routine gets nothing for it, the double travels in two words),
+// T a resource or vehicle type definition (by its table index) or null, P the
+// address of a local holding a vehicle and C of one holding a city or area (each
+// PC passes the address of its own; by SoylentGreed), Z a waste slot of the
+// building in the argument before it (its place in +970 and its container type).
 struct GameCallSite {
     unsigned site, target;
     const char* name;
@@ -37,6 +57,7 @@ struct GameCallSite {
     unsigned result; // what a captured call answers the window
     bool orDepot;    // when the routine answers false, the window sends the vehicle (argument 2) to its depot
     int special;
+    unsigned heldOffset; // M: the pointer world+worldPointer holds, plus this (a list inside that object)
 };
 
 enum {
@@ -72,7 +93,15 @@ enum {
     // In a session the word is a building setting (building_settings.cpp) whose command calls
     // 160550 and so 161440 on every PC; the button's own call is not made.
     CALL_FUND,
+    // The vehicle window's stop beyond the borders (67d5d0): when it answers true, the
+    // window's follow-up is made too (BorderStop; by SoylentGreed).
+    CALL_BORDER_STOP,
+    // Workers per vehicle -/+ (1ac720 recounts the building's +ff0 records from +df0): the window
+    // writes +df0 right before the call, and the window setting that carries it is made after
+    // the call; the command carries the new +df0 and writes it first.
+    CALL_WORKERS_RECOUNT,
 };
+#define WORKERS_PER_VEHICLE 0xDF0
 #define REPEAT_MS 1500
 #define REFRESH_MS 20000
 
@@ -240,10 +269,52 @@ static const GameCallSite kSites[] = {
     // money. Carried as plain money, the loan was on the clicking PC only and so were its payments.
     { 0x4AF8F7, 0x4B9140, "loan window: borrow money", "WIIS", 0x10BF8, 0, false },
     { 0x4B5B79, 0x4B9140, "loan window (second): borrow money", "WIIS", 0x10BF8, 0, false },
+    // Window actions that acted on the clicking PC only (call sites by SoylentGreed).
+    // The header's cancel construction: 161440 with no word written first (the window's flag +20 only).
+    { 0x6F9CCD, 0x161440, "building window header: cancel construction", "WO", 0, 0, false },
+    // Workers per vehicle -/+: 1ac720 recounts the building's +ff0 records.
+    { 0x75212E, 0x1AC720, "building window: fewer workers per vehicle (recount)", "xB", 0, 0, false, CALL_WORKERS_RECOUNT },
+    { 0x75267B, 0x1AC720, "building window: more workers per vehicle (recount)", "xB", 0, 0, false, CALL_WORKERS_RECOUNT },
+    // 6beee0 empties a building's storage or a wagon's cargo: the storage prompt's "empty whole
+    // storage" and, for each wagon, the popup's "Discard cargo from all wagons".
+    { 0x80832A, 0x6BEEE0, "storage prompt: empty whole storage", "Ob", 0, 0, false },
+    { 0x749642, 0x6BEEE0, "discard cargo from all wagons (each wagon)", "Ob", 0, 0, false },
+    // The vehicle window's stops beyond the borders (the border's building held at world +11b00 / +11af8).
+    { 0x7D98E7, 0x67D5D0, "vehicle window: add stop beyond the borders (Soviet)", "VMIx", 0x11B00, 0, false, CALL_BORDER_STOP },
+    { 0x7D9BDF, 0x67D5D0, "vehicle window: add stop beyond the borders (Western)", "VMIx", 0x11AF8, 0, false, CALL_BORDER_STOP },
+    // The captured press answers 0: the window's refusal message and sound are not made.
+    { 0x7D991C, 0x6EE2A0, "vehicle window: border stop refused message (Soviet)", "WIOI", 0, 0, false, CALL_PRESENTATION },
+    { 0x7D992F, 0x3FFAD0, "vehicle window: border stop refused sound (Soviet)", "WIb", 0, 0, false, CALL_PRESENTATION },
+    { 0x7D9C14, 0x6EE2A0, "vehicle window: border stop refused message (Western)", "WIOI", 0, 0, false, CALL_PRESENTATION },
+    { 0x7D9C27, 0x3FFAD0, "vehicle window: border stop refused sound (Western)", "WIb", 0, 0, false, CALL_PRESENTATION },
+    // Auto-replacement (the manager [world+d440]): the purchase window's choice for a type, and
+    // "Replace oldest vehicle", which queues the vehicle on the manager's +40 list.
+    { 0x80F35E, 0x614840, "purchase window: clear the type's auto-replacement", "MTx", 0xD440, 0, false },
+    { 0x8110CA, 0x614840, "purchase window: set the type's auto-replacement", "MTT", 0xD440, 0, false },
+    { 0x603FF9, 0x0B0E90, "auto-replacement window: replace oldest vehicle (queue it)", "MP", 0xD440, 0, false, CALL_PLAIN, 0x40 },
+    // The rename window: the lines at a renamed building take its name (4963d0).
+    { 0x801994, 0x4963D0, "rename window: lines at the renamed building take its name", "MB", 0x12800, 0, false },
+    // The city window's delete: the city goes on the removal queue world +12948.
+    { 0x7CF2AC, 0x0B0E90, "city window: delete the city/area (queue it)", "AC", 0x12948, 0, false },
+    // A building window's waste separation containers: 19d3b0 moves one container (its capacity,
+    // the amounts in proportion and a 0xbc-byte entry of +c8) from another slot of the type to
+    // this one, 19d8b0 back; the remove passes rcx 0. The captured press answers 0 (no sound).
+    { 0x78EBFB, 0x19D3B0, "container panel: add a separation container", "WBZ", 0, 0, false },
+    { 0x78E9CA, 0x19D8B0, "container panel: remove a separation container", "xBZ", 0, 0, false },
+    // The construction pick tools (construction_fundrub / fundusd / start / cancel, 21c110 from the
+    // Late dispatcher) call 160570 and 161440 themselves; 161440 writes the site's +879 and assigns
+    // its office and vehicles. The settings sync carried the words it wrote, and its command made the
+    // routine on every PC once more: twice on the clicking PC (a vehicle got stations there only).
+    // Each call is a command; a fund's +608 word still goes with the settings sync, on every PC alike.
+    { 0x21C8E0, 0x160570, "construction tool: start", "WBb", 0, 0, false },
+    { 0x21CB6E, 0x160570, "construction tool: start (single building)", "WBb", 0, 0, false },
+    { 0x21C97A, 0x161440, "construction tool: fund or resume", "WB", 0, 0, false },
+    { 0x21CB44, 0x161440, "construction tool: fund (single building)", "WB", 0, 0, false },
+    { 0x21CBAD, 0x161440, "construction tool: resume a stopped site (single building)", "WB", 0, 0, false },
 };
 #define SITE_COUNT (sizeof(kSites) / sizeof(kSites[0]))
 
-enum { OBJ_NONE = 0, OBJ_VEHICLE = 1, OBJ_BUILDING = 2, OBJ_LINE = 3 };
+enum { OBJ_NONE = 0, OBJ_VEHICLE = 1, OBJ_BUILDING = 2, OBJ_LINE = 3, OBJ_RESOURCE = 4, OBJ_TYPE = 5, OBJ_CITY = 6 };
 
 // The citizens' destinations lists of a building: workers, students, passengers, tourists.
 static const unsigned kDestinationLists[] = { 0xF18, 0xF30, 0xF48, 0xF60 };
@@ -316,6 +387,83 @@ static bool ObjectRef(U64 object, unsigned char& kind, RouteRef& r)
     return true;
 }
 
+// A definition as its table index: resources (world +c2b0) or vehicle types (world +12840).
+static unsigned char DefinitionRef(U64 p, unsigned& index)
+{
+    const unsigned tables[2] = { RESOURCES, TYPES }, strides[2] = { RESOURCE_STRIDE, TYPE_STRIDE };
+    for (int k = 0; k < 2; k++) {
+        U64 begin = Q((U64)World() + tables[k]), end = Q((U64)World() + tables[k] + 8);
+        if (begin && end > begin && p >= begin && p < end && (p - begin) % strides[k] == 0) {
+            index = (unsigned)((p - begin) / strides[k]);
+            return (unsigned char)(k ? OBJ_TYPE : OBJ_RESOURCE);
+        }
+    }
+    return OBJ_NONE;
+}
+
+static U64 DefinitionAt(unsigned char kind, unsigned index)
+{
+    unsigned table = kind == OBJ_RESOURCE ? RESOURCES : TYPES, stride = kind == OBJ_RESOURCE ? RESOURCE_STRIDE : TYPE_STRIDE;
+    U64 begin = Q((U64)World() + table), end = Q((U64)World() + table + 8);
+    if (!begin || end < begin || index >= (end - begin) / stride) return 0;
+    return begin + (U64)index * stride;
+}
+
+// A city or area: its index in world +10348 and a check of its position.
+static unsigned CityCheck(U64 city)
+{
+    unsigned w[4] = { 0x43495459u, *(unsigned*)(city + 4), *(unsigned*)(city + 8), *(unsigned*)(city + 12) };
+    unsigned h = 2166136261u;
+    for (unsigned v : w)
+        for (int b = 0; b < 4; b++) {
+            h ^= (v >> (8 * b)) & 0xffu;
+            h *= 16777619u;
+        }
+    return h | 1u;
+}
+
+static bool CityRef(U64 city, RouteRef& r)
+{
+    U64 begin = Q((U64)World() + CITY_LIST), end = Q((U64)World() + CITY_LIST + 8);
+    if (!city || !begin || end < begin || (end - begin) / 8 > MAX_CITIES) return false;
+    for (U64 at = begin; at < end; at += 8)
+        if (Q(at) == city) {
+            r.list = 0;
+            r.place = (int)((at - begin) / 8);
+            r.check = CityCheck(city);
+            return true;
+        }
+    return false;
+}
+
+static U64 CityAt(const RouteRef& r)
+{
+    U64 begin = Q((U64)World() + CITY_LIST), end = Q((U64)World() + CITY_LIST + 8);
+    if (!begin || end < begin || r.place < 0 || (U64)r.place >= (end - begin) / 8) return 0;
+    U64 city = Q(begin + (U64)r.place * 8);
+    return city && CityCheck(city) == r.check ? city : 0;
+}
+
+// A waste slot of a building: its place in +970, its type 5 or 6 (0: not one).
+static unsigned char WasteSlotRef(U64 building, U64 slot, unsigned& index)
+{
+    U64 begin = Q(building + SLOTS), end = Q(building + SLOTS + 8);
+    if (!begin || end < begin || (end - begin) % SLOT_BYTES || (end - begin) / SLOT_BYTES > MAX_SLOTS) return 0;
+    if (slot < begin || slot >= end || (slot - begin) % SLOT_BYTES) return 0;
+    unsigned type = *(unsigned*)(slot + SLOT_TYPE);
+    if (*(unsigned*)(slot + SLOT_KIND) != WASTE_KIND || (type != 5 && type != 6)) return 0;
+    index = (unsigned)((slot - begin) / SLOT_BYTES);
+    return (unsigned char)type;
+}
+
+static U64 WasteSlotAt(U64 building, unsigned index, unsigned char type)
+{
+    U64 begin = Q(building + SLOTS), end = Q(building + SLOTS + 8);
+    if (!begin || end < begin || (end - begin) % SLOT_BYTES || index >= (end - begin) / SLOT_BYTES) return 0;
+    U64 slot = begin + (U64)index * SLOT_BYTES;
+    return *(unsigned*)(slot + SLOT_KIND) == WASTE_KIND && *(unsigned*)(slot + SLOT_TYPE) == type ? slot : 0;
+}
+
 static U64 ObjectAt(unsigned char kind, const RouteRef& r)
 {
     switch (kind) {
@@ -339,7 +487,26 @@ static const char* Capture(unsigned index, const U64* a, GameCallMsg& m)
         switch (s.schema[j]) {
         case 'x': break;
         case 'W': if (a[j] != world) return "an argument is not the world"; break;
-        case 'M': if (a[j] != Q(world + s.worldPointer)) return "an argument is not the world's object"; break;
+        case 'M':
+            if (a[j] != Q(world + s.worldPointer) + s.heldOffset) return "an argument is not the world's object";
+            break;
+        case 'T':
+            if (!a[j]) break;
+            if (!(m.kinds[j] = DefinitionRef(a[j], m.values[j]))) return "an argument is not a resource or vehicle type";
+            break;
+        case 'P':
+            // The caller's local: its vehicle is read now (the local is gone at the boundary).
+            if (!a[j] || !Ref_Vehicle(Q(a[j]), m.refs[j])) return "a vehicle is not in the world's list";
+            m.kinds[j] = OBJ_VEHICLE;
+            break;
+        case 'C':
+            if (!a[j] || !CityRef(Q(a[j]), m.refs[j])) return "a city is not in the world's list";
+            m.kinds[j] = OBJ_CITY;
+            break;
+        case 'Z':
+            if (!j || s.schema[j - 1] != 'B' || !(m.kinds[j] = WasteSlotRef(a[j - 1], a[j], m.values[j])))
+                return "not a waste slot of the building";
+            break;
         case 'V':
             if (!Ref_Vehicle(a[j], m.refs[j])) return "a vehicle is not in the world's list";
             m.kinds[j] = OBJ_VEHICLE;
@@ -394,15 +561,35 @@ static const char* Capture(unsigned index, const U64* a, GameCallMsg& m)
     return nullptr;
 }
 
-static const char* Rebuild(const GameCallMsg& m, U64* a)
+// held: this PC's objects for the P and C arguments (their addresses are passed).
+static const char* Rebuild(const GameCallMsg& m, U64* a, U64* held)
 {
     const GameCallSite& s = kSites[m.index];
     U64 world = (U64)World();
-    for (int j = 0; j < MAX_ARGS; j++) a[j] = 0;
+    for (int j = 0; j < MAX_ARGS; j++) a[j] = held[j] = 0;
     for (int j = 0; s.schema[j]; j++) {
         switch (s.schema[j]) {
         case 'W': a[j] = world; break;
-        case 'M': a[j] = Q(world + s.worldPointer); break;
+        case 'M':
+            if (!(a[j] = Q(world + s.worldPointer))) return "the world's object is missing";
+            a[j] += s.heldOffset;
+            break;
+        case 'T':
+            if (m.kinds[j] == OBJ_NONE) break;
+            if ((m.kinds[j] != OBJ_RESOURCE && m.kinds[j] != OBJ_TYPE) || !(a[j] = DefinitionAt(m.kinds[j], m.values[j])))
+                return "a definition is not here";
+            break;
+        case 'P':
+            if (m.kinds[j] != OBJ_VEHICLE || !(held[j] = Ref_VehicleAt(m.refs[j]))) return "the vehicle is gone";
+            a[j] = (U64)&held[j];
+            break;
+        case 'C':
+            if (m.kinds[j] != OBJ_CITY || !(held[j] = CityAt(m.refs[j]))) return "the city is gone";
+            a[j] = (U64)&held[j];
+            break;
+        case 'Z':
+            if (!j || !a[j - 1] || !(a[j] = WasteSlotAt(a[j - 1], m.values[j], m.kinds[j]))) return "the waste slot differs here";
+            break;
         case 'V': case 'B': case 'L': case 'O': case 'o':
             if (m.kinds[j] == OBJ_NONE) {
                 if (s.schema[j] != 'o') return "an object is missing";
@@ -533,6 +720,7 @@ static U64 Run(unsigned index, const U64* a)
     __try {
         if (s.special == CALL_DRAG && !(args[0] = *(U64*)(g_exeBase + DRAG_RVA))) why = "no vehicle is dragged";
         if (!why) why = Capture(index, args, m);
+        if (!why && s.special == CALL_WORKERS_RECOUNT) m.values[2] = *(unsigned*)(args[1] + WORKERS_PER_VEHICLE);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         why = "a fault while reading the arguments";
     }
@@ -588,6 +776,44 @@ static constexpr std::array<void*, sizeof...(I)> MakeThunksF4(std::index_sequenc
     return { { (void*)&ThunkF4<(unsigned)I>... } };
 }
 
+// The vehicle window's follow-up after a stop beyond the borders was added (7d994b..7d9adb, by
+// SoylentGreed): the route rebuilt, the new stop's two flags (+0, +c8 of its 0x198 record in
+// +638..+640: "workers" when the vehicle carries workers) and the lines manager refreshed. The
+// click sound and the hint are interface only.
+static void BorderStop(U64 v, int index)
+{
+    typedef U64 (*RefreshFn)(U64, U64, U64, U64);
+    typedef U64 (*ByNameFn)(U64, U64);
+    typedef U64 (*LinesFn)(U64, U64);
+    U64 world = (U64)World();
+    ((RefreshFn)(g_exeBase + BORDER_REFRESH))(v, 1, 0, 0);
+    BYTE workers = 0;
+    U64 workersResource = ((ByNameFn)(g_exeBase + RESOURCE_BY_NAME))(world, (U64)(g_exeBase + BORDER_WORKERS));
+    for (U64 at = Q(v + 0x458); at && at < Q(v + 0x460); at += 16)
+        if (Q(at) == workersResource) workers = 1;
+    U64 begin = Q(v + 0x638), end = Q(v + 0x640);
+    U64 n = end > begin ? (end - begin) / 0x198 : 0;
+    if (n) {
+        U64 type = Q(v + 0x1708);
+        unsigned category = type ? *(unsigned*)(type + 0x294) : 0;
+        U64 stop = ~0ull;
+        BYTE f0 = workers, fc8 = 1;
+        if (*(int*)(v + 0x1794) == 1 && type && n == 1 && ((category - 6) & 0xfffffff9u) == 0 && category != 0xc) {
+            stop = n - 1;
+            f0 = fc8 = 0;
+        } else if (index == -1) {
+            stop = n - 1;
+        } else if (index >= 0 && (U64)index + 1 < n) {
+            stop = (U64)index + 1;
+        }
+        if (stop != ~0ull) {
+            *(BYTE*)(begin + stop * 0x198) = f0;
+            *(BYTE*)(begin + stop * 0x198 + 0xc8) = fc8;
+        }
+    }
+    if (U64 lines = Q(world + LINES_OFFSET)) ((LinesFn)(g_exeBase + LINE_REFRESH))(lines, v);
+}
+
 bool GameCalls_ApplyCommand(const void* data, size_t size)
 {
     if (size != sizeof(GameCallMsg)) return false;
@@ -598,7 +824,7 @@ bool GameCalls_ApplyCommand(const void* data, size_t size)
         return false;
     }
     const GameCallSite& s = kSites[m.index];
-    U64 a[MAX_ARGS];
+    U64 a[MAX_ARGS], held[MAX_ARGS];
     const char* why = nullptr;
     U64 r = 0;
     U64* drag = nullptr;
@@ -612,9 +838,9 @@ bool GameCalls_ApplyCommand(const void* data, size_t size)
         memcpy(&slider.value, &bits, 8);
     }
     __try {
-        why = Rebuild(m, a);
+        why = Rebuild(m, a, held);
         if (!why && s.special != CALL_PLAIN && s.special != CALL_DELETE_LINE && s.special != CALL_DRAG &&
-            s.special != CALL_REPEATING)
+            s.special != CALL_REPEATING && s.special != CALL_BORDER_STOP && s.special != CALL_WORKERS_RECOUNT)
             why = "not a command site";
         if (!why) {
             if (s.special == CALL_DELETE_LINE) *(BYTE*)(a[1] + 1) = 0;
@@ -623,6 +849,7 @@ bool GameCalls_ApplyCommand(const void* data, size_t size)
                 dragged = *drag;
                 *drag = a[0];
             }
+            if (s.special == CALL_WORKERS_RECOUNT) *(unsigned*)(a[1] + WORKERS_PER_VEHICLE) = m.values[2];
             if (k >= 0) {
                 sliderAt = (U64*)((U64)World() + s.worldPointer);
                 sliderWas = *sliderAt;
@@ -639,6 +866,7 @@ bool GameCalls_ApplyCommand(const void* data, size_t size)
                 typedef void (*DepotFn)(U64, U64, U64, U64, U64, U64);
                 ((DepotFn)(g_exeBase + SEND_TO_DEPOT))((U64)World(), a[1], 0, 0, 1, 1);
             }
+            if (s.special == CALL_BORDER_STOP && (r & 0xff)) BorderStop(a[0], (int)(unsigned)a[2]);
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         why = "the call faulted";
