@@ -73,6 +73,17 @@ check refuses another DLL, 0.7.4 included).
   was placed differently on each PC. A join is refused when the two values
   differ (by SoylentGreed).
 
+**Economy**
+
+- **Fix: resource prices growing with every re-sync** - loading a save with
+  enough economy history makes the game compute every resource's price
+  again and add a history record. A session loads at every join and every
+  re-sync, each time from the save just written: the prices were computed
+  again from already computed ones, dozens of times an evening, and the
+  saves kept them (gravel at 17,000 a ton). A session's load now keeps the
+  saved prices. Saves that already have such prices keep them - load an
+  older save to get normal prices back.
+
 **Fewer crashes**
 
 - **Fix: a crash when leaving a session right after it loaded** - the game's

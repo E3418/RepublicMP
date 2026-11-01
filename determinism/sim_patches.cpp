@@ -107,6 +107,14 @@ static const DetPatch kPatches[] = {
     // je 2fbfb4 -> jmp 2fbfb4; nop
     { 0x2fbcec, 6, { 0x0f, 0x84, 0xc2, 0x02, 0x00, 0x00 }, { 0xe9, 0xc3, 0x02, 0x00, 0x00, 0x90 },
       "era start scaling: never at a session's load" },
+    // A load whose economy history (world +11728) holds 0x400 bytes or more calls 2fcab0(world,
+    // &world+11328): every resource's price computed again from its recipe, the current prices and
+    // the history, one more history record pushed (4488d0), then a price step 2fb1d0(world, 0).
+    // A game loads now and then; a session loads at every join and every re-sync, each from the
+    // save the host had just written: the prices were computed again from already computed ones
+    // and the history filled with records of one date, dozens of times an evening, and the save
+    // kept it (gravel at 17,000 a ton). A session's load keeps the saved prices: call -> nop5
+    { 0x434095, 5, { 0xe8, 0x16, 0x8a, 0xec, 0xff }, { NOP5 }, "load: prices computed again (never at a session's load)" },
     // the camera's own update of a followed vehicle -> nop5; the worker's skip -> nop
     { 0x10e4f, 5, { 0xe8, 0xdc, 0xc6, 0x65, 0x00 }, { NOP5 }, "follow camera: train head" },
     { 0x10e87, 5, { 0xe8, 0xa4, 0xc6, 0x65, 0x00 }, { NOP5 }, "follow camera: wagon" },
