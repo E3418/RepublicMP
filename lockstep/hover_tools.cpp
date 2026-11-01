@@ -14,7 +14,6 @@ typedef unsigned __int64 U64;
 #define SELECTED_OFFSET 0xD428
 #define MENU_OFFSET 0xD280
 #define MENU_STRIDE 0x2D0
-#define NAME_BYTES 32
 #define FLAG_OFFSET 0xFB9
 #define ROAD_NETWORK 0xF7A0
 #define RAIL_NETWORK 0xF908
@@ -43,26 +42,6 @@ static bool IsRail(int kind) { return kind == RAIL_PLACE || kind == RAIL_REMOVE;
 // The pick state (world +f648..+f6e8, the cursor +f6c, +f90): the pointers as references.
 enum { REF_NONE = 0, REF_NODE = 1, REF_EDGE = 2, REF_ROAD_NODE = 3, REF_ROAD_EDGE = 4, REF_BUILDING = 5 };
 static const unsigned kRefOffsets[8] = { 0xF648, 0xF650, 0xF6A0, 0xF6D8, 0xF680, 0xF690, 0xF6C8, 0xF6D0 };
-
-#pragma pack(push, 1)
-struct PickRef {
-    unsigned tag, index, check;
-};
-struct PickState {
-    unsigned char b658, b668, b6e8, b698;
-    unsigned f678, f6e0, f6e4, f90, f6a8, f688;
-    unsigned nodePoint[3], edgePoint[3], cursor[3];
-    PickRef refs[8];
-};
-struct HoverMsg {
-    int kind, mode;
-    unsigned char hover;
-    unsigned char pad[3];
-    int record;
-    char name[NAME_BYTES];
-    PickState pick;
-};
-#pragma pack(pop)
 
 typedef U64 (*ToolFn)(U64 world, U64 a2);
 
@@ -266,6 +245,14 @@ static U64 Run(int kind, U64 world, U64 a2)
     BYTE* press = g_exeBase + PRESS_RVA;
     bool menus = w[kMenus[0]] || w[kMenus[1]] || w[kMenus[2]];
     if (!*press || menus || !Commands_TakeLocal() || !HoverTools_Ready(kind)) {
+        // Outside the lockstep (a Republics host alone) the area rule is checked here: the click is hidden.
+        if (*press && !menus && Commands_PointRefusedHere((const float*)(w + 0xF6C))) {
+            BYTE kept = *press;
+            *press = 0;
+            U64 r = tool(world, a2);
+            *press = kept;
+            return r;
+        }
         // A click in a session that is not taken stays on this PC: worth a line.
         static int s_logged = 0;
         if (*press && !menus && Commands_Capturing() && s_logged < 16) {

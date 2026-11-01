@@ -76,6 +76,10 @@ bool NewCity_ApplyCommand(const void* data, size_t size)
     NewCityMsg m;
     memcpy(&m, data, sizeof(m));
     if (m.magic != MAGIC || m.chars >= MAX_CHARS) return false;
+    if (!Commands_PointInArea(m.position)) {
+        Logf("republicmp  NEW CITY: outside the player's area - not made");
+        return false;
+    }
     unsigned short name[MAX_CHARS + 1] = {};
     memcpy(name, m.name, m.chars * 2);
     U64 world = (U64)World();

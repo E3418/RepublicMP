@@ -23,6 +23,29 @@
 
 #include "tesmio_plugin.h"
 
+#define NAME_BYTES 32
+
+// The pick state (world +f648..+f6e8, the cursor +f6c, +f90): the pointers as references.
+#pragma pack(push, 1)
+struct PickRef {
+    unsigned tag, index, check;
+};
+struct PickState {
+    unsigned char b658, b668, b6e8, b698;
+    unsigned f678, f6e0, f6e4, f90, f6a8, f688;
+    unsigned nodePoint[3], edgePoint[3], cursor[3];
+    PickRef refs[8];
+};
+struct HoverMsg {
+    int kind, mode;
+    unsigned char hover;
+    unsigned char pad[3];
+    int record;
+    char name[NAME_BYTES];
+    PickState pick;
+};
+#pragma pack(pop)
+
 void HoverTools_Bind(const TsmHost* host);
 
 // False when a kind's routine differs (the tool is then left as it was).

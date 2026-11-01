@@ -253,11 +253,13 @@ bool SourceSlots_ApplyCommand(const void* data, size_t size)
     U64 building = GuardedAt(m.building);
     Slots now;
     if (!building) why = "the building is gone";
+    else if (!Commands_BuildingInArea(building)) why = "the building is outside the player's area";
     else if (!ReadSlots(building, now) || now.count != m.slots) why = "its slots differ here";
     U64 sources[MAX_SLOTS] = {};
     for (unsigned i = 0; i < m.count && !why; i++) {
         if (m.entries[i].slot >= now.count) why = "a slot is outside";
         else if (m.entries[i].has && !(sources[i] = GuardedAt(m.entries[i].source))) why = "a source building is gone";
+        else if (!Commands_BuildingInArea(sources[i])) why = "a source is the other republic's (no trade yet)";
     }
     for (unsigned i = 0; i < m.count && !why; i++)
         if (!WriteSlot(building, m.entries[i].slot, sources[i])) why = "a fault while writing";

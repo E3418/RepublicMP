@@ -66,6 +66,19 @@ static bool ReadBuildings(std::vector<U64>& out)
     }
 }
 
+// The building researching the entry now (0: none, or unreadable).
+static U64 ReadBuilding(unsigned index)
+{
+    U64 begin = 0;
+    unsigned count = 0;
+    if (!Entries(&begin, &count) || index >= count) return 0;
+    __try {
+        return *(U64*)(begin + (U64)index * ENTRY_BYTES + ENTRY_BUILDING);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
 static bool WriteBuilding(unsigned index, U64 building)
 {
     U64 begin = 0;
@@ -156,6 +169,8 @@ bool Research_ApplyCommand(const void* data, size_t size)
     U64 building = 0;
     if (!Entries(&begin, &count) || count != m.count) why = "the research list differs here";
     else if (m.start && !(building = GuardedAt(m.building))) why = "the building is gone";
+    else if (!Commands_BuildingInArea(building) || !Commands_BuildingInArea(ReadBuilding(m.index)))
+        why = "a building is outside the player's area"; // theirs, or the entry another republic researches
     else if (!WriteBuilding(m.index, building)) why = "a fault while writing";
     if (m.start)
         Logf("republicmp  RESEARCH: entry %u started by building #%d: %s", m.index, m.building.place, why ? why : "made");

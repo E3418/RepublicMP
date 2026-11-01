@@ -23,6 +23,15 @@
 
 #include "tesmio_plugin.h"
 
+#pragma pack(push, 1)
+struct JoinMsg {
+    unsigned magic;
+    unsigned table, networks; // the network's place in the world's table, the table's size
+    unsigned node, nodes;     // the node's place in the network's +298, the list's size
+    float point[3];           // the node's position (bits compared)
+};
+#pragma pack(pop)
+
 void JoinTool_Bind(const TsmHost* host);
 
 // False when the handler differs (the tool is then put away in lockstep).

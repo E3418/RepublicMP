@@ -451,6 +451,7 @@ bool BuildingSwitches_ApplyCommand(const void* data, size_t size)
     __try {
         U64 building = m.kind == KIND_WORLD ? 0 : Ref_BuildingAt(m.building);
         if (m.kind != KIND_WORLD && !building) why = "the building is gone";
+        else if (!Commands_BuildingInArea(building)) why = "the building is outside the player's area";
         for (unsigned i = 0; i < m.count && !why; i++)
             if (m.words[i].offset % 4 || !WordAddress(building, m, m.words[i].offset)) why = "a word is not there (another shape here)";
         for (unsigned i = 0; i < m.count && !why; i++) {

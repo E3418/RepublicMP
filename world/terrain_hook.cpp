@@ -345,10 +345,6 @@ static SetHeightFn           o_SetTerrainHeight;
 // Synced edits go through BeginEdit. It logs the call and returns false when
 // the edit became a command (made at the next tick boundary instead). Edits a
 // command makes (g_terrainApplyingCommand) always run and are never taken.
-struct LsTerrainEdit {
-    int method;
-    TerrainArgs args;
-};
 static std::vector<LsTerrainEdit> g_lsTerrain; // main thread (the tools run in the Late body)
 
 static bool BeginEdit(int method, void* returnAddress, TerrainArgs& x)

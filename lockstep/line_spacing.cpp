@@ -68,6 +68,8 @@ bool LineSpacing_ApplyCommand(const void* data, size_t size)
         U64 line = Ref_LineAt(m.line);
         if (!line) {
             why = "the line is gone";
+        } else if (!Commands_LineInArea(line)) {
+            why = "the line is outside the player's area";
         } else {
             // 7d3c9e..7d3d03 on this PC's line.
             BYTE on = ((GetterFn)(g_exeBase + GETTER_RVA))(line);

@@ -35,15 +35,6 @@ static const unsigned kMenus[3] = { 0xFBC, 0xFBE, 0xFC3 };
 static const unsigned char kEntry[16] = { 0x88, 0x54, 0x24, 0x10, 0x48, 0x89, 0x4c, 0x24,
                                           0x08, 0x55, 0x56, 0x57, 0x48, 0x8d, 0x6c, 0x24 };
 
-#pragma pack(push, 1)
-struct JoinMsg {
-    unsigned magic;
-    unsigned table, networks; // the network's place in the world's table, the table's size
-    unsigned node, nodes;     // the node's place in the network's +298, the list's size
-    float point[3];           // the node's position (bits compared)
-};
-#pragma pack(pop)
-
 typedef U64 (*HandlerFn)(U64 world, U64 mode);
 
 static int g_ready = -1;
@@ -140,6 +131,14 @@ U64 JoinTool_Run(U64 world, U64 mode)
     BYTE* press = g_exeBase + PRESS_RVA;
     bool menus = w[kMenus[0]] || w[kMenus[1]] || w[kMenus[2]];
     if (!*press || menus || !Commands_TakeLocal() || !JoinTool_Ready()) {
+        // Outside the lockstep (a Republics host alone) the area rule is checked here: the click is hidden.
+        if (*press && !menus && Commands_PointRefusedHere((const float*)(w + CURSOR_OFFSET))) {
+            BYTE kept = *press;
+            *press = 0;
+            U64 r = handler(world, mode);
+            *press = kept;
+            return r;
+        }
         static int s_logged = 0;
         if (*press && !menus && Commands_Capturing() && s_logged < 16) {
             ++s_logged;

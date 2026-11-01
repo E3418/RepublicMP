@@ -110,8 +110,15 @@ void Commands_Submit(int kind, const void* data, size_t size);
 // player may not build on or demolish refuses the whole command, on every PC.
 // Main thread, while a command is made; null: no rule. Called with pos null,
 // it says whether it applies at all.
-typedef bool (*CommandAreaFn)(int player, const float pos[3]);
+// notify: false when the caller only filters (nothing is refused), so the
+// mode shows no notice.
+typedef bool (*CommandAreaFn)(int player, const float pos[3], bool notify);
 void Commands_SetAreaRule(CommandAreaFn fn);
+// A mode's rule on who may change the game's rules (the rules page): false
+// refuses the command on every PC. Main thread, while a command is made;
+// null: everyone may.
+typedef bool (*CommandGlobalFn)(int player);
+void Commands_SetGlobalRule(CommandGlobalFn fn);
 
 // Outside the lockstep (a Republics host alone) the game makes the local
 // player's actions itself: the hooks that would make a command ask here
@@ -122,6 +129,26 @@ void Commands_SetAreaRule(CommandAreaFn fn);
 bool Commands_ChecksHere();
 bool Commands_RefusedHere(int kind, const void* data, size_t size);
 bool Commands_PointRefusedHere(const float pos[3]);
+// While this thread makes a command: false when the area rule keeps the
+// command's player off this building or point (Republics: the other
+// republic's buildings are not theirs to act on). A module checks the
+// buildings its command changes - not those it only reads - before it changes
+// anything, and refuses the command when one is false. Logged; the clicking
+// player's notice is shown. True outside a command or without a rule.
+bool Commands_BuildingInArea(unsigned long long building);
+bool Commands_PointInArea(const float pos[3], bool notify = true);
+// The same for a vehicle (a wagon or trailer by the vehicle at its head), a
+// line (none of its stations outside; border connections count as anyone's)
+// and a station of a line.
+bool Commands_VehicleInArea(unsigned long long vehicle);
+bool Commands_LineInArea(unsigned long long line);
+bool Commands_StationInArea(unsigned long long station);
+// While this thread makes a command: the mode's global rule for its player.
+bool Commands_GlobalAllowed();
+// The player of the command this thread is making (0 the host), or -1 outside
+// one. A mode with a rule active (Republics) keeps some values per player by it.
+int Commands_ApplyingPlayer();
+bool Commands_PerPlayer();
 
 // Changes made outside the hooks, found by comparing with a record (main
 // thread, while commands are captured): what the interface changed between

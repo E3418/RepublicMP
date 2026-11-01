@@ -266,6 +266,7 @@ bool VehicleSwitches_ApplyCommand(const void* data, size_t size)
         unsigned records = 1;
         U64 begin = !vehicle ? 0 : m.kind == KIND_VEHICLE ? vehicle : Records(vehicle, m.kind, &records);
         if (!vehicle) why = "the vehicle is gone";
+        else if (!Commands_VehicleInArea(vehicle)) why = "the vehicle is outside the player's area";
         else if (!begin || (m.kind != KIND_VEHICLE && records != m.records)) why = "its records differ here";
         else {
             for (unsigned i = 0; i < m.count && !why; i++)

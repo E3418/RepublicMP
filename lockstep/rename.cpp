@@ -216,12 +216,14 @@ static const char* Apply(const RenameMsg& m)
         if (!List(world + CITY_LIST, MAX_CITIES, begin, n) || m.index >= n) return "the city is not here";
         U64 city = Q(begin + (U64)m.index * 8);
         if (!city || CityCheck(city) != m.check) return "the city is not here";
+        if (!Commands_PointInArea((const float*)(city + CITY_POSITION))) return "the city is outside the player's area";
         field = city + CITY_NAME;
     } else {
         U64 roads = Q(world + ROAD_NETWORK);
         if (!roads || !List(roads + NETWORK_NODES, 10000000, begin, n) || m.index >= n) return "the crossroad is not here";
         U64 node = Q(begin + (U64)m.index * 8);
         if (!node || NodeCheck(node) != m.check) return "the crossroad is not here";
+        if (!Commands_PointInArea((const float*)(node + 4))) return "the crossroad is outside the player's area";
         U64 junction = Q(node + JUNCTION_OF_NODE);
         if (!junction) return "the node has no crossroad here";
         field = junction + JUNCTION_NAME;

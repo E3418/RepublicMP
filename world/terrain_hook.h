@@ -67,6 +67,12 @@ struct TerrainArgs {
     unsigned char suppressed; // logging only: the call became a command and did not run here
 };
 
+// One edit of an LS_CMD_TERRAIN command (the command is an array of them).
+struct LsTerrainEdit {
+    int method;
+    TerrainArgs args;
+};
+
 void TerrainHook_Bind(const TsmHost* host);
 bool InstallTerrainHooks();
 

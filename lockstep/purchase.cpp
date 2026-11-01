@@ -588,6 +588,7 @@ static const char* Replay(const PurchaseMsg& m, BYTE** bought)
         if (!type) return "the vehicle type is not in this PC's list";
         BYTE* depot = BuildingAt(world, m.depot);
         if (!depot) return "the depot differs";
+        if (!Commands_BuildingInArea((unsigned long long)depot)) return "the depot is outside the buyer's area";
         if (!WriteVariants(type, m)) return "the trailers differ";
         int campaign = *(int*)(g_exeBase + CAMPAIGN_RVA);
         if (m.kind >= 5) return ReplayBlueprint(world, m, type, depot, campaign);

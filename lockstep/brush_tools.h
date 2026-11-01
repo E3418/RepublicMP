@@ -23,6 +23,29 @@
 
 #include "tesmio_plugin.h"
 
+#define NAME_BYTES 32
+
+#pragma pack(push, 1)
+struct BrushState {
+    float held, cost, timers[10], tree;
+};
+struct BrushSample {
+    float cursor[3], brush, target, setting374;
+    int setting338;
+    unsigned char timer[16];
+    unsigned char press, pressOff, pad[2];
+    BrushState state;
+};
+struct BrushMsg {
+    unsigned origin;          // the clicking PC (its own press prompt)
+    unsigned serial, sequence; // the stroke and this sample's place in it
+    int kind, mode;
+    int record;               // the tool: its place in the build menu
+    char name[NAME_BYTES];    // and its name, a check
+    BrushSample sample;
+};
+#pragma pack(pop)
+
 void BrushTools_Bind(const TsmHost* host);
 
 // Startup: points 3a8a70's three press reads (3aa850, 3aaa58, 3aaaa9) at relays.

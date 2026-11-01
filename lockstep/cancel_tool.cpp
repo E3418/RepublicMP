@@ -21,15 +21,6 @@ typedef unsigned __int64 U64;
 #define MAX_LIST (1u << 20)
 #define MAGIC 0x314E4143
 
-#pragma pack(push, 1)
-struct CancelMsg {
-    unsigned magic;
-    unsigned table, networks; // the network's place in the world's table, the table's size
-    unsigned edge, edges;     // the edge's place in the network's +2b0, the list's size
-    float ends[2][3];         // its nodes' positions (bits compared)
-};
-#pragma pack(pop)
-
 typedef U64 (*RemoveFn)(U64 network, U64 edge, U64 a3, U64 a4, U64 a5);
 
 static BYTE* g_relay = nullptr;
@@ -110,8 +101,13 @@ static const char* GuardedEncode(U64 network, U64 edge, CancelMsg& m)
 static U64 RelayedRemove(U64 network, U64 edge, U64 a3, U64 a4, U64 a5)
 {
     RemoveFn remove = (RemoveFn)(g_exeBase + REMOVE_RVA);
-    if (!Commands_TakeLocal()) return remove(network, edge, a3, a4, a5);
     CancelMsg m;
+    if (!Commands_TakeLocal()) {
+        // Outside the lockstep (a Republics host alone) the area rule is checked here; the notice says why.
+        if (Commands_ChecksHere() && !GuardedEncode(network, edge, m) && Commands_RefusedHere(LS_CMD_NET_CANCEL, &m, sizeof(m)))
+            return 0;
+        return remove(network, edge, a3, a4, a5);
+    }
     const char* why = GuardedEncode(network, edge, m);
     if (why) {
         Logf("republicmp  CANCEL: not shared - %s; nothing is removed", why);

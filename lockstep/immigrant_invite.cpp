@@ -305,7 +305,9 @@ bool ImmigrantInvite_ApplyCommand(const void* data, size_t size)
     const char* why = nullptr;
     __try {
         U64 b = Ref_BuildingAt(m.building);
-        why = b ? Replay(world, b, m.variant, &adults, &partners, &paid) : "the building is not here";
+        why = !b ? "the building is not here"
+              : !Commands_BuildingInArea(b) ? "the building is outside the player's area"
+              : Replay(world, b, m.variant, &adults, &partners, &paid);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         why = "a fault";
     }

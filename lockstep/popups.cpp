@@ -150,6 +150,8 @@ bool Popups_ApplyCommand(const void* data, size_t size)
         U64 building = Ref_BuildingAt(m.building);
         if (!building) {
             why = "the building is gone";
+        } else if (!Commands_BuildingInArea(building)) {
+            why = "the building is outside the player's area";
         } else {
             U64 argument = building + m.list;
             // The percent writes one share per value with no count check: the list must hold them.

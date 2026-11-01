@@ -374,6 +374,9 @@ bool LinkTools_ApplyCommand(const void* data, size_t size)
             source = Ref_BuildingAt(m.source);
             target = Ref_BuildingAt(m.target);
             if (!source || !target) why = "a building is gone";
+            // Weights are only copied from the source; a link changes both buildings.
+            else if (!Commands_BuildingInArea(target) || (m.kind != KIND_WEIGHTS && !Commands_BuildingInArea(source)))
+                why = "a building is outside the player's area";
             else if (source == target) why = "it is the same building";
             else if (m.kind <= KIND_DISTRIBUTION && Linked(source, target)) why = "they are linked already";
         }

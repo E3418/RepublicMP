@@ -192,6 +192,7 @@ bool CallHome_ApplyCommand(const void* data, size_t size)
         U64 world = (U64)(g_exeBase + WORLD_RVA);
         U64 b = Ref_BuildingAt(m.building), p = Ref_BuildingAt(m.partner), partner = 0;
         if (!b || !p) why = "a building is gone";
+        else if (!Commands_BuildingInArea(b) || !Commands_BuildingInArea(p)) why = "a building is outside the player's area";
         else if (!PartnerBuilding(b, partner) || partner != p) why = "the partner differs here";
         else why = Move(world, b, p, &moved);
     } __except (EXCEPTION_EXECUTE_HANDLER) {

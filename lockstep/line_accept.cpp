@@ -503,6 +503,10 @@ bool LineAccept_ApplyCommand(const void* data, size_t size)
     StandIn s;
     U64 line = 0;
     const char* why = Decode((const BYTE*)data, size, s, line);
+    // The other republic's line, or its stations in the new copy (Republics): not edited.
+    if (!why && !Commands_LineInArea(line)) why = "the line is outside the player's area";
+    for (size_t i = 0; !why && i < s.stations.size(); i++)
+        if (!Commands_StationInArea(s.stations[i])) why = "a station is outside the player's area";
     unsigned vehicles = 0;
     if (!why) why = Block(line, (U64)s.line.data(), &vehicles);
     Logf("republicmp  LINE: accept, %u station(s), %u stop record(s), %u vehicle(s): %s", (unsigned)s.stations.size(),

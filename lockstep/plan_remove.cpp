@@ -108,6 +108,7 @@ bool PlanRemove_ApplyCommand(const void* data, size_t size)
         U64 factory = Ref_BuildingAt(m.factory), at = 0;
         unsigned typeIndex = 0;
         if (!factory) why = "the factory is gone";
+        else if (!Commands_BuildingInArea(factory)) why = "the factory is outside the player's area";
         else if (!Entry(factory, m.index, at) || !TypeIndex(Q(at), typeIndex) || typeIndex != m.typeIndex ||
                  TypeCheck(Q(at)) != m.typeCheck || *(int*)(at + 8) != m.variant)
             why = "the entry differs here";

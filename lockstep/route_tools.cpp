@@ -360,10 +360,15 @@ static const char* ApplyStop(const RouteMsg& m, int* used)
     U64 world = (U64)World();
     U64 object = m.kind == ROUTE_VEHICLE_STOP ? Ref_VehicleAt(m.object) : Ref_LineAt(m.object);
     if (!object) return m.kind == ROUTE_VEHICLE_STOP ? "the vehicle is gone" : "the line is gone";
+    if (m.kind == ROUTE_VEHICLE_STOP ? !Commands_VehicleInArea(object) : !Commands_LineInArea(object))
+        return "the vehicle or line is outside the player's area";
     U64 building = 0, node = 0;
     if (m.building.place >= 0 && !(building = Ref_BuildingAt(m.building))) return "the building is gone";
     if (m.node.place >= 0 && !(node = Ref_NodeAt(m.node))) return "the node is gone";
     if (!building && !node) return "nothing picked";
+    // The other republic's stations and roads are not stops (no trade between them yet).
+    if (!Commands_BuildingInArea(building) || (node && !Commands_PointInArea((const float*)(node + 4))))
+        return "the stop is outside the player's area";
     static const unsigned kMenus[3] = MENU_OFFSETS;
     U64 own298 = Q(world + TARGET_OFFSET), own2a0 = Q(world + WINDOW_OFFSET), own428 = Q(world + SELECTED_OFFSET);
     BYTE menus[3];
@@ -407,6 +412,8 @@ static const char* ApplyLineCopy(const RouteMsg& m, int* result)
     }
     if (!vehicle) return "the vehicle is gone";
     if (m.subject.place >= 0 && !(subject = Ref_VehicleAt(m.subject))) return "the window's vehicle is gone";
+    if (!Commands_VehicleInArea(vehicle) || !Commands_VehicleInArea(subject) || !Commands_LineInArea(line))
+        return "a vehicle or the line is outside the player's area";
     U64 lines = Q(world + LINES_OFFSET);
     if (!lines) return "no lines manager";
     *result = -1;
@@ -438,10 +445,12 @@ static const char* ApplyDepot(const DepotMsg& m, unsigned* sent)
     U64 world = (U64)World();
     U64 depot = Ref_BuildingAt(m.depot);
     if (!depot) return "the depot is gone";
+    if (!Commands_BuildingInArea(depot)) return "the depot is outside the player's area";
     if (!m.count || m.count > DEPOT_MAX) return "no vehicles";
     U64 list[DEPOT_MAX] = {};
     for (unsigned i = 0; i < m.count; i++)
         if (!(list[i] = Ref_VehicleAt(m.vehicles[i]))) return "a vehicle is gone";
+        else if (!Commands_VehicleInArea(list[i])) return "a vehicle is outside the player's area";
     *sent = 0;
     __try {
         for (unsigned k = m.count; k-- > 0;) {

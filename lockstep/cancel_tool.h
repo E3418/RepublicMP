@@ -18,6 +18,15 @@
 
 #include "tesmio_plugin.h"
 
+#pragma pack(push, 1)
+struct CancelMsg {
+    unsigned magic;
+    unsigned table, networks; // the network's place in the world's table, the table's size
+    unsigned edge, edges;     // the edge's place in the network's +2b0, the list's size
+    float ends[2][3];         // its nodes' positions (bits compared)
+};
+#pragma pack(pop)
+
 void CancelTool_Bind(const TsmHost* host);
 bool CancelTool_Install();
 

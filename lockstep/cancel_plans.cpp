@@ -158,6 +158,10 @@ bool CancelPlans_ApplyCommand(const void* data, size_t size)
                 if ((U64)i >= (end - begin) / 8) continue;
                 U64 edge = Q(begin + (U64)i * 8);
                 if (!edge || !*(BYTE*)(edge + EDGE_PLANNED)) continue;
+                // The other republic's plans are theirs (Republics): left as they are.
+                if (!Commands_PointInArea((const float*)(Q(edge + EDGE_A) + NODE_X), false) ||
+                    !Commands_PointInArea((const float*)(Q(edge + EDGE_B) + NODE_X), false))
+                    continue;
                 for (unsigned e : { (unsigned)EDGE_A, (unsigned)EDGE_B }) {
                     U64 node = Q(edge + e);
                     float x = *(float*)(node + NODE_X), z = *(float*)(node + NODE_Z);

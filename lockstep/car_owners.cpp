@@ -84,6 +84,8 @@ bool CarOwners_ApplyCommand(const void* data, size_t size)
         U64 world = (U64)(g_exeBase + WORLD_RVA), b = Ref_BuildingAt(m.building);
         if (!b) {
             why = "the building is gone";
+        } else if (!Commands_BuildingInArea(b)) {
+            why = "the building is outside the player's area";
         } else {
             // 7a1a48..7a1ac9 on this PC's building (the list's size re-read every pass).
             for (U64 i = 0; i < (Q(b + CARS + 8) - Q(b + CARS)) / 8 && i < MAX_CARS; ++i) {

@@ -3,6 +3,7 @@
 // SoylentGreed's world settings route (RepublicLAN, read against 1.1.1.9).
 #include "world_workers.h"
 #include "commands.h"
+#include "../session/save_sync.h"
 #include <string.h>
 #include <limits.h>
 
@@ -53,22 +54,26 @@ struct WorkersMsg {
 typedef float (*GetFn)(U64 widget);
 typedef void (*SetFn)(U64 widget, float value);
 
-// The session's value, read by both readers on any thread: HELD | PRESENT | value.
+// The session's values, read by both readers on any thread: HELD | PRESENT | value.
+// Slot 1 is the second player's own in a mode that keeps it per player (Republics).
 #define HELD_BIT (1ull << 62)
 #define PRESENT_BIT (1ull << 32)
-static volatile LONG64 g_held = 0;
+static volatile LONG64 g_held[2] = {};
 static const __int64 kSkip = -1; // the readers' "no widget": they leave +630 alone
 
-// Main thread: the session's value, what this PC's field showed at the last
+// Main thread: the session's values, what this PC's field showed at the last
 // frame (a change of it is the player's edit) and what was sent.
 static bool g_started = false;
-static WorkersMsg g_shared = {}, g_seen = {}, g_sent = {};
+static WorkersMsg g_shared[2] = {}, g_seen = {}, g_sent = {};
 static bool g_sentValid = false;
 
 void WorldWorkers_Bind(const TsmHost* host)
 {
     TsmBind(host);
 }
+
+static int Slot(int player) { return player > 0 && Commands_PerPlayer() ? 1 : 0; } // any player but the host, as the area rule
+static int LocalSlot() { return Slot(SaveSync_IsHostRole() ? 0 : 1); }
 
 static U64 Widget() { return *(U64*)(g_exeBase + WORLD_RVA + WIDGET_OFFSET); }
 
@@ -86,15 +91,16 @@ static bool ReadLocal(WorkersMsg& m)
     }
 }
 
-static void Hold(const WorkersMsg& m)
+static void Hold(int slot, const WorkersMsg& m)
 {
-    InterlockedExchange64(&g_held, (LONG64)(HELD_BIT | (m.present ? PRESENT_BIT | (unsigned)m.workers : 0)));
+    InterlockedExchange64(&g_held[slot], (LONG64)(HELD_BIT | (m.present ? PRESENT_BIT | (unsigned)m.workers : 0)));
 }
 
-// Both readers: the value stored as the site's +630, or kSkip.
+// Both readers: the value stored as the site's +630, or kSkip. A placement or
+// demolition command takes its player's; the simulation's own demolitions the host's.
 static __int64 __cdecl WorkersAt(U64 world)
 {
-    U64 v = (U64)InterlockedCompareExchange64(&g_held, 0, 0);
+    U64 v = (U64)InterlockedCompareExchange64(&g_held[Slot(Commands_ApplyingPlayer())], 0, 0);
     if (v & HELD_BIT) return (v & PRESENT_BIT) ? (__int64)(unsigned)v : kSkip;
     __try {
         U64 widget = world ? *(U64*)(world + WIDGET_OFFSET) : 0;
@@ -105,14 +111,16 @@ static __int64 __cdecl WorkersAt(U64 world)
     }
 }
 
+// This PC's field shows this PC's player's value.
 static void ShowShared()
 {
-    if (!g_shared.present) return;
+    const WorkersMsg& own = g_shared[LocalSlot()];
+    if (!own.present) return;
     __try {
         U64 widget = Widget();
         if (!widget) return;
-        ((SetFn)(g_exeBase + WIDGET_SET_RVA))(widget, (float)g_shared.workers);
-        g_seen = g_shared;
+        ((SetFn)(g_exeBase + WIDGET_SET_RVA))(widget, (float)own.workers);
+        g_seen = own;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
 }
@@ -121,27 +129,31 @@ void WorldWorkers_Collect()
 {
     if (!Commands_Capturing()) {
         g_started = false;
-        InterlockedExchange64(&g_held, 0);
+        InterlockedExchange64(&g_held[0], 0);
+        InterlockedExchange64(&g_held[1], 0);
         return;
     }
     WorkersMsg local;
     if (!ReadLocal(local)) return;
     if (!g_started) {
-        // The session's start: every PC loaded the same save.
-        g_shared = g_seen = local;
+        // The session's start: every PC loaded the same save, every player starts with its value.
+        // shortcut: the second player's own value is not saved; a load starts both from the save's.
+        g_shared[0] = g_shared[1] = g_seen = local;
         g_sentValid = false;
         g_started = true;
-        Hold(g_shared);
+        Hold(0, local);
+        Hold(1, local);
         return;
     }
+    const WorkersMsg& own = g_shared[LocalSlot()];
     if (local.present && g_seen.present) {
-        if (local.workers != g_seen.workers && (local.workers != g_shared.workers || !g_shared.present) &&
+        if (local.workers != g_seen.workers && (local.workers != own.workers || !own.present) &&
             !(g_sentValid && g_sent.workers == local.workers)) {
             Commands_Submit(LS_CMD_WORKERS, &local, sizeof(local));
             g_sent = local;
             g_sentValid = true;
         }
-    } else if (local.present && g_shared.present && local.workers != g_shared.workers) {
+    } else if (local.present && own.present && local.workers != own.workers) {
         // The field appeared (the menu made its widget): it shows the session's value.
         ShowShared();
         return;
@@ -155,14 +167,18 @@ bool WorldWorkers_ApplyCommand(const void* data, size_t size)
     WorkersMsg m;
     memcpy(&m, data, sizeof(m));
     if (m.magic != MAGIC || m.present < 0 || m.present > 1 || (!m.present && m.workers)) return false;
-    g_shared = m;
+    int slot = Slot(Commands_ApplyingPlayer());
+    g_shared[slot] = m;
     g_started = true;
-    g_sentValid = false;
-    Hold(g_shared);
-    WorkersMsg local;
-    if (ReadLocal(local) && local.present && (local.workers != m.workers)) ShowShared();
-    else if (local.present) g_seen = local;
-    Logf("republicmp  WORKERS: max. workers without an office = %d%s", m.workers, m.present ? "" : " (no field)");
+    Hold(slot, m);
+    if (slot == LocalSlot()) {
+        g_sentValid = false;
+        WorkersMsg local;
+        if (ReadLocal(local) && local.present && (local.workers != m.workers)) ShowShared();
+        else if (local.present) g_seen = local;
+    }
+    Logf("republicmp  WORKERS: max. workers without an office = %d%s%s", m.workers, m.present ? "" : " (no field)",
+         slot ? " (the second player's)" : "");
     return true;
 }
 

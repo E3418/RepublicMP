@@ -16,7 +16,6 @@ typedef unsigned __int64 U64;
 #define SELECTED_OFFSET 0xD428
 #define MENU_OFFSET 0xD280      // the build menu's records: begin, end
 #define MENU_STRIDE 0x2D0       // name at +0
-#define NAME_BYTES 32
 static const unsigned kMenus[3] = { 0xFBC, 0xFBE, 0xFC3 };
 
 // World words of a sample and of the tool's state.
@@ -55,24 +54,6 @@ static const unsigned kInputSlots[2] = { 0x86C8B0, 0x86C8B8 };
 static const unsigned kLedgerCalls[2] = { 0x3AABCD, 0x3AACE3 };
 
 #pragma pack(push, 1)
-struct BrushState {
-    float held, cost, timers[10], tree;
-};
-struct BrushSample {
-    float cursor[3], brush, target, setting374;
-    int setting338;
-    unsigned char timer[16];
-    unsigned char press, pressOff, pad[2];
-    BrushState state;
-};
-struct BrushMsg {
-    unsigned origin;          // the clicking PC (its own press prompt)
-    unsigned serial, sequence; // the stroke and this sample's place in it
-    int kind, mode;
-    int record;               // the tool: its place in the build menu
-    char name[NAME_BYTES];    // and its name, a check
-    BrushSample sample;
-};
 // A construction ledger row the stroke wrote on its own PC (see RelayLedger).
 struct LedgerMsg {
     unsigned ledger;          // world offset: 0x11330 dollars, 0x11360 rubles
@@ -362,6 +343,16 @@ static U64 Run(int kind, U64 world, U64 a2)
     bool acting = *down || (kind == TREE_KIND && *press);
     if (!acting || menus || !Commands_TakeLocal() || !BrushTools_Ready(kind)) {
         if (!acting) g_stroke.active = false; // the stroke ends with the button
+        // Outside the lockstep (a Republics host alone) the area rule is checked here: the button is hidden.
+        if (acting && !menus && Commands_PointRefusedHere((const float*)(w + CURSOR_OFFSET))) {
+            BYTE keptDown = *down, keptPress = *press;
+            *down = 0;
+            *press = 0;
+            U64 r = tool(world, a2);
+            *down = keptDown;
+            *press = keptPress;
+            return r;
+        }
         return tool(world, a2);
     }
     int mode = kind == 0 ? (int)(unsigned)a2 : 0;

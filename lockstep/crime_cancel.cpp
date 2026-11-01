@@ -118,6 +118,7 @@ bool CrimeCancel_ApplyCommand(const void* data, size_t size)
             if (end >= begin && m.index < (end - begin) / 8) c = Q(begin + (U64)m.index * 8);
         }
         if (!b) why = "the building is gone";
+        else if (!Commands_BuildingInArea(b)) why = "the building is outside the player's area";
         else if (!c || CaseCheck(c) != m.check) why = "the case differs here";
         else {
             int kind = *(int*)(c + CASE_KIND);

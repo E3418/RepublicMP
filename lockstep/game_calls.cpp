@@ -24,6 +24,7 @@
 #define TYPES 0x12840            // vehicle types (0x9f08 each)
 #define TYPE_STRIDE 0x9F08
 #define CITY_LIST 0x10348        // cities and areas (pointers; a city's position at +4)
+#define CITY_POSITION 4
 #define MAX_CITIES 4096
 #define BORDER_REFRESH 0x6BF1D0  // the border stop's follow-up (by SoylentGreed)
 #define RESOURCE_BY_NAME 0x2AA830
@@ -77,6 +78,9 @@ enum {
     CALL_GAME_RULES,
     // Made on this PC only, never carried: a cache the simulation rebuilds before it reads it.
     CALL_LOCAL,
+    // What applying the game rules does to an object (a construction site's reset when the waste
+    // rule changes): made on every PC for any player's object, by whoever may change the rules.
+    CALL_RULE_EFFECT,
     // The routine reads the depot window's dragged vehicle (exe+996b98): it travels as argument 0,
     // and every PC puts it in its own global for the call.
     CALL_DRAG,
@@ -159,6 +163,11 @@ static const GameCallSite kSites[] = {
     { 0x33A5CF, 0x337170, "settings page: save settings", "W", 0, 0, false, CALL_GAME_RULES },
     { 0x33710F, 0x337170, "settings page: close", "W", 0, 0, false, CALL_GAME_RULES },
     { 0x7FEA3F, 0x337170, "settings popup: change settings", "W", 0, 0, false, CALL_GAME_RULES },
+    // Before that call, waste management raised to "waste + demolition" resets every construction
+    // site with 1a11c0(world, site) (its material lists, finished sites back below 1): on every PC.
+    { 0x3370EC, 0x1A11C0, "settings page: close - construction site reset", "WB", 0, 0, false, CALL_RULE_EFFECT },
+    { 0x33A5AC, 0x1A11C0, "settings page: save settings - construction site reset", "WB", 0, 0, false, CALL_RULE_EFFECT },
+    { 0x7FEA1C, 0x1A11C0, "settings popup - construction site reset", "WB", 0, 0, false, CALL_RULE_EFFECT },
     // Selling a vehicle: the confirm window's Yes (7f2d50) and the building windows' "sell all
     // vehicles" prompts call 3dee50(world, vehicle, 1, 0, 0, 0, 0.0f), which queues the sale.
     { 0x7F3280, 0x3DEE50, "sell a vehicle", "WObbbbF", 0, 0, false },
@@ -571,6 +580,8 @@ static const char* Rebuild(const GameCallMsg& m, U64* a, U64* held)
 {
     const GameCallSite& s = kSites[m.index];
     U64 world = (U64)World();
+    bool global = s.special == CALL_RULE_EFFECT; // a rule's effect reaches every player's objects
+    if (global && !Commands_GlobalAllowed()) return "the game rules are the host's";
     for (int j = 0; j < MAX_ARGS; j++) a[j] = held[j] = 0;
     for (int j = 0; s.schema[j]; j++) {
         switch (s.schema[j]) {
@@ -586,10 +597,12 @@ static const char* Rebuild(const GameCallMsg& m, U64* a, U64* held)
             break;
         case 'P':
             if (m.kinds[j] != OBJ_VEHICLE || !(held[j] = Ref_VehicleAt(m.refs[j]))) return "the vehicle is gone";
+            if (!Commands_VehicleInArea(held[j])) return "a vehicle is outside the player's area";
             a[j] = (U64)&held[j];
             break;
         case 'C':
             if (m.kinds[j] != OBJ_CITY || !(held[j] = CityAt(m.refs[j]))) return "the city is gone";
+            if (!Commands_PointInArea((const float*)(held[j] + CITY_POSITION))) return "the city is outside the player's area";
             a[j] = (U64)&held[j];
             break;
         case 'Z':
@@ -601,17 +614,24 @@ static const char* Rebuild(const GameCallMsg& m, U64* a, U64* held)
                 break;
             }
             if (!(a[j] = ObjectAt(m.kinds[j], m.refs[j]))) return "an object is gone";
+            // shortcut: every building argument counts as acted on, also a copy tool's source (only read);
+            // mark read-only arguments per site if copying from the other republic is wanted.
+            if (!global && m.kinds[j] == OBJ_BUILDING && !Commands_BuildingInArea(a[j])) return "a building is outside the player's area";
+            if (m.kinds[j] == OBJ_VEHICLE && !Commands_VehicleInArea(a[j])) return "a vehicle is outside the player's area";
+            if (m.kinds[j] == OBJ_LINE && !Commands_LineInArea(a[j])) return "a line is outside the player's area";
             break;
         case 'b': a[j] = m.values[j] & 0xff; break;
         case 'I': case 'F': a[j] = m.values[j]; break;
         case 'A': a[j] = m.values[j] ? world + s.worldPointer : 0; break;
         case 'R':
             if (m.kinds[j] != OBJ_BUILDING || !(a[j] = Ref_BuildingAt(m.refs[j]))) return "a list's building is gone";
+            if (!Commands_BuildingInArea(a[j])) return "a building is outside the player's area";
             a[j] += s.worldPointer;
             break;
         case 'D':
             if (m.kinds[j] != OBJ_BUILDING || !DestinationList(m.values[j])) return "not a destinations list";
             if (!(a[j] = Ref_BuildingAt(m.refs[j]))) return "a destinations list's building is gone";
+            if (!Commands_BuildingInArea(a[j])) return "a building is outside the player's area";
             a[j] += m.values[j];
             break;
         case 'S': {
@@ -863,7 +883,7 @@ bool GameCalls_ApplyCommand(const void* data, size_t size)
         why = Rebuild(m, a, held);
         if (!why && s.special != CALL_PLAIN && s.special != CALL_DELETE_LINE && s.special != CALL_DRAG &&
             s.special != CALL_REPEATING && s.special != CALL_BORDER_STOP && s.special != CALL_WORKERS_RECOUNT &&
-            s.special != CALL_COPY_SOURCES)
+            s.special != CALL_COPY_SOURCES && s.special != CALL_RULE_EFFECT)
             why = "not a command site";
         if (!why && s.special == CALL_COPY_SOURCES && (m.kinds[5] > COPY_MASK_BITS || (!a[4] && m.kinds[5])))
             why = "the source rows";

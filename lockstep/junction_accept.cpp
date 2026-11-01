@@ -204,6 +204,7 @@ static const char* Apply(const JunctionMsg& m, unsigned* kindAfter)
     // The junction: the anchor's, which must list the anchor.
     U64 anchor = AtIndex(roads + NETWORK_NODES, m.anchor.index);
     if (!anchor || NodeCheck(anchor) != m.anchor.check) return "the junction's node is not here";
+    if (!Commands_PointInArea((const float*)(anchor + 4))) return "the junction is outside the player's area";
     U64 junction = Q(anchor + JUNCTION_OF_NODE);
     int live = junction ? Count(junction + NODES_OFFSET, 8, MAX_NODES) : -1;
     bool listed = false;

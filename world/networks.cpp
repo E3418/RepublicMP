@@ -32,6 +32,10 @@
 
 #define LMB_HELD_RVA 0xA54E90             // byte: left mouse button held
 #define LMB_JUST_PRESSED_RVA 0xA54E91     // byte: left mouse button pressed this frame
+// byte: a key "just pressed" (0xA54B90 + 0x100 + DIK_TAB, likely Tab). Set, every wrapper call
+// steps the path index manager+0x3D8 (0x575060; MGR_UPG_PATH_INDEX_OFFSET in local_builds), which
+// the commit reads in its upgrade branch. Neutralised with the rest of the local input.
+#define ROUTE_CYCLE_KEY_RVA 0xA54C9F
 #define PRESET_CURVE_MODE_RVA 0x9E8088    // int: preset curve index, -1 = free curve
 
 // Hover state the tools read from the local mouse.
@@ -599,6 +603,7 @@ static bool ApplySegmentImplInner(const NetSegment& seg, bool* outEngineAccepted
     unsigned char* lmbHeld = (unsigned char*)((uintptr_t)g_exe + LMB_HELD_RVA);
     unsigned char* lmbJustPressed = (unsigned char*)((uintptr_t)g_exe + LMB_JUST_PRESSED_RVA);
     int* presetCurveMode = (int*)((uintptr_t)g_exe + PRESET_CURVE_MODE_RVA);
+    unsigned char* routeCycleKey = (unsigned char*)((uintptr_t)g_exe + ROUTE_CYCLE_KEY_RVA);
     ToolWrapperFn wrapper = (ToolWrapperFn)((uintptr_t)g_exe + g_categoryWrapperRva[seg.category]);
 
     __int64 manager = 0;
@@ -616,7 +621,7 @@ static bool ApplySegmentImplInner(const NetSegment& seg, bool* outEngineAccepted
     }
 
     bool saved = false;
-    unsigned char savedLmbHeld = 0, savedLmbJustPressed = 0, savedSnapModeA = 0, savedSnapModeB = 0;
+    unsigned char savedLmbHeld = 0, savedLmbJustPressed = 0, savedSnapModeA = 0, savedSnapModeB = 0, savedRouteCycleKey = 0;
     long long savedSnapTarget = 0;
     float savedContinuingY = 0.0f, savedCurve = 0.0f, savedRelax = 0.0f;
     int savedPresetCurveMode = -1;
@@ -641,8 +646,10 @@ static bool ApplySegmentImplInner(const NetSegment& seg, bool* outEngineAccepted
             savedCurve = *(float*)(manager + MGR_CURVE_OFFSET);
             savedRelax = *(float*)(manager + MGR_RELAX_TIMER_OFFSET);
             savedPresetCurveMode = *presetCurveMode;
+            savedRouteCycleKey = *routeCycleKey;
             saved = true;
 
+            *routeCycleKey = 0;
             *(long long*)(thisPtr + SNAP_TARGET_PTR_OFFSET) = 0;
             *(unsigned char*)(thisPtr + SNAP_MODE_A_OFFSET) = 0;
             *(unsigned char*)(thisPtr + SNAP_MODE_B_OFFSET) = 0;
@@ -733,6 +740,7 @@ static bool ApplySegmentImplInner(const NetSegment& seg, bool* outEngineAccepted
                 *(unsigned char*)(thisPtr + SNAP_MODE_B_OFFSET) = savedSnapModeB;
                 *(float*)(thisPtr + CONTINUING_Y_OFFSET_OFFSET) = savedContinuingY;
                 *presetCurveMode = savedPresetCurveMode;
+                *routeCycleKey = savedRouteCycleKey;
                 *(float*)(manager + MGR_CURVE_OFFSET) = savedCurve;
                 *(float*)(manager + MGR_RELAX_TIMER_OFFSET) = savedRelax;
             }
@@ -1754,7 +1762,7 @@ bool Networks_ApplyCommandSegment(const NetSegmentMsg& msg)
     LogPiecesAtEnds(seg);
     bool ok = ApplySegment(seg, &engineAccepted);
     // Compared between the PCs' logs: a segment that makes construction
-    // sites on one PC and none on the other (a planned road, type -1).
+    // sites on one PC and none on the other (seen with dirt roads: type -1 is road_mud, 0x313037).
     Logf("republicmp  NETWORKS:   buildings %d -> %d (type %d, %s)", before, BuildingCount(), seg.typeId,
          engineAccepted ? "accepted" : "rejected");
     if (ok && !engineAccepted) LogBuildingsNear(seg);
@@ -1976,6 +1984,35 @@ static bool CallPlanStart(PlanStartFn fn, __int64 network, const NetPlanStartMsg
     }
 }
 
+// While a command is made (Republics): the network's plans with an end outside
+// the command player's area read as not planned, so the game's routine that
+// starts every plan leaves the other republic's alone. ShowPlans puts them back.
+static int HideForeignPlans(__int64 network, __int64* hidden, int max)
+{
+    int n = 0;
+    __try {
+        __int64* begin = *(__int64**)(network + MGR_SEGMENTS_BEGIN_OFFSET);
+        __int64* end = *(__int64**)(network + MGR_SEGMENTS_END_OFFSET);
+        for (__int64* p = begin; begin && p < end && n < max; p++) {
+            __int64 e = *p;
+            if (!e || *(unsigned char*)(e + EDGE_PLANNED_OFFSET) != 1) continue;
+            __int64 n0 = *(__int64*)(e + SEG_NODE0_OFFSET), n1 = *(__int64*)(e + SEG_NODE1_OFFSET);
+            if ((n0 && !Commands_PointInArea((const float*)(n0 + NODE_POS_OFFSET), false)) ||
+                (n1 && !Commands_PointInArea((const float*)(n1 + NODE_POS_OFFSET), false))) {
+                *(unsigned char*)(e + EDGE_PLANNED_OFFSET) = 0;
+                hidden[n++] = e;
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return n;
+}
+
+static void ShowPlans(const __int64* hidden, int n)
+{
+    for (int i = 0; i < n; i++) *(unsigned char*)(hidden[i] + EDGE_PLANNED_OFFSET) = 1;
+}
+
 static bool ApplyPlanStart(const NetPlanStartMsg& m)
 {
     const NetCategoryInfo* info = Networks_GetCategoryInfo(m.category);
@@ -1996,9 +2033,13 @@ static bool ApplyPlanStart(const NetPlanStartMsg& m)
     // "rubles" here a realistic plan from the other PC finished at once.
     BuildMode mine = BuildMode_Read();
     BuildMode_Write(m.mode);
+    static __int64 s_hidden[65536];
+    int hidden = HideForeignPlans(network, s_hidden, 65536);
     InterlockedIncrement(&g_applyingSegment);
     bool ok = CallPlanStart(fn, network, m);
     InterlockedDecrement(&g_applyingSegment);
+    ShowPlans(s_hidden, hidden);
+    if (hidden) Logf("republicmp  NETWORKS:   %d plan(s) outside the player's area left as they are", hidden);
     BuildMode_Write(mine);
     int started = before - CountStartablePlans(network, except, m.count, m.group);
     char theirs[96];

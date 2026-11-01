@@ -5,10 +5,29 @@
 Many window actions that acted on the clicking PC only are now shared (by
 SoylentGreed), loans, the copy sources tool and resuming construction no
 longer split the games, and leaving a session right after it loaded no
-longer crashes. Protocol 57 - every player needs this build (the build
+longer crashes. Protocol 58 - every player needs this build (the build
 check refuses another DLL, 0.7.4 included).
 
 **Fewer desyncs**
+
+- **Money within 1 ruble is the same money** - the host compared each PC's
+  rubles and dollars by their exact bits, so a difference in a double's last
+  bits (0.000000001 rubles) was a desync and a re-sync. Money that differs by
+  less than 1 ruble or 1 dollar now matches; the first such difference in a
+  session is logged once. The day and its progress are still compared
+  exactly.
+- **Game rules that need a reload, and the waste rule** - energy, water,
+  waste on or off, seasons, pollution and day/night take effect only after
+  the game saves and reloads, which a session never did: such a change was
+  dropped on every PC. The rules are now made as a command on every PC and
+  the host then re-syncs everyone, so all load the same save with them.
+  Waste management raised to "waste + demolition" resets every construction
+  site's materials; that ran on the clicking PC only and is now made on
+  every PC.
+- **A key pressed during a replayed segment** - the network tools step their
+  path index on a key press read straight from the keyboard; a segment
+  command made while this PC's player pressed it could take another path
+  there. The key reads as not pressed while the command is made.
 
 - **Fix: the copy sources tool on one PC only** - the tool copies the
   source rows the player ticked, and that choice is the tool's own state on
@@ -72,6 +91,38 @@ check refuses another DLL, 0.7.4 included).
   a placed signal on the left or the right of the track, so a shared signal
   was placed differently on each PC. A join is refused when the two values
   differ (by SoylentGreed).
+
+**Republics**
+
+- **The cancel tools on one's own half only** (#49) - a network's cancel tool
+  (cancel road and the others) removed a piece anywhere, the other
+  republic's too. A piece with an end on the other half is now refused, with
+  the notice on the clicking PC, as the bulldozer is.
+- **The other republic's buildings can be looked at, not used** (#50) - its
+  windows still open, but what a player does there is refused on every PC
+  with the notice: settings, buttons, popups, construction funding,
+  research, purchases in its depots, links and specific sources to its
+  buildings, stops at its stations and roads, vehicles sent to its depots.
+  The join tool, road signs, waypoints, rail signals, junctions, factory
+  connection directions and the group tools act on one's own half only too.
+- **The other republic's vehicles and lines are not yours to run** - their
+  settings, schedules, depot orders and window buttons (sell, release and
+  the others) are refused, and so are edits of a line with a station on the
+  other half. A vehicle counts as on the side of the depot it is heading to,
+  else of the building it is registered at or in (a wagon by its
+  locomotive), else of where it is. Crossroads (their junction window and
+  name) and cities (new, renamed, deleted) stay on one's own half too.
+- **The game rules are the host's, workers are each player's** - the game
+  rules page changes for the host only, with a notice for the player (the
+  bottom menu's auto-build, auto-invite and auto-purchase stay shared for
+  now). "Max.
+  workers without CO" is each player's own: a player's construction sites
+  and demolitions take that player's number (a player's number is not saved;
+  a load starts both from the save's).
+- **Plans and terrain on one's own half** - "start planned construction" and
+  "cancel all plans" leave the other republic's plans alone, and the terrain
+  brushes (raise, lower, level, trees, topsoil) stop at the border: a brush
+  that reaches the other half is refused, with the notice.
 
 **Fewer crashes**
 

@@ -480,6 +480,8 @@ bool CargoSettings_ApplyCommand(const void* data, size_t size)
     U64 object = GuardedAt(kind, ref), at = 0;
     if (!Ready()) why = "a game routine differs";
     else if (!object) why = kind == KIND_STOP ? "the vehicle is gone" : "the building is gone";
+    else if (!(kind == KIND_STOP ? Commands_VehicleInArea(object) : Commands_BuildingInArea(object)))
+        why = "it is outside the player's area";
     else if (RecordCount(kind, object) != records) why = "its records differ here";
     else if (!(at = HalfAt(kind, object, record, half))) why = "the record cannot be read";
     else if (!(why = Decode(in, h)) && !Replace(at, h)) why = "the game's half copy faulted";

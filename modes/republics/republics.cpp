@@ -67,6 +67,7 @@ static bool g_showSigns = true; // profile "overlay" "border_signs"
 static ULONGLONG g_borderAt = 0;
 static unsigned g_borderLoads = 0; // the world the drawn points were read on
 static volatile ULONGLONG g_refusedAt = 0; // this PC's player was refused (main thread), shown by the overlay
+static volatile ULONGLONG g_hostOnlyAt = 0; // ... for a global setting, the host's alone
 static float g_inside[CUT_GRID * CUT_GRID];
 
 static bool MapSize(float* w, float* h)
@@ -175,7 +176,7 @@ static int HalfOf(const float p[3], const Cut& c)
 // Commands_SetAreaRule: a player builds and demolishes on their own half only,
 // the host also while alone (COMMANDS_LOCAL_PLAYER). The game's own border
 // still refuses what is out of the map.
-static bool AreaRule(int player, const float pos[3])
+static bool AreaRule(int player, const float pos[3], bool notify)
 {
     // A local check runs inside the game's own call (and the bulldozer's on
     // any thread): it only uses a cut already measured.
@@ -188,7 +189,16 @@ static bool AreaRule(int player, const float pos[3])
     int half = HalfOf(pos, *c);
     int hostHalf = SaveSync_GetHostSide(); // the host's choice: the player has the other half
     bool ok = half < 0 || half == (player == 0 ? hostHalf : 1 - hostHalf);
-    if (!ok && player == LocalPlayer()) g_refusedAt = GetTickCount64();
+    if (!ok && notify && player == LocalPlayer()) g_refusedAt = GetTickCount64();
+    return ok;
+}
+
+// Commands_SetGlobalRule: the game's rules (the rules page) are the host's.
+static bool GlobalRule(int player)
+{
+    if (!Active()) return true;
+    bool ok = player == 0;
+    if (!ok && player == LocalPlayer()) g_hostOnlyAt = GetTickCount64();
     return ok;
 }
 
@@ -380,7 +390,7 @@ static void DrawOnMinimap()
 static bool WantsOverlay()
 {
     if (!Active()) g_borderCount = g_stripCount = g_signCount[0] = g_signCount[1] = 0; // the next session's map is read again
-    ULONGLONG refused = g_refusedAt;
+    ULONGLONG area = g_refusedAt, host = g_hostOnlyAt, refused = area > host ? area : host;
     return refused && GetTickCount64() - refused < REFUSED_NOTICE_MS;
 }
 
@@ -390,9 +400,9 @@ static void DrawOverlay()
 {
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     ImVec2 size = ImGui::GetIO().DisplaySize;
-    ULONGLONG refused = g_refusedAt;
+    ULONGLONG area = g_refusedAt, host = g_hostOnlyAt, refused = area > host ? area : host;
     if (refused && GetTickCount64() - refused < REFUSED_NOTICE_MS) {
-        const char* text = "That is the other republic's side of the border.";
+        const char* text = host > area ? "Only the host changes the game's settings." : "That is the other republic's side of the border.";
         ImVec2 ts = ImGui::CalcTextSize(text);
         ImVec2 at(size.x * 0.5f - ts.x * 0.5f, size.y * 0.12f);
         dl->AddRectFilled(ImVec2(at.x - 10, at.y - 6), ImVec2(at.x + ts.x + 10, at.y + ts.y + 6), IM_COL32(0, 0, 0, 0xB0));
@@ -424,6 +434,7 @@ void Republics_Bind(const TsmHost* host)
     TsmBind(host);
     g_showSigns = Profile_GetInt("overlay", "border_signs", 1) != 0;
     Commands_SetAreaRule(AreaRule);
+    Commands_SetGlobalRule(GlobalRule);
     Determinism_AddFrameObserver(SampleBorder);
     Determinism_AddStepObserver(SampleBorder);
     SimPatches_SetUnderUi(DrawUnderUi);
