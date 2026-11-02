@@ -93,8 +93,17 @@ check refuses another DLL, 0.7.4 included).
   (the crash came while the game wrote saved_last). The list is emptied at
   every load.
 
+- **Fix: a host crash on a purchase into an unfinished depot** - when the
+  games had already split, a player could buy into a depot that was finished
+  on that PC but still a construction site on the host's, and the game's
+  depot routine faulted there. Such a purchase is now refused.
+
 **Debug**
 
+- **Debug: the sapling start in the log** - the saplings start growing only
+  once the engine's tree list is loaded (engine state, not in the save); the
+  log says when it is, so two logs show a PC that started its saplings at
+  another tick.
 - **Debug: fields, farm vehicles and the vehicles' random number in desync
   reports** - with buildings or citizens differing, a report lists each
   field's work words (the farm's planting test reads them); with vehicles or
