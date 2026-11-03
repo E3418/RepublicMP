@@ -27,6 +27,10 @@ build (the build check refuses another DLL, 0.7.5 included).
 - **New: your name on the multiplayer page** - the name the other players
   see was set only in the old overlay window. SETTINGS - "Your name" sets
   it now too.
+- **Fix: crash when placing a building while building rail** - a building's
+  access-road planner left the road under the cursor set and the rail under
+  it empty, and the rail network's update in the same frame read a null
+  pointer. The leftover hover is cleared after the placement.
 
 **The save and the seed**
 

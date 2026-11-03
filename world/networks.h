@@ -269,6 +269,13 @@ void Networks_ReadFootpathLinks(__int64 manager, int category, NetSegment& seg);
 // game recomputes them on the next frame.
 void Networks_ClearHover();
 
+// After a replay that cleared the hover: a hovered edge in exe+9E4558 with
+// none in exe+9E45D8 sends the rail network's per-frame update (4fe681: the
+// rail kind reads its edge from 9E45D8, unchecked once 9E4558 is set) through
+// a null pointer. A building's access-road planner sets the first and never
+// the second. Clears the first when the second is empty.
+void Networks_SettleHover();
+
 // Hooks FUN_1405258e0 / FUN_140525c30 (see NetPlanStartMsg). Call once
 // from TsmPluginStart.
 bool Networks_InstallPlanStartHooks();
