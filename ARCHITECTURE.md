@@ -104,6 +104,8 @@ function.
 | `C3D_TERRAIN::Edit*`, heightmap/mask open/close | IAT | `world/terrain_hook` |
 | `C3D_INPUT` mouse/key reads | IAT | `game/input_block` |
 | `0x30C790` simulation step, `0x430FC0` world load | inline | `determinism/determinism` |
+| `0x42CC70` save routine (after it: `republicmp.ini`) | inline | `save/mod_save` |
+| `C3D_SOUNDMANAGER::PlaySound2D`, `PlaySound3D` | IAT | `lockstep/remote_sounds` |
 | `rand`, `srand`, `C3DRandom_*`, `C3D_TIMER`, `GetKeyDown`, `_beginthread`, `SetEvent`, `malloc`, CRT math | IAT | `determinism/determinism` |
 | `0x30D1A0` Late body, call-site relays, tool stubs | inline / call sites | `determinism/sim_patches` |
 | window button call sites (`kSites`) | call sites | `lockstep/game_calls` |

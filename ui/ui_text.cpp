@@ -473,6 +473,7 @@ static const Entry kRussian[] = {
     { " - you", " - вы" },
     { "Players' cursors:", "Курсоры игроков:" },
     { "Border stars:", "Звёзды на границе:" },
+    { "Others' sounds:", "Звуки других игроков:" },
     { "SETTINGS", "Настройки" },
     { "When you host: the world is sent again this long after the games differ.",
       "Когда вы хост: мир отправляется заново через это время после расхождения игр." },

@@ -7,6 +7,7 @@
 #include "../world/menus_closed.h"
 #include "../world/local_builds.h"
 #include "lockstep_net.h"
+#include "remote_sounds.h"
 #include "../game/input_block.h"
 #include "building_settings.h"
 #include "../world/terrain_hook.h"
@@ -98,6 +99,7 @@ static bool ApplyGameRules(const void* data, size_t size);
 static bool g_replaying = false;
 static volatile LONG g_applying = 0;
 static DWORD g_applyThread = 0;
+static volatile bool g_applyRemote = false; // the command being made is another player's
 static volatile LONG64 g_applyEpoch = 0;
 static unsigned g_seq = 0;
 static int g_session = COMMANDS_OFF; // in a session the player keeps the host's commands in g_record
@@ -449,6 +451,8 @@ static void Apply(const Command& c)
     unsigned recipeLoad = Determinism_WorldLoads();
     bool ok = false;
     g_applyThread = GetCurrentThreadId();
+    g_applyRemote = c.player != LockstepNet_SelfNumber();
+    if (g_applyRemote) RemoteSounds_CommandBegin();
     InterlockedIncrement(&g_applying);
     InterlockedIncrement64(&g_applyEpoch);
     double rubBefore = *Rubles(), usdBefore = *Dollars();
@@ -471,6 +475,8 @@ static void Apply(const Command& c)
     if (recipeAudit && recipeLoad == Determinism_WorldLoads())
         Guard_Call("the construction recipe report", [&] { StateHash_LogRecipeChanges(recipes, c.seq, c.afterTick); });
     InterlockedDecrement(&g_applying);
+    if (g_applyRemote) RemoteSounds_CommandEnd();
+    g_applyRemote = false;
     g_madeThisFrame = true;
     // What the command paid or got: compared between the PCs' logs when the money differs.
     double paidRub = *Rubles() - rubBefore, paidUsd = *Dollars() - usdBefore;
@@ -496,6 +502,11 @@ bool Commands_Due(unsigned long long completed)
 bool Commands_Applying()
 {
     return InterlockedCompareExchange(&g_applying, 0, 0) != 0;
+}
+
+bool Commands_ApplyingRemote()
+{
+    return g_applyRemote && Commands_Applying() && GetCurrentThreadId() == g_applyThread;
 }
 
 // Player: its own actions go to the host; what the host made after this

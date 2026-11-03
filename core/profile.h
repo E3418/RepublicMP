@@ -17,7 +17,8 @@
 //             construction_log (determinism/construction_view),
 //             site_watch (determinism/site_watch),
 //             frame_timing (core/frame_timing),
-//             storage_trace (determinism/state_hash, off unless remembered)
+//             storage_trace (determinism/state_hash, off unless remembered),
+//             sound_log (lockstep/remote_sounds)
 //
 // Each module reads its own setting when it is bound and writes it when it
 // is changed (Profile_GetInt / Profile_SetInt).

@@ -18,6 +18,7 @@
 #include "../transport/steam_lobby.h"
 #include "../lockstep/lockstep_net.h" // LockstepNet_PeerCount, LockstepNet_Players
 #include "../lockstep/presence.h"
+#include "../lockstep/remote_sounds.h"
 #include "chat.h"
 #include "sync_block.h"
 #include "../session/workshop.h"
@@ -531,6 +532,11 @@ static void SettingsTab(float left, float right, float s)
     bool signs = Republics_GetShowSigns();
     if (Choice("##sSigns", "SHOW", c1, ry + 30 * s, s, signs)) Republics_SetShowSigns(true);
     if (Choice("##sNoSigns", "HIDE", c2, ry + 30 * s, s, !signs)) Republics_SetShowSigns(false);
+    ry += 80 * s;
+    Label(GAME_FONT_ARIAL, 24 * s, ImVec2(right, ry), kInk, "Others' sounds:");
+    bool muted = RemoteSounds_GetMuted();
+    if (Choice("##sSoundsOn", "ON", c1, ry + 30 * s, s, !muted)) RemoteSounds_SetMuted(false);
+    if (Choice("##sSoundsOff", "OFF", c2, ry + 30 * s, s, muted)) RemoteSounds_SetMuted(true);
     SessionKeys(right, ry + 100 * s, s);
 }
 

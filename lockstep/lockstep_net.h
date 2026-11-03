@@ -120,8 +120,12 @@ struct LockstepPlayer {
     unsigned long long behind;
     bool host;
     bool self;            // this PC
+    int number;           // the player its commands carry (0 the host)
 };
 int LockstepNet_Players(LockstepPlayer* out, int max);
+// The player this PC's commands carry: 0 on the host and outside a session,
+// -1 on a player before the host's first list. Any thread.
+int LockstepNet_SelfNumber();
 
 // Player (game thread).
 bool LockstepNet_TakeGrant(unsigned long long tick, int* speed);

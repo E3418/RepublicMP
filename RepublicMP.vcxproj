@@ -250,6 +250,9 @@
     <ClCompile Include="world\buildings.cpp" />
     <ClCompile Include="world\networks.cpp" />
     <ClCompile Include="save\save_zip.cpp" />
+    <ClCompile Include="save\mod_save.cpp" />
+    <ClCompile Include="save\camera_keep.cpp" />
+    <ClCompile Include="lockstep\remote_sounds.cpp" />
     <ClCompile Include="transport\network.cpp" />
     <ClCompile Include="transport\steam_net.cpp" />
     <ClCompile Include="transport\steam_lobby.cpp" />
@@ -358,6 +361,9 @@
     <ClInclude Include="world\build_mode.h" />
     <ClInclude Include="core\host_config.h" />
     <ClInclude Include="save\save_zip.h" />
+    <ClInclude Include="save\mod_save.h" />
+    <ClInclude Include="save\camera_keep.h" />
+    <ClInclude Include="lockstep\remote_sounds.h" />
     <ClInclude Include="transport\network.h" />
     <ClInclude Include="transport\steam_net.h" />
     <ClInclude Include="transport\steam_lobby.h" />

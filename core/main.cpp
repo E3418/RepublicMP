@@ -39,6 +39,9 @@
 #include "../lockstep/crime_cancel.h"
 #include "../lockstep/call_home.h"
 #include "../lockstep/popups.h"
+#include "../lockstep/remote_sounds.h"
+#include "../save/mod_save.h"
+#include "../save/camera_keep.h"
 #include "../lockstep/rename.h"
 
 #include "../game/world.h"
@@ -74,6 +77,9 @@ extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPlugi
     GameSpeed_Bind(host);
     SaveLoad_Bind(host);
     SaveZip_Bind(host);
+    ModSave_Bind(host);
+    CameraKeep_Bind(host);
+    RemoteSounds_Bind(host);
     Network_Bind(host);
     SaveSync_Bind(host);
     Workshop_Bind(host);
@@ -173,6 +179,12 @@ extern "C" __declspec(dllexport) int TsmPluginStart(void)
 
     bool okPopups = Popups_Install();
     Logf("republicmp  popup callbacks: %d%s", okPopups, okPopups ? "" : " - popups act on the clicking PC only");
+
+    bool okModSave = ModSave_Install();
+    Logf("republicmp  save hook: %d%s", okModSave, okModSave ? "" : " - saves get no " MOD_SAVE_FILE " (views are not kept in them)");
+
+    bool okSounds = RemoteSounds_Install();
+    Logf("republicmp  remote command sounds: %d%s", okSounds, okSounds ? "" : " - other players' commands are heard here");
 
     bool okLinkSearch = Buildings_InstallLinkSearch();
     Logf("republicmp  building link search: %d%s", okLinkSearch,
