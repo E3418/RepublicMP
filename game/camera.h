@@ -18,3 +18,21 @@ bool Camera_Clip(const float p[3], float clip[4]);
 // 1 in front of the camera, -1 behind it (x, y then only give the direction
 // to it), 0 unknown.
 int Camera_Project(const float p[3], float width, float height, float* x, float* y);
+
+// The strategy view, as the game's camera control (3d7ab0, on the world
+// object) keeps it: the point it orbits (world +fa0), the zoom it eases to
+// (+fb0) and the zoom now (+fb4); the angles it takes from the camera's own
+// look-at minus position (the C3D_CAMERA at exe+9e9c90: position +80,
+// look-at +98), and it sets the position at target - direction * zoom.
+struct CameraView {
+    float target[3];
+    float zoomGoal, zoom;
+    float position[3];
+    float lookAt[3];
+};
+// The orbit fields are 0 outside the orbit view (the usual one keeps its state
+// in the camera only). Main thread. False when the position or look-at is
+// unusable or a read faulted.
+bool Camera_GetView(CameraView* out);
+// Main thread: the view back, through the camera's own setters (C3DDLL64).
+bool Camera_SetView(const CameraView& v);

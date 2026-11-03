@@ -72,6 +72,10 @@
 //   ZipSaveDirectory, UnzipToDirectory
 #include "../game/save_load.h"
 #include "../save/save_zip.h"
+// --- The mode's own data in the save (republicmp.ini): ModSave_Add with a
+// section's write and read callbacks, ModSave_Put* / ModSave_Get*, and the
+// world's own seed, the same on every PC (ModSave_WorldSeed).
+#include "../save/mod_save.h"
 
 // --- TCP (blocking, one thread per connection): NetworkInit, NetworkListen,
 // NetworkAcceptReady, NetworkConnect, NetworkSendExact, NetworkRecvExact,

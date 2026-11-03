@@ -10,6 +10,9 @@
 #include "../lockstep/lockstep_net.h"
 #include "../game/save_load.h"
 #include "../game/weather.h"
+#include "../game/world.h"
+#include "../save/mod_save.h"
+#include "../save/camera_keep.h"
 #include "../session/game_speed.h"
 #include "../session/save_sync.h" // SaveSync_IsBusy - no probe during a session
 #include "../core/profile.h"
@@ -857,12 +860,22 @@ unsigned Determinism_WorldLoads()
     return (unsigned)g_worldLoads;
 }
 
+// What RepublicMP keeps in the save (save/mod_save), and the view it brings
+// back (save/camera_keep), right after the game's load.
+static void AfterLoadFiles()
+{
+    ModSave_AfterLoad();
+    CameraKeep_AfterLoad();
+}
+
 static void HookedLoadWorld(void)
 {
     InterlockedIncrement(&g_worldLoads);
     // A probe run starts its generator epoch exactly at the load, so the
     // random numbers the load itself draws are the same in both runs.
     bool session = g_sessionLoadPending;
+    ModSave_BeforeLoad();
+    CameraKeep_BeforeLoad(session);
     if (g_probeState == PROBE_WAIT_LOAD || session) {
         if (!SimPatches_Apply()) {
             if (session) {
@@ -873,7 +886,15 @@ static void HookedLoadWorld(void)
             }
             o_loadWorld();
             EmptyWorkerVehicles();
+            AfterLoadFiles();
             return;
+        }
+        // The load draws too: from the world's seed already, when the save
+        // has one (every PC loads the same save, file included).
+        if (session) {
+            unsigned long long world = ModSave_LoadSeed();
+            g_seed = world ? SplitMix(LOCKSTEP_SEED ^ world) : LOCKSTEP_SEED;
+            Logf("republicmp  LOCKSTEP: load seed %016llx (%s)", g_seed, world ? "the save's world seed" : "no world seed in the save");
         }
         Determinism_Restart();
         g_simDraws = 0;
@@ -890,6 +911,7 @@ static void HookedLoadWorld(void)
     }
     o_loadWorld();
     EmptyWorkerVehicles();
+    AfterLoadFiles();
     if (session || g_probeState == PROBE_WAIT_LOAD) SiteWatch_Reset();
     if (session) {
         // The same start on both PCs as a probe run gets: the shared
@@ -900,6 +922,20 @@ static void HookedLoadWorld(void)
         ResetFrames();
         g_paused = true;
         g_stepCount = 0;
+        // The draws from here on: the world's own seed (in the save, the same
+        // on every PC) and the date the save was made, so each world and
+        // each load of it draws its own numbers - LOCKSTEP_SEED alone
+        // started every load with the same ones.
+        int day = 0, year = 0;
+        float progress = 0.0f;
+        World_Date(&day, &year, &progress);
+        unsigned bits;
+        memcpy(&bits, &progress, sizeof(bits));
+        g_seed = SplitMix(LOCKSTEP_SEED ^ ModSave_WorldSeed() ^ SplitMix(((unsigned long long)(unsigned)year << 32 | (unsigned)day) ^
+                                                                       ((unsigned long long)bits << 16)));
+        Determinism_Restart();
+        Logf("republicmp  LOCKSTEP: simulation seed %016llx (world seed %016llx, day %d of %d)", g_seed,
+             ModSave_WorldSeed(), day, year);
         // Not in the save: every PC starts it alike, from the date and the shared draws.
         Weather_StartShared();
         g_sessionLoadPending = false;
