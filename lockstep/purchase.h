@@ -11,7 +11,8 @@
 // branch with the game's own routines (3e3f40 depot slot, 3e4a00 vehicle,
 // 3fd5d0 coupling, 33f0 slot list, 2ab810 slot done, the licence and factory
 // steps, the used-vehicle market). Sounds, messages and closing the window
-// stay with the clicking PC.
+// stay with the clicking PC; the Buy sound is played there at the click (the
+// press read "not pressed" skips the game's own).
 #pragma once
 
 #include "tesmio_plugin.h"
