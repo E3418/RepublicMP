@@ -154,6 +154,12 @@ static volatile LONG g_privateWorker = 0;
 // 330690 outside a command, say) gave a placement's new city another name
 // there.
 static thread_local SiteCounters* t_commandSites = nullptr;
+// The engine's own draws (C3DDLL64 calls rand through its own imports: tree
+// placement, particles, sounds, clouds, grass). Keyed DLL_SITE | the DLL's RVA
+// and counted apart from the exe's sites, so they stay out of the probe's
+// counts and the desync reports - most of them follow the camera.
+#define DLL_SITE 0x40000000u
+static thread_local SiteCounters* t_dllSites = nullptr;
 static thread_local bool t_inCommand = false;
 static thread_local unsigned long long t_commandSeq = 0;
 void Determinism_CommandBegin(unsigned long long seq)
@@ -175,15 +181,15 @@ static inline unsigned long long SplitMix(unsigned long long x)
     return x ^ (x >> 31);
 }
 
-// 0..32767, like the CRT's rand(). site = return address of the game's call.
-static int SiteRand(void* returnAddress)
+// 0..32767, like the CRT's rand(). site = return address of the game's call
+// (an exe RVA, or DLL_SITE | a C3DDLL64 RVA when dll).
+static int SiteRandAt(unsigned site, bool dll, void* returnAddress)
 {
-    unsigned site = (unsigned)((BYTE*)returnAddress - g_exeBase);
     // Held presentation and UI can call the same native routines as a tick.
     // Separate counters keep any number of local frames out of that stream.
     bool privateDraw = t_privateDepth || GetCurrentThreadId() == (DWORD)g_privateWorker;
     bool command = t_inCommand && !privateDraw;
-    SiteCounters*& counters = command ? t_commandSites : privateDraw ? t_privateSites : t_sites;
+    SiteCounters*& counters = command ? t_commandSites : privateDraw ? t_privateSites : dll ? t_dllSites : t_sites;
     if (!counters) {
         counters = new SiteCounters{ 0, {} };
         if (&counters == &t_sites) {
@@ -209,7 +215,7 @@ static int SiteRand(void* returnAddress)
     unsigned long long seed = command ? g_seed ^ SplitMix(t_commandSeq) : g_seed;
     unsigned long long x = SplitMix(seed ^ ((unsigned long long)site << 32) ^ n);
     int value = (int)((x >> 33) & 0x7FFF);
-    if (!privateDraw && g_inEarly && !IsPresentationSite(site)) {
+    if (!privateDraw && !dll && g_inEarly && !IsPresentationSite(site)) {
         if (GetCurrentThreadId() == g_simThread) {
             g_simDraws++;
             g_simDrawHash = (g_simDrawHash ^ (((unsigned long long)site << 32) | (unsigned)value)) * 1099511628211ull;
@@ -219,6 +225,11 @@ static int SiteRand(void* returnAddress)
         }
     }
     return value;
+}
+
+static int SiteRand(void* returnAddress)
+{
+    return SiteRandAt((unsigned)((BYTE*)returnAddress - g_exeBase), false, returnAddress);
 }
 
 int Determinism_CommandRand(unsigned site)
@@ -273,6 +284,25 @@ static __declspec(noinline) double __cdecl H_randDouble(double a, double b)
 static __declspec(noinline) void __cdecl H_randStart(void)
 {
     if (!g_active) o_randStart();
+}
+
+// C3DDLL64's own imports of rand and srand: the engine draws inside its exports
+// (C3D_FOREST::EditorGenerateCursor / EditorGeneratePosition place the tree
+// tool's trees, SpawnParticles, PlaySound2D/3D, ...) never pass the exe's
+// imports. The CRT keeps one state per thread, so the camera-driven draws
+// shifted the trees' positions on one PC.
+static RandFn o_engineRand;
+static SrandFn o_engineSrand;
+static BYTE* g_engineBase = nullptr;
+static __declspec(noinline) int __cdecl H_engineRand(void)
+{
+    if (!g_active) return o_engineRand();
+    void* ra = _ReturnAddress();
+    return SiteRandAt(DLL_SITE | (unsigned)((BYTE*)ra - g_engineBase), true, ra);
+}
+static __declspec(noinline) void __cdecl H_engineSrand(unsigned seed)
+{
+    if (!g_active) o_engineSrand(seed);
 }
 
 // ---------------------------------------------------------------------------
@@ -1666,6 +1696,14 @@ bool Determinism_Install()
     ok += PatchIat(g_exe, DLL_C3D, "?Stop@C3D_TIMER@@QEAAXXZ", (void*)&H_timerStop, (void**)&o_timerStop, "det timer Stop");
     ok += PatchIat(g_exe, DLL_C3D, "?Start@C3D_TIMER@@QEAAXXZ", (void*)&H_timerStart, (void**)&o_timerStart, "det timer Start");
     ok += PatchIat(g_exe, DLL_C3D, "?GetKeyDown@C3D_INPUT@@QEAA_NH@Z", (void*)&H_getKeyDown, (void**)&o_getKeyDown, "det GetKeyDown");
+    HMODULE engine = g_engine ? g_engine : GetModuleHandleA(DLL_C3D);
+    int engineRand = 0;
+    if (engine) {
+        g_engineBase = (BYTE*)engine;
+        engineRand += PatchIat(engine, DLL_CRT_UTILITY, "rand", (void*)&H_engineRand, (void**)&o_engineRand, "det engine rand");
+        engineRand += PatchIat(engine, DLL_CRT_UTILITY, "srand", (void*)&H_engineSrand, (void**)&o_engineSrand, "det engine srand");
+    }
+    Logf("republicmp  DETERMINISM: %d/2 engine (C3DDLL64) random imports redirected", engineRand);
     g_doneThreadHandle = CreateEventW(nullptr, TRUE, TRUE, nullptr);
     ok += PatchIat(g_exe, "api-ms-win-crt-runtime-l1-1-0.dll", "_beginthread", (void*)&H_beginThread, (void**)&o_beginThread, "det _beginthread");
     ok += PatchIat(g_exe, "KERNEL32.dll", "SetEvent", (void*)&H_setEvent, (void**)&o_setEvent, "det SetEvent");

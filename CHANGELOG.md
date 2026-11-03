@@ -61,6 +61,14 @@ build (the build check refuses another DLL, 0.7.5 included).
   the world's seed and the save's date: still the same on every PC (they
   all load the same save), but no longer the same pattern every time. The
   load's own draws start from the world's seed too.
+- **Fix: the engine's own random numbers** - C3DDLL64 draws inside its own
+  routines through its own imports of `rand`, which the session never
+  covered: the tree tool's trees (their places, kinds and turns) came from
+  the same stream as the particles and sounds each PC makes for its camera,
+  so the same stroke could plant other trees on another PC. The engine's
+  draws now come from the session's generator too, one stream per place in
+  the engine, kept apart from the game's own (they are not in the desync
+  reports).
 
 ## 0.7.5
 
