@@ -488,6 +488,7 @@ static const Entry kRussian[] = {
     { "SHOW", "Показать" },
     { "HIDE", "Скрыть" },
     { "Map ping key:", "Клавиша пинга:" },
+    { "Your name:", "Ваше имя:" },
     { "Chat key:", "Клавиша чата:" },
     { "PRESS A KEY...", "Нажмите клавишу..." },
     { "Point at the map and press the ping key; the chat key opens the chat.",

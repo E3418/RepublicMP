@@ -24,6 +24,9 @@ build (the build check refuses another DLL, 0.7.5 included).
 - **Fix: no sound when buying a vehicle** - the purchase window's Buy press
   became a command and the game's own purchase sound was skipped with it.
   The clicking PC plays it again at the click.
+- **New: your name on the multiplayer page** - the name the other players
+  see was set only in the old overlay window. SETTINGS - "Your name" sets
+  it now too.
 
 **The save and the seed**
 
