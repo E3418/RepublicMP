@@ -27,10 +27,21 @@ build (the build check refuses another DLL, 0.7.5 included).
 - **New: your name on the multiplayer page** - the name the other players
   see was set only in the old overlay window. SETTINGS - "Your name" sets
   it now too.
-- **Fix: crash when placing a building while building rail** - a building's
-  access-road planner left the road under the cursor set and the rail under
-  it empty, and the rail network's update in the same frame read a null
-  pointer. The leftover hover is cleared after the placement.
+- **Fix: crashes right after another player's road, path or building** - a
+  command left what the mouse points at (the road, rail or node under the
+  cursor) set to the sender's, or to a piece the command had just rebuilt,
+  and this PC's own tool read it later in the same frame: placing a bus stop
+  while building rail crashed the host, and a player crashed right after the
+  host's footpaths split a road. Nothing is pointed at after a command until
+  the game picks again.
+- **Fix: "After a desync" was not remembered** - SETTINGS' re-sync delay went
+  back to 1 minute on every start. It is kept in the profile now.
+- **New: autosave in a session** - the game's autosave was held off in a
+  session (it ran on each PC's own clock, and a save changes the world).
+  Now the host's autosave interval (the game's options) sends an autosave
+  to every PC at the same tick, and each PC writes its own next autosave
+  slot by its own options (slots, zip), as in a single-player game - every
+  player keeps backups of the shared game.
 
 **The save and the seed**
 

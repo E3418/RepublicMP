@@ -1647,7 +1647,11 @@ void SaveSync_RequestResync()
     if (g_isHost && g_state == SESSION_HOST_IN_GAME) g_resyncRequested = true;
 }
 
-void SaveSync_SetDesyncResyncSeconds(int seconds) { g_desyncResyncSeconds = seconds < 0 ? -1 : seconds; }
+void SaveSync_SetDesyncResyncSeconds(int seconds)
+{
+    g_desyncResyncSeconds = seconds < 0 ? -1 : seconds;
+    Profile_SetInt("profile", "desync_resync", g_desyncResyncSeconds);
+}
 int SaveSync_GetDesyncResyncSeconds() { return g_desyncResyncSeconds; }
 
 ULONGLONG SaveSync_GetMsUntilDesyncResync()
@@ -1703,7 +1707,12 @@ void SaveSync_Tick()
 }
 
 SessionState SaveSync_GetState() { return g_state; }
-static void LoadSettings() { g_dlcCheck = Profile_GetInt("profile", "dlc_check", 1) != 0; }
+static void LoadSettings()
+{
+    g_dlcCheck = Profile_GetInt("profile", "dlc_check", 1) != 0;
+    int delay = Profile_GetInt("profile", "desync_resync", 60);
+    g_desyncResyncSeconds = delay < 0 ? -1 : delay;
+}
 
 void SaveSync_SetDlcCheck(bool on)
 {

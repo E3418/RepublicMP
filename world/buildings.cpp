@@ -2,7 +2,7 @@
 // See buildings.h.
 #include "buildings.h"
 #include "local_builds.h" // g_origUniversal, LocalBuilds_Begin/EndBuildingPlacement
-#include "networks.h" // Networks_ClearHover, Networks_SettleHover
+#include "networks.h" // Networks_ClearHover
 #include "demolish_hook.h" // DemolishHook_CallOriginal
 #include "view_list_scope.h"
 #include "menus_closed.h"
@@ -379,7 +379,6 @@ bool Buildings_ApplyPlacementCommand(const BuildingMsg& msg)
                 }
             } __finally {
                 *pressed = 0;
-                Networks_SettleHover();
                 InterlockedDecrement(&g_applyingRemote);
                 NearBuildingsEnd();
                 InputBlock_HoldInNeutral(nullptr);

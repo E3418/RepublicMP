@@ -471,6 +471,11 @@ static void Apply(const Command& c)
     Determinism_CommandBegin(c.seq);
     Guard_Call(KindName(c.kind), [&] { ok = ApplyKind(c); });
     Determinism_CommandEnd();
+    // What the local mouse hovered may be rebuilt or gone now, and a replay
+    // leaves the sender's hover set: the local tool, later in this frame,
+    // read a node whose edges were gone (2bda49) or a road edge without the
+    // rail one (4fe681). Nothing hovered until the game picks again.
+    Networks_ClearHover();
     InputBlock_EndNeutral();
     if (recipeAudit && recipeLoad == Determinism_WorldLoads())
         Guard_Call("the construction recipe report", [&] { StateHash_LogRecipeChanges(recipes, c.seq, c.afterTick); });

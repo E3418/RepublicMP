@@ -268,16 +268,6 @@ void Networks_ClearHover()
     }
 }
 
-void Networks_SettleHover()
-{
-    __try {
-        long long* roadEdge = (long long*)((uintptr_t)g_exe + 0x9E4558);
-        long long* railEdge = (long long*)((uintptr_t)g_exe + 0x9E45D8);
-        if (*roadEdge && !*railEdge) *roadEdge = 0;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-    }
-}
-
 // Local building at `pos` (0.5m in x/z, 1m in y), or 0.
 static __int64 FindLocalBuildingAt(const float pos[3])
 {

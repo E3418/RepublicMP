@@ -9,6 +9,15 @@
 // becomes a command instead, and every PC saves at the boundary - the same
 // state on every PC, paused or not. Each PC keeps its own copy of the save. A
 // save that leaves the game (+5030) is left alone: that PC leaves the session.
+//
+// The autosave goes the same way. The game's own (the Late body, 314dd2..
+// 3151a5) runs on each PC's real time, so in a session its timer (world +0)
+// is held at 0 (determinism/sim_patches). Instead the host counts the
+// interval it has set in the options (AUTOSAVE_INTERVAL) and sends an
+// autosave command; at the boundary every PC writes its own next slot
+// ("save/autosave<n>", its counter AUTOSAVE, AUTOSAVE_NUM slots, a zip when
+// AUTOSAVE_TO_ZIP), as the game does - every player keeps backups of the
+// shared game.
 #pragma once
 
 #include "tesmio_plugin.h"

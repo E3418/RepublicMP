@@ -266,15 +266,9 @@ void Networks_ReadFootpathLinks(__int64 manager, int category, NetSegment& seg);
 // Clears the hover globals the local mouse leaves (the node, edge and road
 // under the cursor, the hovered building port): the road planner reads them
 // when it lays a path, a building's access road included. Not restored - the
-// game recomputes them on the next frame.
+// game recomputes them on the next frame. Also cleared after every command
+// (lockstep/commands): what they point at may be rebuilt or gone.
 void Networks_ClearHover();
-
-// After a replay that cleared the hover: a hovered edge in exe+9E4558 with
-// none in exe+9E45D8 sends the rail network's per-frame update (4fe681: the
-// rail kind reads its edge from 9E45D8, unchecked once 9E4558 is set) through
-// a null pointer. A building's access-road planner sets the first and never
-// the second. Clears the first when the second is empty.
-void Networks_SettleHover();
 
 // Hooks FUN_1405258e0 / FUN_140525c30 (see NetPlanStartMsg). Call once
 // from TsmPluginStart.
