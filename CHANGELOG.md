@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.7.6
+
+Each player's view now survives a re-sync and is kept in the save, other
+players' commands no longer make sounds on your PC, the vehicle purchase
+sound is back, and every save carries RepublicMP's own file with the world's
+seed, for game modes to build on. Protocol 58 - every player needs this
+build (the build check refuses another DLL, 0.7.5 included).
+
+**The view and the sounds**
+
+- **New: each player's view is kept** - a re-sync or a join put every
+  player's camera back at the map's start. The view this PC had before a
+  session's load now comes back after it, and every save keeps each
+  player's view (by SteamID64, or the nick without Steam), so loading a
+  shared save puts every player where they left off.
+- **New: other players' commands make no sound here** - every PC makes every
+  player's command, and the host heard a player's roads and buildings being
+  built across the map. Their sounds are now left out on the other PCs, the
+  terrain and construction tools' loops included; the player who gave the
+  command hears it as before. SETTINGS - "Others' sounds" turns them back
+  on.
+- **Fix: no sound when buying a vehicle** - the purchase window's Buy press
+  became a command and the game's own purchase sound was skipped with it.
+  The clicking PC plays it again at the click.
+
+**The save and the seed**
+
+- **New: RepublicMP's own file in a save** - every save gets a
+  `republicmp.ini` next to the game's files (the build that wrote it, the
+  world's own seed and the players' views; game modes add their own
+  sections). It travels with the save, and a save without it loads as
+  before. Game modes read and write their own sections through
+  `api/republicmp_api.h` (`ModSave_Add`).
+- **New: the world's own seed** - made once for each world and kept in its
+  saves, the same number on every PC of a session. Game modes use it for
+  what they make at random once per world (e.g. where the republics' border
+  runs).
+- **The simulation's random numbers differ for each world and each load** -
+  every session started its draws from one fixed seed, so after each load
+  or re-sync the game drew the same numbers again. The draws now start from
+  the world's seed and the save's date: still the same on every PC (they
+  all load the same save), but no longer the same pattern every time. The
+  load's own draws start from the world's seed too.
+
 ## 0.7.5
 
 Many window actions that acted on the clicking PC only are now shared (by
