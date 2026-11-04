@@ -1251,6 +1251,46 @@ static bool ApplyHoverRefs(__int64 manager, const NetDemolishHover& h)
     return (!h.nodeKind || node) && (!h.edgeKind || edge);
 }
 
+// #622: a hover node demolition left 4 more buildings on one PC. Net_RemoveEdge
+// (5434c0) keeps an edge as a demolition site when world+0x5B8 > 1, edge +0x140
+// is 0 and (edge +0x141, no site at +0x138, site +0xEA8 or site +0x604 > 0);
+// otherwise it removes the edge at once. Net_SplitEdge (5446d0) gives the new
+// piece a site from the parent's +0xEA8 / +0x604. Logged on every PC before the
+// commit, so two logs show which of these differed.
+#define EDGE_SITE_OFFSET 0x138        // edge: its construction site (Building*), 0 when none
+#define EDGE_PLANNED_OFFSET 0x140     // edge: byte 1 = planned (SEG_PLANNED_OFFSET below)
+#define EDGE_FLAG_141_OFFSET 0x141    // edge: byte, the demolition-site way without a site test
+#define SITE_EA8_OFFSET 0xEA8         // site: byte, read by both 5434c0 and 5446d0
+#define SITE_PROGRESS_OFFSET 0x604    // site: float construction progress
+#define NODE_EDGES_OFFSET 0x28        // node: its edges (begin, end)
+#define WORLD_REALISM_OFFSET 0x5B8    // world: int, > 1 keeps demolished edges as sites
+
+static int BuildingCount(); // below
+
+static void LogHoverNodeSites(__int64 thisPtr, int nodeKind)
+{
+    if (!nodeKind) return;
+    __int64 node = *(__int64*)((uintptr_t)g_exe + kHoverNodeRvas[nodeKind - 1]);
+    if (!node) return;
+    __int64* eb = *(__int64**)(node + NODE_EDGES_OFFSET);
+    __int64* ee = *(__int64**)(node + NODE_EDGES_OFFSET + 8);
+    int count = (eb && ee >= eb) ? (int)(ee - eb) : 0;
+    Logf("republicmp  NETWORKS:   #622 before the commit: realism %d, buildings %d, %d edge(s) on the node",
+         *(int*)(thisPtr + WORLD_REALISM_OFFSET), BuildingCount(), count);
+    for (int i = 0; i < count && i < 8; i++) {
+        __int64 edge = eb[i];
+        if (!edge) continue;
+        __int64 site = *(__int64*)(edge + EDGE_SITE_OFFSET);
+        float progress = site ? *(float*)(site + SITE_PROGRESS_OFFSET) : 0.0f;
+        unsigned bits = 0;
+        memcpy(&bits, &progress, 4);
+        Logf("republicmp  NETWORKS:     edge %d: %d point(s), +140 %d +141 %d, site %s #%d +EA8 %d progress %.9g (%08X)",
+             i, EdgePointCount(edge), *(unsigned char*)(edge + EDGE_PLANNED_OFFSET),
+             *(unsigned char*)(edge + EDGE_FLAG_141_OFFSET), site ? "yes" : "none", site ? *(int*)site : -1,
+             site ? *(unsigned char*)(site + SITE_EA8_OFFSET) : 0, progress, bits);
+    }
+}
+
 bool Networks_ApplyCommandDemolishHover(const NetDemolishHoverMsg& msg)
 {
     g_applyHover = &msg.hover;
@@ -1407,7 +1447,10 @@ static bool ApplyDemolishInner(const NetDemolishMsg& m, bool* outRemoved)
                     // is only a stand-in for the sender's piece - never cut it on
                     // its own.
                     if (hoverOk && (adopted || (!viaNode && !direct))) {
+                        if (g_applyHover) LogHoverNodeSites(thisPtr, g_applyHover->nodeKind);
                         commit(manager, 0, 0, 0, 0, 0, 0);
+                        if (g_applyHover && g_applyHover->nodeKind)
+                            Logf("republicmp  NETWORKS:   #622 after the commit: buildings %d", BuildingCount());
                         *outRemoved = true;
                     } else if (!why) {
                         why = "the sender's range is not on the armed segment";
