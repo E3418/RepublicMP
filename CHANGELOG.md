@@ -75,6 +75,12 @@ build (the build check refuses another DLL, 0.7.5 included).
 - **The authors in the menu** - the RepublicMP window names the authors
   (E3418 and Sohn) under the build, and so does the log at start; the
   README has an Authors section.
+- **The log of a footpath node demolition** - a node demolition left a
+  different number of buildings on two PCs (the road pieces it split became
+  demolition sites on one PC only). The log now shows, on every PC, the
+  fields the game decides this by (each edge's construction site and its
+  progress) and the building count before and after, so two players' logs
+  show where the sites differed.
 
 ## 0.7.5
 
