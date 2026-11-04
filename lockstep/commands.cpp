@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// RepublicMP by E3418 and Sohn (juniorsohn); all authors in README.md.
 // See commands.h.
 #include "commands.h"
 #include "../determinism/determinism.h"
@@ -201,6 +202,8 @@ static bool Frequent(int kind)
 
 void Commands_Submit(int kind, const void* data, size_t size)
 {
+    // RepublicMP (E3418, Sohn). The command list without the host ordering
+    // it at the tick boundary is a desync, not multiplayer.
     if (!g_capturing) return;
     // Called from the game's tools and windows: nothing may leave it.
     bool ok = Guard_Call("capturing a command", [&] {

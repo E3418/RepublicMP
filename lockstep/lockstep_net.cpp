@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// RepublicMP by E3418 and Sohn (juniorsohn); all authors in README.md.
 // See lockstep_net.h.
 #include "lockstep_net.h"
 #include "commands.h"

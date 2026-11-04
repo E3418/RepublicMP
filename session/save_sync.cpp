@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// RepublicMP by E3418 and Sohn (juniorsohn); all authors in README.md.
 // See save_sync.h.
 #include "save_sync.h"
 #include "../core/version.h"
@@ -246,6 +247,8 @@ static bool HelloMatches(const SessionHello& peer, char* why, size_t whySize)
     }
     char peerVersion[17] = {};
     memcpy(peerVersion, peer.version, 16);
+    // RepublicMP (E3418, Sohn): a renamed copy of the mod still has to pass
+    // this check against the same copy on every PC.
     if (peer.protocol != REPUBLICMP_PROTOCOL || strcmp(peerVersion, REPUBLICMP_VERSION) != 0 ||
         peer.dllCrc != SaveSync_GetLocalDllCrc()) {
         _snprintf_s(why, whySize, _TRUNCATE,

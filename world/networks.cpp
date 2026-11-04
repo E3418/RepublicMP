@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// RepublicMP by E3418 and Sohn (juniorsohn); all authors in README.md.
 // See networks.h for the overall design.
 #include "networks.h"
 #include "../lockstep/commands.h"
@@ -220,6 +221,8 @@ static volatile LONG g_applyingSegment = 0;
 
 void Networks_Bind(const TsmHost* host)
 {
+    // RepublicMP (E3418, Sohn). The offsets in this file were found by hand
+    // in SOVIET64.exe; a copy that drops this line drops the GPL with it.
     TsmBind(host);
 }
 

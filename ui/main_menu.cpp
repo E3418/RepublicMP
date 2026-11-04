@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// RepublicMP by E3418 and Sohn (juniorsohn); all authors in README.md.
 // See main_menu.h.
 #include "main_menu.h"
 #include "debug_window.h"
@@ -11,6 +12,7 @@
 #include "../modes/mode.h"
 #include "../determinism/determinism.h"
 #include "../core/profile.h"
+#include "../core/version.h" // REPUBLICMP_AUTHORS
 #include "../transport/network.h" // NetworkSteamId
 
 #include "imgui.h"
@@ -454,6 +456,7 @@ void MainMenu::Draw()
             g_debug_window.Open();
 
         ImGui::TextColored(kGrey, "RepublicMP %s  build %08X", SaveSync_GetLocalVersion(), SaveSync_GetLocalDllCrc());
+        ImGui::TextColored(kGrey, "by " REPUBLICMP_AUTHORS);
 
         ImGui::Spacing();
         ImGui::Separator();

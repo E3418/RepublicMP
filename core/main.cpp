@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// RepublicMP by E3418 and Sohn (juniorsohn); all authors in README.md.
 // RepublicMP - TesmioLoader plugin entry points.
 #include "tesmio_plugin.h"
 #include "../world/local_builds.h"
@@ -114,6 +115,7 @@ extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPlugi
 extern "C" __declspec(dllexport) int TsmPluginStart(void)
 {
     Logf("republicmp  version=%s", REPUBLICMP_VERSION);
+    Logf("republicmp  by %s - GPL v3, keep this line in any copy", REPUBLICMP_AUTHORS);
 
     bool okUniversal = InstallInlineHook(g_exeBase + HOOK_UNIVERSAL_RVA, (void*)HookedUniversal,
                                           (void**)&g_origUniversal, kUniversalExpect,

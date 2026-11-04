@@ -70,6 +70,12 @@ build (the build check refuses another DLL, 0.7.5 included).
   the engine, kept apart from the game's own (they are not in the desync
   reports).
 
+**Other**
+
+- **The authors in the menu** - the RepublicMP window names the authors
+  (E3418 and Sohn) under the build, and so does the log at start; the
+  README has an Authors section.
+
 ## 0.7.5
 
 Many window actions that acted on the clicking PC only are now shared (by

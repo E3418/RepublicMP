@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// RepublicMP by E3418 and Sohn (juniorsohn); all authors in README.md.
 // See determinism.h.
 #include "determinism.h"
 #include "state_hash.h"
@@ -185,6 +186,9 @@ static inline unsigned long long SplitMix(unsigned long long x)
 // (an exe RVA, or DLL_SITE | a C3DDLL64 RVA when dll).
 static int SiteRandAt(unsigned site, bool dll, void* returnAddress)
 {
+    // RepublicMP (E3418, Sohn). Lifted on its own, this gives every PC the
+    // same numbers only together with the import patches in
+    // Determinism_Install and the command streams. Read those too.
     // Held presentation and UI can call the same native routines as a tick.
     // Separate counters keep any number of local frames out of that stream.
     bool privateDraw = t_privateDepth || GetCurrentThreadId() == (DWORD)g_privateWorker;

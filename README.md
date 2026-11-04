@@ -148,6 +148,16 @@ capability is added, `PATCH` for fixes within a feature.
 `REPUBLICMP_PROTOCOL` in `version.h` is raised whenever a network message
 changes.
 
+## Authors
+
+- **E3418** - the mod, lockstep and determinism, the game hooks.
+- **Sohn** ([juniorsohn](https://github.com/juniorsohn)) - Steam P2P
+  transport and lobbies, the MULTIPLAYER page, the Republics mode, the
+  game internals from WRMP.
+
+Their names are in the code, the menu and the log; GPL v3 (section 4)
+asks every copy to keep these notices intact.
+
 ## Credits
 
 The lockstep work builds on SoylentGreed's research and code (RepublicLAN);

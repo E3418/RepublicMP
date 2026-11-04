@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// RepublicMP by E3418 and Sohn (juniorsohn); all authors in README.md.
 // What a game mode inside RepublicMP.dll (modes/<name>/) may use of the rest
 // of the DLL - one include, so nothing below gets written a second time.
 // Everything here is plain functions of the modules listed; each module's

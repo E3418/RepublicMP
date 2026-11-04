@@ -345,10 +345,10 @@ comment on each one is `RepublicMP: <note> [<file>]`.
 | `0x9E6A18` | `g_BuildingsBegin` | world/networks.cpp | city buildings vector |
 | `0x9E6A20` | `g_BuildingsEnd` | world/networks.cpp |  |
 | `0x9E75B8` | `g_People` | determinism/state_hash.h | world+126A8 citizens |
-| `0x9E7710` | `g_AgentQueue` | determinism/held_frame.cpp |  |
-| `0x9E7720` | `g_SimVec_A` | determinism/held_frame.cpp |  |
-| `0x9E7728` | `g_SimVec_B` | determinism/held_frame.cpp |  |
-| `0x9E7738` | `g_SimVector` | determinism/held_frame.cpp |  |
+| `0x9E7710` | `g_LinesManager` | lockstep/game_calls.cpp | world+0x12800 (was g_AgentQueue; held_frame reads its +0x60 queue) |
+| `0x9E7720` | `g_VehiclesBegin` | lockstep/purchase.cpp | world+0x12810 (was g_SimVec_A) |
+| `0x9E7728` | `g_VehiclesEnd` | lockstep/purchase.cpp | world+0x12818 (was g_SimVec_B) |
+| `0x9E7738` | `g_EarlyVehicleList` | determinism/determinism.cpp | world+0x12828 (was g_SimVector) |
 | `0x9E2350` | `g_VehicleJobs` | determinism/held_frame.cpp | vehicle job queue object / paths |
 | `0x9E19D0` | `g_OpenWindows` | lockstep/cargo_settings.cpp |  |
 | `0x9E8088` | `g_CampaignOrCurve` | world/networks.cpp | != -1 campaign / preset curve index |
