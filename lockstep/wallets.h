@@ -14,8 +14,9 @@
 //                               no owner and is split in two
 //
 // A building belongs to the half it stands on, a vehicle to the side of its
-// depot or building (Commands_VehicleSide), a loan to who took it. Wallets_LogState
-// shows how much money still goes through the split.
+// depot or building (Commands_VehicleSide), a loan to who took it, a tourist's
+// spending to the building they spend at. Wallets_LogState shows how much money
+// still goes through the split. The loan windows show and count a player's own.
 //
 // The accounts are kept per half of the map, not per player, so a host who
 // picks the other side keeps the right one. They go into the save's

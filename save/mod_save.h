@@ -19,6 +19,7 @@
 //                 world_seed - the world's own seed (ModSave_WorldSeed)
 //   [camera]      each player's view (save/camera_keep)
 //   [wallets]     each republic's money (lockstep/wallets)
+//   [republics]   where the cut runs (modes/republics)
 //   a mode adds its own sections (e.g. Republics' parameters).
 #pragma once
 
@@ -56,6 +57,8 @@ void ModSave_AfterLoad();
 // Between the two: the world seed in the save being loaded, 0 when it has
 // none (determinism: the load's own draws already start from it).
 unsigned long long ModSave_LoadSeed();
+// The folder of the save loaded last, for its other files; false for none.
+bool ModSave_LoadedFolder(char* out, size_t outSize);
 
 // The world's own seed, made once and kept in its saves: the same number on
 // every PC of a session (a join and a re-sync carry the host's save, file

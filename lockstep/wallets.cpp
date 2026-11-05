@@ -411,6 +411,135 @@ static bool RelayLoanDay()
     return true;
 }
 
+// The tourists' spending: 832e90 adds it right inside its loop over the agents
+// (rbx), with the amount a double in xmm1, the building at [rbx+0x20]. The add and
+// the store become a jump to a stub that keeps the volatile registers and calls this.
+#define AGENT_RUB_SITE 0x833C25
+#define AGENT_USD_SITE 0x833CCA
+#define AGENT_BUILDING 0x20
+
+static void AgentPay(U64 agent, double amount, int dollars)
+{
+    int previous = SCOPE_KEEP;
+    if (g_use == USE_SIM) previous = ScopeBegin(HalfOfBuilding(*(U64*)(agent + AGENT_BUILDING)));
+    (dollars ? Dollars() : Rubles()) += amount;
+    ScopeEnd(previous);
+}
+
+static bool PatchAgentSite(unsigned rva, int dollars)
+{
+    const BYTE disp = dollars ? 0x80 : 0x88;
+    const BYTE expect[18] = { 0xF2, 0x41, 0x0F, 0x58, 0x8E, disp, 0x05, 0x00, 0x00, 0xF2, 0x41, 0x0F, 0x11, 0x8E, disp, 0x05, 0x00, 0x00 };
+    BYTE* site = g_exeBase + rva;
+    if (memcmp(site, expect, sizeof(expect))) return false;
+    static const BYTE save[] = {
+        0x50, 0x51, 0x52, 0x41, 0x50, 0x41, 0x51, 0x41, 0x52, 0x41, 0x53, // push rax rcx rdx r8 r9 r10 r11
+        0x48, 0x81, 0xEC, 0x88, 0x00, 0x00, 0x00,                         // sub rsp,88h: shadow, xmm0-5, aligned
+        0x0F, 0x11, 0x44, 0x24, 0x20, 0x0F, 0x11, 0x4C, 0x24, 0x30,       // movups [rsp+20h],xmm0 ...
+        0x0F, 0x11, 0x54, 0x24, 0x40, 0x0F, 0x11, 0x5C, 0x24, 0x50,
+        0x0F, 0x11, 0x64, 0x24, 0x60, 0x0F, 0x11, 0x6C, 0x24, 0x70,
+        0x48, 0x8B, 0xCB,                                                 // mov rcx,rbx (xmm1 is the second argument)
+    };
+    static const BYTE restore[] = {
+        0x0F, 0x10, 0x44, 0x24, 0x20, 0x0F, 0x10, 0x4C, 0x24, 0x30,       // movups xmm0,[rsp+20h] ...
+        0x0F, 0x10, 0x54, 0x24, 0x40, 0x0F, 0x10, 0x5C, 0x24, 0x50,
+        0x0F, 0x10, 0x64, 0x24, 0x60, 0x0F, 0x10, 0x6C, 0x24, 0x70,
+        0x48, 0x81, 0xC4, 0x88, 0x00, 0x00, 0x00,                         // add rsp,88h
+        0x41, 0x5B, 0x41, 0x5A, 0x41, 0x59, 0x41, 0x58, 0x5A, 0x59, 0x58, // pop r11 r10 r9 r8 rdx rcx rax
+        0xFF, 0x25, 0x00, 0x00, 0x00, 0x00,                               // jmp [rip]: back after the store
+    };
+    BYTE* stub = AllocNear(site, sizeof(save) + 6 + 12 + sizeof(restore) + 8);
+    if (!stub) return false;
+    BYTE* p = stub;
+    memcpy(p, save, sizeof(save));
+    p += sizeof(save);
+    *p++ = 0x41; // mov r8d,dollars
+    *p++ = 0xB8;
+    memcpy(p, &dollars, 4);
+    p += 4;
+    *p++ = 0x48; // mov rax,AgentPay
+    *p++ = 0xB8;
+    void* target = (void*)&AgentPay;
+    memcpy(p, &target, 8);
+    p += 8;
+    *p++ = 0xFF; // call rax
+    *p++ = 0xD0;
+    memcpy(p, restore, sizeof(restore));
+    p += sizeof(restore);
+    BYTE* back = site + sizeof(expect);
+    memcpy(p, &back, 8);
+    DWORD old;
+    if (!VirtualProtect(site, sizeof(expect), PAGE_EXECUTE_READWRITE, &old)) return false;
+    int rel = (int)(stub - (site + 5));
+    site[0] = 0xE9;
+    memcpy(site + 1, &rel, 4);
+    memset(site + 5, 0x90, sizeof(expect) - 5);
+    VirtualProtect(site, sizeof(expect), old, &old);
+    FlushInstructionCache(GetCurrentProcess(), site, sizeof(expect));
+    return true;
+}
+
+// The loan windows and the borrowing limit go over every loan, comparing its
+// currency (+0x08) with 1 or 2. While they run, the other player's loans carry a
+// value neither matches: nobody sees or counts them. A click on Borrow is checked
+// again in its command, against the one who made it.
+#define LOAN_CURRENCY 0x08
+#define LOAN_HIDDEN 0x100
+
+static int g_hideDepth = 0;
+
+static void HideLoansBegin()
+{
+    if (!g_on || g_hideDepth++) return;
+    int mine = (g_use == USE_COMMAND ? g_commandHalf : LocalHalf()) + 1;
+    BYTE* begin = *(BYTE**)(g_exeBase + WORLD_RVA + WORLD_LOANS);
+    for (size_t i = 0, n = LoanCount(); i < n; i++) {
+        BYTE* loan = begin + i * LOAN_SIZE;
+        int owner = *(int*)(loan + LOAN_OWNER);
+        if ((owner == 1 || owner == 2) && owner != mine) *(int*)(loan + LOAN_CURRENCY) |= LOAN_HIDDEN;
+    }
+}
+
+static void HideLoansEnd()
+{
+    if (!g_hideDepth || --g_hideDepth) return;
+    BYTE* begin = *(BYTE**)(g_exeBase + WORLD_RVA + WORLD_LOANS);
+    for (size_t i = 0, n = LoanCount(); i < n; i++) *(int*)(begin + i * LOAN_SIZE + LOAN_CURRENCY) &= ~LOAN_HIDDEN;
+}
+
+#define LOAN_WINDOW(name)                                                          \
+    static PayerFn o_##name;                                                       \
+    static U64 Det_##name(U64 a, U64 b, U64 c, U64 d, U64 e, U64 f, U64 g, U64 h)  \
+    {                                                                              \
+        HideLoansBegin();                                                          \
+        U64 r = o_##name(a, b, c, d, e, f, g, h);                                  \
+        HideLoansEnd();                                                            \
+        return r;                                                                  \
+    }
+
+LOAN_WINDOW(LoanWindow4ACF50)
+LOAN_WINDOW(LoanWindow4AFA90)
+LOAN_WINDOW(LoanWindow4B3230)
+LOAN_WINDOW(LoanWindow4B79C0)
+
+// 4b9380(world, currency): how much may be borrowed yet; a float in xmm0.
+typedef float (*LoanLimitFn)(U64, U64, U64, U64);
+static LoanLimitFn o_LoanLimit;
+
+static float Det_LoanLimit(U64 a, U64 b, U64 c, U64 d)
+{
+    HideLoansBegin();
+    float r = o_LoanLimit(a, b, c, d);
+    HideLoansEnd();
+    return r;
+}
+
+static const BYTE kWindow4ACF50[] = { 0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x10, 0x48, 0x89, 0x70, 0x18, 0x48, 0x89, 0x78, 0x20 };
+static const BYTE kWindow4AFA90[] = { 0x48, 0x8B, 0xC4, 0x55, 0x53, 0x56, 0x41, 0x56, 0x48, 0x8D, 0x68, 0xB8, 0x48, 0x81, 0xEC, 0x28, 0x01, 0x00, 0x00 };
+static const BYTE kWindow4B3230[] = { 0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x20, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55 };
+static const BYTE kWindow4B79C0[] = { 0x48, 0x8B, 0xC4, 0x55, 0x53, 0x56, 0x41, 0x55, 0x41, 0x56, 0x48, 0x8D, 0x68, 0xB8 };
+static const BYTE kLoanLimit[] = { 0x4C, 0x8B, 0x81, 0xB0, 0x26, 0x01, 0x00, 0x45, 0x33, 0xC9, 0x4C, 0x2B, 0x81, 0xA8, 0x26, 0x01, 0x00 };
+
 static const BYTE kCollapse[] = { 0x48, 0x8B, 0xC4, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57 };
 static const BYTE kPass171E10[] = { 0x48, 0x8B, 0xC4, 0x55, 0x53, 0x57, 0x41, 0x55, 0x41, 0x56, 0x48, 0x8D, 0x68, 0x88 };
 static const BYTE kArgs2[] = { 0x48, 0x8B, 0xC4, 0x48, 0x89, 0x50, 0x10, 0x48, 0x89, 0x48, 0x08, 0x55, 0x53, 0x56, 0x57 };
@@ -453,6 +582,10 @@ bool Wallets_Install()
         SITE(0x60E4D0, Job60E4D0, kJob60E4D0),
         SITE_ARGS2(0x60E940, Job60E940),
         SITE_ARGS2(0x60F700, Job60F700),
+        SITE(0x4ACF50, LoanWindow4ACF50, kWindow4ACF50),
+        SITE(0x4AFA90, LoanWindow4AFA90, kWindow4AFA90),
+        SITE(0x4B3230, LoanWindow4B3230, kWindow4B3230),
+        SITE(0x4B79C0, LoanWindow4B79C0, kWindow4B79C0),
     };
 #undef SITE
 #undef SITE_ARGS2
@@ -461,5 +594,9 @@ bool Wallets_Install()
         ok &= InstallInlineHook(g_exeBase + s.rva, s.detour, (void**)s.original, s.expect, s.stolen, s.label);
     bool loans = RelayLoanDay();
     if (!loans) Logf("republicmp  WALLETS: the loans' daily payment differs - it stays split in two");
-    return ok && loans;
+    ok &= InstallInlineHook(g_exeBase + 0x4B9380, (void*)&Det_LoanLimit, (void**)&o_LoanLimit, kLoanLimit, sizeof(kLoanLimit),
+                            "republicmp wallets: LoanLimit");
+    bool agents = PatchAgentSite(AGENT_RUB_SITE, 0) && PatchAgentSite(AGENT_USD_SITE, 1);
+    if (!agents) Logf("republicmp  WALLETS: the tourists' spending differs - it stays split in two");
+    return ok && loans && agents;
 }

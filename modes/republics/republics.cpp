@@ -4,9 +4,13 @@
 #include "republics.h"
 #include "../../api/republicmp_api.h"
 #include "imgui.h"
+#include <limits.h>
 #include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <algorithm>
+#include <vector>
 
 // The live C3D_TERRAIN's size in metres, x and z: the map is [-x/2, x/2] by
 // [-z/2, z/2] around the origin, y up (C3DDLL64's GetTerrainSize, DLL 0xF8DF0,
@@ -32,12 +36,43 @@ typedef bool (*OutOfPlayableFn)(void* world, const float* xyz);
 // (100 m on a stock map).
 #define CUT_GRID 200
 
-// The cut: the points with p.x*nx + p.z*nz < offset are half 0, above it
-// half 1; the host plays the one it chose (SaveSync_GetHostSide). n is one of the map's two diagonals'
-// normals, offset moves the line so both halves get the same playable area.
+// The cut: a broken line across the map. Along the direction (-nz, nx) a point
+// has its u, across it (nx, nz) its v; the line is v as a function of u, straight
+// between knots `step` metres apart, so it never turns back on itself. Below it
+// is half 0, above it half 1; the host plays the one it chose
+// (SaveSync_GetHostSide). MakeCut below picks all of it.
+#define MAX_KNOTS 24
 struct Cut {
-    float nx, nz, offset;
+    float nx, nz, startU, step;
+    int knots;
+    float off[MAX_KNOTS];
 };
+
+// The line's v at u; slope: its dv/du there. Past either end it goes on level.
+static float CutAt(const Cut& c, float u, float* slope = nullptr)
+{
+    float s = (u - c.startU) / c.step;
+    int i = 0;
+    float t = 0;
+    if (s >= (float)(c.knots - 1)) {
+        i = c.knots - 2;
+        t = 1;
+    } else if (s > 0) {
+        i = (int)s;
+        t = s - (float)i;
+    }
+    float dv = c.off[i + 1] - c.off[i];
+    if (slope) *slope = dv / c.step;
+    return c.off[i] + dv * t;
+}
+
+// Metres from the line, negative in half 0: across its piece at this point.
+static float CutDistance(const Cut& c, const float p[3])
+{
+    float u = p[2] * c.nx - p[0] * c.nz, v = p[0] * c.nx + p[2] * c.nz, slope;
+    float f = CutAt(c, u, &slope);
+    return (v - f) / sqrtf(1.0f + slope * slope);
+}
 
 static Cut g_cut;
 static bool g_cutReady = false; // main thread
@@ -47,6 +82,7 @@ static volatile int g_borderCount = 0; // 0 until drawn points are ready
 // The same cut inside the playable border, in pieces of at most STRIP_STEP_M
 // as the game cuts its own border line (40f3f0), for the game's strip.
 #define STRIP_STEP_M 500.0f
+#define STRIP_STRETCH 1.3f
 #define STRIP_POINTS 128
 static float g_strip[STRIP_POINTS][3];
 static volatile int g_stripCount = 0;
@@ -96,36 +132,368 @@ static bool OutOfPlayable(const float p[3])
     }
 }
 
-// The offset that halves the playable cells along normal n (their median),
-// in *cut; false when no cell is playable.
-static bool HalveAlong(float nx, float nz, float w, float h, Cut* cut)
+// ---------------------------------------------------------------------------
+// Where the cut runs
+// ---------------------------------------------------------------------------
+//
+// A broken line: a few general directions drawn from the world's seed, and for
+// each, knots about KNOT_SPACING_M apart moved at random; the most even result
+// wins. After every move the whole line shifts so the playable area stays half
+// and half, and what is judged is the border crossings first, then the resources,
+// the worst-shared one counting double: they lie in a few big deposits, so an even
+// share often means the line goes through one. The limits below keep it a border
+// and not a saw.
+//
+// Only exact arithmetic is used (no sine or exp: the CRT's differ by CPU), and all
+// it reads is the same on every PC: the save everyone loaded. The cut is kept in
+// the save, so what players build or mine later never moves it.
+
+#define CUT_DIRECTIONS 8
+#define CUT_ROUNDS 1200       // moves of the knots, per direction
+#define CUT_HEAT 0.05         // how readily a worse line is taken at the start; none at the end
+#define KNOT_SPACING_M 2500.0f
+#define MIN_KNOTS 4
+#define MAX_SLOPE 1.2f        // of a piece: about 50 degrees off the general direction
+#define MAX_BEND 1.5f         // the change of slope at a knot
+#define MAX_SWING 0.3f        // how far a knot may go, of the map's smaller side
+#define RESOURCE_CHANNELS 5 // coal, iron, oil, bauxite, uranium: resourcemap RGB, resourcemap2 RG
+#define RESOURCE_CELL 8     // texels added into one point
+#define MAX_CROSSINGS 1024
+#define CUT_CELL_STRIDE 16 // of the playable cells, one in this many while the knots move
+// The network table (lockstep/cancel_tool): each network's committed edges and their nodes.
+#define NET_COUNT 0x14034
+#define NET_FIRST 0x14038
+#define NET_STRIDE 0x50
+#define NET_MAX 64
+#define NET_EDGES 0x2B0
+#define EDGE_NODE0 0x20
+#define EDGE_NODE1 0x28
+#define NODE_POS 4
+#define NET_MAX_EDGES (1u << 20)
+
+struct ResourcePoint {
+    float x, z, amount;
+    int channel;
+};
+struct Crossing {
+    float x, z;
+    int network;
+};
+
+static std::vector<ResourcePoint> g_resources;
+static double g_resourceTotal[RESOURCE_CHANNELS];
+static std::vector<Crossing> g_crossings;
+static int g_cells = 0; // playable cells in g_cellX / g_cellZ
+static float g_cellX[CUT_GRID * CUT_GRID], g_cellZ[CUT_GRID * CUT_GRID];
+static Cut g_savedCut;
+static bool g_cutSaved = false; // g_savedCut is this world's cut
+
+static unsigned long long CutMix(unsigned long long x)
+{
+    x += 0x9E3779B97F4A7C15ull;
+    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ull;
+    x = (x ^ (x >> 27)) * 0x94D049BB133111EBull;
+    return x ^ (x >> 31);
+}
+
+// One 32-bit-per-texel resource map of the save. Column x, row z, from the
+// map's corner, as the game's own resource brush reads them (238b70); inferred.
+static void ReadResourceMap(const char* folder, const char* name, int firstChannel, int channels, float w, float h)
+{
+    char path[MAX_PATH + 32];
+    if (_snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\%s", folder, name) < 0) return;
+    FILE* f = nullptr;
+    if (fopen_s(&f, path, "rb") || !f) return;
+    unsigned char head[128];
+    std::vector<unsigned char> row;
+    if (fread(head, 1, sizeof(head), f) == sizeof(head)) {
+        unsigned height, width, bits;
+        memcpy(&height, head + 12, 4);
+        memcpy(&width, head + 16, 4);
+        memcpy(&bits, head + 88, 4);
+        if (bits == 32 && width && height && width <= 8192 && height <= 8192) {
+            unsigned cols = width / RESOURCE_CELL + 1, rows = height / RESOURCE_CELL + 1;
+            std::vector<double> sums(cols * rows * channels, 0.0);
+            row.resize(width * 4);
+            for (unsigned z = 0; z < height && fread(row.data(), 1, row.size(), f) == row.size(); z++)
+                for (unsigned x = 0; x < width; x++)
+                    for (int c = 0; c < channels; c++)
+                        sums[(z / RESOURCE_CELL * cols + x / RESOURCE_CELL) * channels + c] += row[x * 4 + c];
+            for (unsigned r = 0; r < rows; r++)
+                for (unsigned q = 0; q < cols; q++)
+                    for (int c = 0; c < channels; c++) {
+                        double amount = sums[(r * cols + q) * channels + c];
+                        if (amount <= 0) continue;
+                        float px = ((q + 0.5f) * RESOURCE_CELL / width - 0.5f) * w;
+                        float pz = ((r + 0.5f) * RESOURCE_CELL / height - 0.5f) * h;
+                        g_resources.push_back({ px, pz, (float)amount, firstChannel + c });
+                        g_resourceTotal[firstChannel + c] += amount;
+                    }
+        }
+    }
+    fclose(f);
+}
+
+// The networks' edges that go out through the map's playable border: roads,
+// rails, wires and the rest that lead abroad, counted where they cross.
+static void FindCrossings()
+{
+    BYTE* world = (BYTE*)World_Object();
+    __try {
+        int networks = *(int*)(world + NET_COUNT);
+        if (networks < 0 || networks > NET_MAX) return;
+        for (int t = 0; t < networks; t++) {
+            BYTE* net = *(BYTE**)(world + NET_FIRST + (size_t)t * NET_STRIDE);
+            if (!net) continue;
+            BYTE** begin = *(BYTE***)(net + NET_EDGES);
+            BYTE** end = *(BYTE***)(net + NET_EDGES + 8);
+            if (!begin || end <= begin || (size_t)(end - begin) > NET_MAX_EDGES) continue;
+            for (BYTE** e = begin; e < end && g_crossings.size() < MAX_CROSSINGS; ++e) {
+                BYTE* n0 = *(BYTE**)(*e + EDGE_NODE0);
+                BYTE* n1 = *(BYTE**)(*e + EDGE_NODE1);
+                if (!n0 || !n1) continue;
+                const float* a = (const float*)(n0 + NODE_POS);
+                const float* b = (const float*)(n1 + NODE_POS);
+                bool outA = OutOfPlayable(a), outB = OutOfPlayable(b);
+                if (outA == outB) continue;
+                const float* in = outA ? b : a;
+                g_crossings.push_back({ in[0], in[2], t });
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        g_measureFault = true;
+    }
+}
+
+struct CutScore {
+    int crossingsOff;    // crossings beyond an even share (an odd count leaves one over)
+    double resourcesOff; // mean of each resource's |a - b| / (a + b)
+    double worstOff;     // the most unevenly shared one
+    double Total() const { return crossingsOff + resourcesOff + worstOff; }
+};
+
+// The measured things in the direction's own frame.
+struct FramePoint {
+    float u, v, amount;
+    int kind;
+};
+static std::vector<FramePoint> g_frameResources, g_frameCrossings, g_frameCells;
+
+static void MakeFrame(float nx, float nz)
+{
+    g_frameResources.clear();
+    g_frameCrossings.clear();
+    g_frameCells.clear();
+    for (const ResourcePoint& p : g_resources)
+        g_frameResources.push_back({ p.z * nx - p.x * nz, p.x * nx + p.z * nz, p.amount, p.channel });
+    for (const Crossing& p : g_crossings)
+        g_frameCrossings.push_back({ p.z * nx - p.x * nz, p.x * nx + p.z * nz, 1.0f, p.network });
+    for (int k = 0; k < g_cells; k += CUT_CELL_STRIDE)
+        g_frameCells.push_back({ g_cellZ[k] * nx - g_cellX[k] * nz, g_cellX[k] * nx + g_cellZ[k] * nz, 1.0f, 0 });
+}
+
+// What moves the line, at the same u everywhere, so the cells lie half on each side.
+static float AreaShift(const Cut& c)
 {
     int n = 0;
-    for (int i = 0; i < CUT_GRID; i++)
-        for (int j = 0; j < CUT_GRID; j++) {
-            float p[3] = { ((i + 0.5f) / CUT_GRID - 0.5f) * w, 0, ((j + 0.5f) / CUT_GRID - 0.5f) * h };
-            if (!OutOfPlayable(p)) g_inside[n++] = p[0] * nx + p[2] * nz;
-        }
-    if (!n) return false;
+    for (const FramePoint& p : g_frameCells) g_inside[n++] = p.v - CutAt(c, p.u);
+    if (!n) return 0;
     std::nth_element(g_inside, g_inside + n / 2, g_inside + n);
-    *cut = { nx, nz, g_inside[n / 2] };
+    return g_inside[n / 2];
+}
+
+// The line as it would stand with the areas equal.
+static CutScore ScoreCut(const Cut& c)
+{
+    CutScore s = { 0, 0.0, 0.0 };
+    float shift = AreaShift(c);
+    double side[RESOURCE_CHANNELS] = {};
+    for (const FramePoint& p : g_frameResources)
+        if (p.v - shift < CutAt(c, p.u)) side[p.kind] += p.amount;
+    int used = 0;
+    for (int i = 0; i < RESOURCE_CHANNELS; i++) {
+        if (g_resourceTotal[i] <= 0) continue;
+        double off = fabs(2 * side[i] - g_resourceTotal[i]) / g_resourceTotal[i];
+        s.resourcesOff += off;
+        if (off > s.worstOff) s.worstOff = off;
+        used++;
+    }
+    if (used) s.resourcesOff /= used;
+    int low[NET_MAX] = {}, all[NET_MAX] = {};
+    for (const FramePoint& p : g_frameCrossings) {
+        all[p.kind]++;
+        if (p.v - shift < CutAt(c, p.u)) low[p.kind]++;
+    }
+    for (int t = 0; t < NET_MAX; t++) {
+        int off = abs(2 * low[t] - all[t]);
+        if (off > all[t] % 2) s.crossingsOff += off - all[t] % 2;
+    }
+    return s;
+}
+
+// A number in [0, 1) from the next step of the seed.
+static double CutRandom(unsigned long long* seed)
+{
+    *seed = CutMix(*seed);
+    return (double)(*seed >> 11) / (double)(1ull << 53);
+}
+
+static bool CutAllowed(const Cut& c, float swing)
+{
+    float slopeMax = c.step * MAX_SLOPE, bendMax = c.step * MAX_BEND;
+    for (int i = 0; i < c.knots; i++) {
+        if (fabsf(c.off[i]) > swing) return false;
+        if (i + 1 < c.knots && fabsf(c.off[i + 1] - c.off[i]) > slopeMax) return false;
+        if (i > 0 && i + 1 < c.knots && fabsf(c.off[i - 1] - 2 * c.off[i] + c.off[i + 1]) > bendMax) return false;
+    }
     return true;
 }
 
-// Main thread. The two diagonals are tried, and the one whose halving line
-// lies nearest the map's centre wins: the cut stays close to corner to corner
-// on any border shape. The same map gives the same cut on every PC.
+// Moves the whole line so the playable cells lie half on each side.
+static void ShiftToEqualArea(Cut& c)
+{
+    for (int k = 0; k < g_cells; k++) {
+        float u = g_cellZ[k] * c.nx - g_cellX[k] * c.nz, v = g_cellX[k] * c.nx + g_cellZ[k] * c.nz;
+        g_inside[k] = v - CutAt(c, u);
+    }
+    std::nth_element(g_inside, g_inside + g_cells / 2, g_inside + g_cells);
+    float shift = g_inside[g_cells / 2];
+    for (int i = 0; i < c.knots; i++) c.off[i] += shift;
+}
+
+// Main thread. A fault leaves no cut: it is measured again next time, as a
+// half-measured one would differ between the PCs.
 static void MakeCut(float w, float h)
 {
-    float len = sqrtf(w * w + h * h);
-    Cut a = { h / len, -w / len, 0 }, b = { h / len, w / len, 0 };
     g_measureFault = false;
-    bool okA = HalveAlong(a.nx, a.nz, w, h, &a), okB = HalveAlong(b.nx, b.nz, w, h, &b);
-    if (g_measureFault) return; // measured again next time: a half-measured cut would differ between the PCs
-    g_cut = okB && (!okA || fabsf(b.offset) < fabsf(a.offset)) ? b : a;
+    g_cells = 0;
+    for (int i = 0; i < CUT_GRID; i++)
+        for (int j = 0; j < CUT_GRID; j++) {
+            float p[3] = { ((i + 0.5f) / CUT_GRID - 0.5f) * w, 0, ((j + 0.5f) / CUT_GRID - 0.5f) * h };
+            if (OutOfPlayable(p)) continue;
+            g_cellX[g_cells] = p[0];
+            g_cellZ[g_cells++] = p[2];
+        }
+    g_resources.clear();
+    g_crossings.clear();
+    memset(g_resourceTotal, 0, sizeof(g_resourceTotal));
+    char folder[MAX_PATH];
+    if (ModSave_LoadedFolder(folder, sizeof(folder))) {
+        ReadResourceMap(folder, "resourcemap.dds", 0, 3, w, h);
+        ReadResourceMap(folder, "resourcemap2.dds", 3, 2, w, h);
+    }
+    FindCrossings();
+    if (g_measureFault || !g_cells) return;
+
+    // The knots cover the map's diagonal, whatever the direction.
+    float len = sqrtf(w * w + h * h);
+    int knots = (int)ceilf(len / KNOT_SPACING_M) + 1;
+    knots = knots < MIN_KNOTS ? MIN_KNOTS : knots > MAX_KNOTS ? MAX_KNOTS : knots;
+    float swing = (w < h ? w : h) * MAX_SWING;
+
+    unsigned long long seed = ModSave_WorldSeed();
+    Cut line, bestLine;
+    memset(&line, 0, sizeof(line));
+    line.startU = -len * 0.5f;
+    line.step = len / (float)(knots - 1);
+    line.knots = knots;
+    bestLine = line;
+    CutScore score = { INT_MAX, 2.0, 2.0 };
+    for (int direction = 0; direction < CUT_DIRECTIONS; direction++) {
+        // A point on the circle by exact arithmetic: t in [-1, 1) covers every line's direction.
+        double t = CutRandom(&seed) * 2.0 - 1.0;
+        double den = 1.0 + t * t;
+        line.nx = (float)((1.0 - t * t) / den);
+        line.nz = (float)(2.0 * t / den);
+        for (int k = 0; k < knots; k++) line.off[k] = 0;
+        MakeFrame(line.nx, line.nz);
+        CutScore now = ScoreCut(line);
+        double total = now.Total();
+        if (total < score.Total()) {
+            score = now;
+            bestLine = line;
+        }
+        for (int round = 0; round < CUT_ROUNDS; round++) {
+            float done = (float)round / CUT_ROUNDS;
+            float reach = line.step * (0.8f - 0.7f * done);
+            double heat = CUT_HEAT * (1.0f - done) * (1.0f - done);
+            int knot = (int)(CutRandom(&seed) * knots);
+            float move = (float)(CutRandom(&seed) * 2.0 - 1.0) * reach;
+            double dice = CutRandom(&seed);
+            float was = line.off[knot];
+            line.off[knot] = was + move;
+            if (CutAllowed(line, swing)) {
+                CutScore s = ScoreCut(line);
+                double worse = s.Total() - total;
+                // A worse line is taken now and then, less as it cools, to get out of a dead end.
+                if (worse < 0 || (heat > 0 && dice < heat / (heat + worse * 4.0))) {
+                    total = s.Total();
+                    if (total < score.Total()) {
+                        score = s;
+                        bestLine = line;
+                    }
+                    continue;
+                }
+            }
+            line.off[knot] = was;
+        }
+    }
+    line = bestLine;
+    MakeFrame(line.nx, line.nz);
+    ShiftToEqualArea(line);
+    score = ScoreCut(line);
+    g_cut = line;
     g_cutReady = true;
-    Logf("republicmp  REPUBLICS: the cut - normal (%.3f, %.3f), %.0f m from the centre (world +0x1090 %d, 0xA54BC0 %d)",
-         g_cut.nx, g_cut.nz, g_cut.offset, *(int*)(World_Object() + 0x1090), *(unsigned char*)(g_exeBase + 0xA54BC0));
+    g_savedCut = line;
+    g_cutSaved = true;
+
+    double side[RESOURCE_CHANNELS] = {};
+    for (const FramePoint& p : g_frameResources)
+        if (p.v < CutAt(line, p.u)) side[p.kind] += p.amount;
+    Logf("republicmp  REPUBLICS: the cut - direction (%.3f, %.3f), %d knots %.0f m apart; crossings %d, %d off an even share; "
+         "resources %.1f%% off, the worst %.1f%%",
+         line.nx, line.nz, knots, line.step, (int)g_crossings.size(), score.crossingsOff, score.resourcesOff * 100.0,
+         score.worstOff * 100.0);
+    for (int i = 0; i < RESOURCE_CHANNELS; i++)
+        if (g_resourceTotal[i] > 0)
+            Logf("republicmp  REPUBLICS:   resource %d: half 0 has %.1f%%", i, 100.0 * side[i] / g_resourceTotal[i]);
+    std::vector<Crossing>().swap(g_crossings);
+    std::vector<ResourcePoint>().swap(g_resources);
+    std::vector<FramePoint>().swap(g_frameResources);
+    std::vector<FramePoint>().swap(g_frameCrossings);
+    std::vector<FramePoint>().swap(g_frameCells);
+}
+
+// g_savedCut holds this world's cut from its first measure until the next load: a
+// host who plays on alone and takes a new player saves the same line.
+static void WriteCutSection()
+{
+    if (g_cutReady) {
+        g_savedCut = g_cut;
+        g_cutSaved = true;
+    }
+    if (!g_cutSaved) return;
+    float v[4 + MAX_KNOTS] = { g_savedCut.nx, g_savedCut.nz, g_savedCut.startU, g_savedCut.step };
+    memcpy(v + 4, g_savedCut.off, sizeof(float) * g_savedCut.knots);
+    ModSave_PutInt("knots", g_savedCut.knots);
+    ModSave_PutFloats("line", v, 4 + g_savedCut.knots);
+}
+
+static void ReadCutSection(bool found)
+{
+    g_cutSaved = false;
+    long long knots = 0;
+    if (!found || !ModSave_GetInt("knots", &knots) || knots < 2 || knots > MAX_KNOTS) return;
+    float v[4 + MAX_KNOTS];
+    if (!ModSave_GetFloats("line", v, 4 + (int)knots) || v[3] <= 0) return;
+    memset(&g_savedCut, 0, sizeof(g_savedCut));
+    g_savedCut.nx = v[0];
+    g_savedCut.nz = v[1];
+    g_savedCut.startU = v[2];
+    g_savedCut.step = v[3];
+    g_savedCut.knots = (int)knots;
+    memcpy(g_savedCut.off, v + 4, sizeof(float) * (size_t)knots);
+    g_cutSaved = true;
 }
 
 // A Republics session is running here (the host's choice, on both PCs).
@@ -154,7 +522,13 @@ static const Cut* CurrentCut()
     float w, h;
     if (!g_cutReady && World_IsReady() && MapSize(&w, &h)) {
         g_cutLoads = loads;
-        MakeCut(w, h);
+        if (g_cutSaved) {
+            g_cut = g_savedCut;
+            g_cutReady = true;
+            Logf("republicmp  REPUBLICS: the cut comes from the save - direction (%.3f, %.3f), %d knots", g_cut.nx, g_cut.nz, g_cut.knots);
+        } else {
+            MakeCut(w, h);
+        }
     }
     return g_cutReady ? &g_cut : nullptr;
 }
@@ -170,7 +544,7 @@ static int LocalPlayer()
 // belongs to both.
 static int HalfOf(const float p[3], const Cut& c)
 {
-    float d = p[0] * c.nx + p[2] * c.nz - c.offset; // metres from the cut
+    float d = CutDistance(c, p);
     return d < -BORDER_BAND_M ? 0 : d > BORDER_BAND_M ? 1 : -1;
 }
 
@@ -200,7 +574,7 @@ static int OwnerHalf(const float pos[3])
 {
     const Cut* c = ReadyCut();
     if (!c) return -1;
-    return pos[0] * c->nx + pos[2] * c->nz - c->offset < 0 ? 0 : 1;
+    return CutDistance(*c, pos) < 0 ? 0 : 1;
 }
 
 // Commands_SetGlobalRule: the game's rules (the rules page) are the host's.
@@ -229,16 +603,17 @@ static void SampleBorder()
     g_borderLoads = g_cutLoads;
     float w, h;
     if (!MapSize(&w, &h)) return;
-    // Along the line from its point nearest the centre, both ways, inside the map.
+    // Along the line, end to end, inside the map.
     float len = sqrtf(w * w + h * h);
-    float foot[2] = { c->nx * c->offset, c->nz * c->offset }, dir[2] = { -c->nz, c->nx };
+    float dir[2] = { -c->nz, c->nx };
     int n = 0;
     for (int i = 0; i < BORDER_POINTS; i++) {
         float t = ((float)i / (BORDER_POINTS - 1) - 0.5f) * len;
+        float v = CutAt(*c, t);
         float* p = g_border[n];
-        p[0] = foot[0] + dir[0] * t;
+        p[0] = c->nx * v + dir[0] * t;
         p[1] = 0;
-        p[2] = foot[1] + dir[1] * t;
+        p[2] = c->nz * v + dir[1] * t;
         if (fabsf(p[0]) > w * 0.5f || fabsf(p[2]) > h * 0.5f) continue;
         float y;
         if (TerrainHook_HeightAt(p, &y)) p[1] = y + 2.0f; // just above the ground
@@ -258,34 +633,40 @@ static void SampleBorder()
         g_stripCount = g_signCount[0] = g_signCount[1] = 0;
         return;
     }
-    const float* a = g_border[first];
-    const float* b = g_border[last];
-    float dx = b[0] - a[0], dz = b[2] - a[2];
-    int pieces = (int)ceilf(sqrtf(dx * dx + dz * dz) / STRIP_STEP_M);
+    float ua = g_border[first][2] * c->nx - g_border[first][0] * c->nz;
+    float ub = g_border[last][2] * c->nx - g_border[last][0] * c->nz;
+    // A piece's own length is up to sqrt(1 + slope^2) times its length along u.
+    int pieces = (int)ceilf((ub - ua) * STRIP_STRETCH / STRIP_STEP_M);
     if (pieces < 1) pieces = 1;
     if (pieces > STRIP_POINTS - 1) pieces = STRIP_POINTS - 1;
     g_stripCount = 0; // the render thread draws none while they change
     for (int i = 0; i <= pieces; i++) {
-        float t = (float)i / pieces;
+        float t = ua + (ub - ua) * i / pieces;
+        float v = CutAt(*c, t);
         float* p = g_strip[i];
-        p[0] = a[0] + dx * t;
+        p[0] = c->nx * v + dir[0] * t;
         p[1] = 0;
-        p[2] = a[2] + dz * t;
+        p[2] = c->nz * v + dir[1] * t;
         float y;
         if (TerrainHook_HeightAt(p, &y)) p[1] = y; // as the game's: on the ground, drawn over it
     }
     g_stripCount = pieces + 1;
     // The signs: across from each piece's middle, on both sides, inside the map.
     for (int half = 0; half < 2; half++) {
-        float k = half == 0 ? -SIGN_INSET_M : SIGN_INSET_M; // half 0 lies below the cut's normal
+        float k = half == 0 ? -SIGN_INSET_M : SIGN_INSET_M; // half 0 lies below the line
         int m = 0;
         g_signCount[half] = 0;
         for (int i = 0; i < pieces; i++) {
+            float t = ua + (ub - ua) * (i + 0.5f) / pieces, slope;
+            float v = CutAt(*c, t, &slope);
+            float across = k / sqrtf(1.0f + slope * slope); // the normal of this piece: (n - slope * dir), normalized
             float* p = g_signs[half][m];
-            p[0] = a[0] + dx * (i + 0.5f) / pieces + c->nx * k;
+            p[0] = c->nx * v + dir[0] * t + (c->nx - slope * dir[0]) * across;
             p[1] = 0;
-            p[2] = a[2] + dz * (i + 0.5f) / pieces + c->nz * k;
+            p[2] = c->nz * v + dir[1] * t + (c->nz - slope * dir[1]) * across;
             if (OutOfPlayable(p)) continue;
+            float d = CutDistance(*c, p);
+            if (half == 0 ? d >= 0 : d <= 0) continue; // past a bend, on the other's side
             float y;
             p[1] = (TerrainHook_HeightAt(p, &y) ? fmaxf(y, 0.0f) : 0.0f) + SIGN_LIFT_M;
             m++;
@@ -391,10 +772,18 @@ static void DrawOnMinimap()
     int strip = g_stripCount, count = g_borderCount;
     float cx, cy, k;
     if (!Active() || (strip < 2 && count < 2) || !Minimap_Frame(&cx, &cy, &k)) return;
-    const float* a = strip >= 2 ? g_strip[0] : g_border[0];
-    const float* b = strip >= 2 ? g_strip[strip - 1] : g_border[count - 1];
-    float seg[4] = { cx + a[0] * k, cy - a[2] * k, cx + b[0] * k, cy - b[2] * k };
-    Minimap_DrawSegments(seg, 1, fmaxf(2.0f, k * 80.0f), kMinimapRed);
+    const float (*points)[3] = strip >= 2 ? g_strip : g_border;
+    int n = strip >= 2 ? strip : count;
+    // Every piece of the broken line.
+    static float s_seg[BORDER_POINTS * 4]; // render thread
+    for (int i = 0; i + 1 < n; i++) {
+        float* seg = s_seg + i * 4;
+        seg[0] = cx + points[i][0] * k;
+        seg[1] = cy - points[i][2] * k;
+        seg[2] = cx + points[i + 1][0] * k;
+        seg[3] = cy - points[i + 1][2] * k;
+    }
+    Minimap_DrawSegments(s_seg, n - 1, fmaxf(2.0f, k * 80.0f), kMinimapRed);
 }
 
 static bool WantsOverlay()
@@ -422,8 +811,9 @@ static void DrawOverlay()
 
 static void DrawPage()
 {
-    ImGui::TextWrapped("Each player builds their own republic on one map, split in two along a diagonal "
-                       "moved so both halves get the same playable area. A red line on the map and the minimap shows it.");
+    ImGui::TextWrapped("Each player builds their own republic on one map, split in two along a line the world's seed "
+                       "picks, with bends every few kilometres: both halves get the same playable area, and as even a share of the border crossings and "
+                       "resources as the map allows. A red line on the map and the minimap shows it.");
     ImGui::Spacing();
     ImGui::TextColored(ImVec4(0.95f, 0.8f, 0.25f, 1.0f),
                        "In development: buildings and networks stay on your half; each republic has its own money.");
@@ -452,6 +842,7 @@ void Republics_Bind(const ModHost* host)
     Commands_SetAreaRule(AreaRule);
     Commands_SetGlobalRule(GlobalRule);
     Wallets_SetHalfRule(OwnerHalf);
+    ModSave_Add("republics", WriteCutSection, ReadCutSection);
     Determinism_AddFrameObserver(SampleBorder);
     Determinism_AddStepObserver(SampleBorder);
     SimPatches_SetUnderUi(DrawUnderUi);

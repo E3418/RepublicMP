@@ -41,6 +41,7 @@ static std::string* g_out = nullptr;             // the text being written
 static const std::vector<Entry>* g_in = nullptr; // the file being read
 static const char* g_inSection = nullptr;
 static char g_loadName[NAME_BYTES];             // the save the load in progress reads ("": none)
+static char g_lastLoadName[NAME_BYTES];         // the same, kept after the load
 static unsigned long long g_worldSeed = 0;       // 0: no world loaded yet
 static unsigned long long g_loadSeed = 0;        // the world seed in the save being loaded (0: none)
 
@@ -249,6 +250,7 @@ void ModSave_BeforeLoad()
 {
     // A new game on a built-in terrain leaves the last save's name in place.
     if (TerrainLoad() || !CopyName((const char*)(g_exeBase + LOAD_NAME_RVA), g_loadName)) g_loadName[0] = 0;
+    memcpy(g_lastLoadName, g_loadName, sizeof(g_lastLoadName));
     // Read now as well: the load itself draws random numbers.
     g_loadSeed = 0;
     std::vector<Entry> entries;
@@ -312,6 +314,11 @@ void ModSave_AfterLoad()
 void ModSave_Bind(const ModHost* host)
 {
     ModHost_Bind(host);
+}
+
+bool ModSave_LoadedFolder(char* out, size_t outSize)
+{
+    return g_lastLoadName[0] && SaveFolder(g_lastLoadName, out, outSize);
 }
 
 bool ModSave_Install()
