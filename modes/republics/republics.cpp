@@ -139,10 +139,9 @@ static bool OutOfPlayable(const float p[3])
 // A broken line: a few general directions drawn from the world's seed, and for
 // each, knots about KNOT_SPACING_M apart moved at random; the most even result
 // wins. After every move the whole line shifts so the playable area stays half
-// and half, and what is judged is the border crossings first, then the resources,
-// the worst-shared one counting double: they lie in a few big deposits, so an even
-// share often means the line goes through one. The limits below keep it a border
-// and not a saw.
+// and half. What is judged, in order: the border crossings; the resources' amounts,
+// the worst-shared one counting double; how many deposits (patches) each side has,
+// whole ones where it can be, and a resource with only one deposit cut in two.
 //
 // Only exact arithmetic is used (no sine or exp: the CRT's differ by CPU), and all
 // it reads is the same on every PC: the save everyone loaded. The cut is kept in
@@ -156,6 +155,11 @@ static bool OutOfPlayable(const float p[3])
 #define MAX_SLOPE 1.2f        // of a piece: about 50 degrees off the general direction
 #define MAX_BEND 1.5f         // the change of slope at a knot
 #define MAX_SWING 0.3f        // how far a knot may go, of the map's smaller side
+#define DEPOSIT_MIN_SHARE 0.05 // of its resource: smaller deposits are not counted as patches
+#define DEPOSIT_REACH 2       // cells: deposits this close are one
+#define PATCH_WEIGHT 0.25     // one patch beyond an even count
+#define CUT_WEIGHT 0.08       // a deposit cut in halves, while the resource has others
+#define LONE_WEIGHT 0.5       // the only deposit of a resource not cut in halves
 #define RESOURCE_CHANNELS 5 // coal, iron, oil, bauxite, uranium: resourcemap RGB, resourcemap2 RG
 #define RESOURCE_CELL 8     // texels added into one point
 #define MAX_CROSSINGS 1024
@@ -173,7 +177,11 @@ static bool OutOfPlayable(const float p[3])
 
 struct ResourcePoint {
     float x, z, amount;
+    int channel, deposit;
+};
+struct Deposit {
     int channel;
+    double amount;
 };
 struct Crossing {
     float x, z;
@@ -181,6 +189,8 @@ struct Crossing {
 };
 
 static std::vector<ResourcePoint> g_resources;
+static std::vector<Deposit> g_deposits;
+static std::vector<double> g_depositLow; // ScoreCut: each deposit's amount below the line
 static double g_resourceTotal[RESOURCE_CHANNELS];
 static std::vector<Crossing> g_crossings;
 static int g_cells = 0; // playable cells in g_cellX / g_cellZ
@@ -219,16 +229,40 @@ static void ReadResourceMap(const char* folder, const char* name, int firstChann
                 for (unsigned x = 0; x < width; x++)
                     for (int c = 0; c < channels; c++)
                         sums[(z / RESOURCE_CELL * cols + x / RESOURCE_CELL) * channels + c] += row[x * 4 + c];
-            for (unsigned r = 0; r < rows; r++)
-                for (unsigned q = 0; q < cols; q++)
-                    for (int c = 0; c < channels; c++) {
-                        double amount = sums[(r * cols + q) * channels + c];
-                        if (amount <= 0) continue;
+            // Each channel's cells, joined into its deposits.
+            std::vector<int> ids(cols * rows), stack;
+            for (int c = 0; c < channels; c++) {
+                std::fill(ids.begin(), ids.end(), -1);
+                for (unsigned start = 0; start < cols * rows; start++) {
+                    double first = sums[start * channels + c];
+                    if (first <= 0 || ids[start] >= 0) continue;
+                    int id = (int)g_deposits.size();
+                    double amount = 0;
+                    ids[start] = id;
+                    stack.push_back((int)start);
+                    while (!stack.empty()) {
+                        unsigned at = (unsigned)stack.back();
+                        stack.pop_back();
+                        double here = sums[at * channels + c];
+                        amount += here;
+                        unsigned r = at / cols, q = at % cols;
                         float px = ((q + 0.5f) * RESOURCE_CELL / width - 0.5f) * w;
                         float pz = ((r + 0.5f) * RESOURCE_CELL / height - 0.5f) * h;
-                        g_resources.push_back({ px, pz, (float)amount, firstChannel + c });
-                        g_resourceTotal[firstChannel + c] += amount;
+                        g_resources.push_back({ px, pz, (float)here, firstChannel + c, id });
+                        for (int dr = -DEPOSIT_REACH; dr <= DEPOSIT_REACH; dr++)
+                            for (int dq = -DEPOSIT_REACH; dq <= DEPOSIT_REACH; dq++) {
+                                int nr = (int)r + dr, nq = (int)q + dq;
+                                if (nr < 0 || nq < 0 || nr >= (int)rows || nq >= (int)cols) continue;
+                                unsigned next = (unsigned)nr * cols + (unsigned)nq;
+                                if (ids[next] >= 0 || sums[next * channels + c] <= 0) continue;
+                                ids[next] = id;
+                                stack.push_back((int)next);
+                            }
                     }
+                    g_deposits.push_back({ firstChannel + c, amount });
+                    g_resourceTotal[firstChannel + c] += amount;
+                }
+            }
         }
     }
     fclose(f);
@@ -269,13 +303,15 @@ struct CutScore {
     int crossingsOff;    // crossings beyond an even share (an odd count leaves one over)
     double resourcesOff; // mean of each resource's |a - b| / (a + b)
     double worstOff;     // the most unevenly shared one
-    double Total() const { return crossingsOff + resourcesOff + worstOff; }
+    int patchesOff;      // deposits beyond an even count, each to the side with more of it
+    double cuts;         // deposits cut, by how evenly; a lone one by how unevenly
+    double Total() const { return crossingsOff + resourcesOff + worstOff + patchesOff * PATCH_WEIGHT + cuts; }
 };
 
 // The measured things in the direction's own frame.
 struct FramePoint {
     float u, v, amount;
-    int kind;
+    int kind, deposit;
 };
 static std::vector<FramePoint> g_frameResources, g_frameCrossings, g_frameCells;
 
@@ -285,11 +321,11 @@ static void MakeFrame(float nx, float nz)
     g_frameCrossings.clear();
     g_frameCells.clear();
     for (const ResourcePoint& p : g_resources)
-        g_frameResources.push_back({ p.z * nx - p.x * nz, p.x * nx + p.z * nz, p.amount, p.channel });
+        g_frameResources.push_back({ p.z * nx - p.x * nz, p.x * nx + p.z * nz, p.amount, p.channel, p.deposit });
     for (const Crossing& p : g_crossings)
-        g_frameCrossings.push_back({ p.z * nx - p.x * nz, p.x * nx + p.z * nz, 1.0f, p.network });
+        g_frameCrossings.push_back({ p.z * nx - p.x * nz, p.x * nx + p.z * nz, 1.0f, p.network, 0 });
     for (int k = 0; k < g_cells; k += CUT_CELL_STRIDE)
-        g_frameCells.push_back({ g_cellZ[k] * nx - g_cellX[k] * nz, g_cellX[k] * nx + g_cellZ[k] * nz, 1.0f, 0 });
+        g_frameCells.push_back({ g_cellZ[k] * nx - g_cellX[k] * nz, g_cellX[k] * nx + g_cellZ[k] * nz, 1.0f, 0, 0 });
 }
 
 // What moves the line, at the same u everywhere, so the cells lie half on each side.
@@ -305,11 +341,15 @@ static float AreaShift(const Cut& c)
 // The line as it would stand with the areas equal.
 static CutScore ScoreCut(const Cut& c)
 {
-    CutScore s = { 0, 0.0, 0.0 };
+    CutScore s = { 0, 0.0, 0.0, 0, 0.0 };
     float shift = AreaShift(c);
     double side[RESOURCE_CHANNELS] = {};
+    g_depositLow.assign(g_deposits.size(), 0.0);
     for (const FramePoint& p : g_frameResources)
-        if (p.v - shift < CutAt(c, p.u)) side[p.kind] += p.amount;
+        if (p.v - shift < CutAt(c, p.u)) {
+            side[p.kind] += p.amount;
+            g_depositLow[p.deposit] += p.amount;
+        }
     int used = 0;
     for (int i = 0; i < RESOURCE_CHANNELS; i++) {
         if (g_resourceTotal[i] <= 0) continue;
@@ -319,6 +359,21 @@ static CutScore ScoreCut(const Cut& c)
         used++;
     }
     if (used) s.resourcesOff /= used;
+    int patches[RESOURCE_CHANNELS] = {}, lows[RESOURCE_CHANNELS] = {};
+    for (const Deposit& d : g_deposits)
+        if (d.amount >= g_resourceTotal[d.channel] * DEPOSIT_MIN_SHARE) patches[d.channel]++;
+    for (size_t i = 0; i < g_deposits.size(); i++) {
+        const Deposit& d = g_deposits[i];
+        if (d.amount < g_resourceTotal[d.channel] * DEPOSIT_MIN_SHARE) continue;
+        double low = g_depositLow[i] / d.amount;
+        if (low >= 0.5) lows[d.channel]++;
+        if (patches[d.channel] == 1) s.cuts += fabs(2 * low - 1) * LONE_WEIGHT;
+        else s.cuts += (low < 0.5 ? low : 1 - low) * 2 * CUT_WEIGHT;
+    }
+    for (int i = 0; i < RESOURCE_CHANNELS; i++) {
+        int off = abs(2 * lows[i] - patches[i]);
+        if (patches[i] > 1 && off > patches[i] % 2) s.patchesOff += off - patches[i] % 2;
+    }
     int low[NET_MAX] = {}, all[NET_MAX] = {};
     for (const FramePoint& p : g_frameCrossings) {
         all[p.kind]++;
@@ -349,18 +404,6 @@ static bool CutAllowed(const Cut& c, float swing)
     return true;
 }
 
-// Moves the whole line so the playable cells lie half on each side.
-static void ShiftToEqualArea(Cut& c)
-{
-    for (int k = 0; k < g_cells; k++) {
-        float u = g_cellZ[k] * c.nx - g_cellX[k] * c.nz, v = g_cellX[k] * c.nx + g_cellZ[k] * c.nz;
-        g_inside[k] = v - CutAt(c, u);
-    }
-    std::nth_element(g_inside, g_inside + g_cells / 2, g_inside + g_cells);
-    float shift = g_inside[g_cells / 2];
-    for (int i = 0; i < c.knots; i++) c.off[i] += shift;
-}
-
 // Main thread. A fault leaves no cut: it is measured again next time, as a
 // half-measured one would differ between the PCs.
 static void MakeCut(float w, float h)
@@ -375,6 +418,7 @@ static void MakeCut(float w, float h)
             g_cellZ[g_cells++] = p[2];
         }
     g_resources.clear();
+    g_deposits.clear();
     g_crossings.clear();
     memset(g_resourceTotal, 0, sizeof(g_resourceTotal));
     char folder[MAX_PATH];
@@ -398,7 +442,7 @@ static void MakeCut(float w, float h)
     line.step = len / (float)(knots - 1);
     line.knots = knots;
     bestLine = line;
-    CutScore score = { INT_MAX, 2.0, 2.0 };
+    CutScore score = { 1000000, 2.0, 2.0, 0, 0.0 };
     for (int direction = 0; direction < CUT_DIRECTIONS; direction++) {
         // A point on the circle by exact arithmetic: t in [-1, 1) covers every line's direction.
         double t = CutRandom(&seed) * 2.0 - 1.0;
@@ -438,27 +482,43 @@ static void MakeCut(float w, float h)
             line.off[knot] = was;
         }
     }
+    // The line as it was judged, shifted exactly as it was: the deposits lie close
+    // to it, so any other shift would undo what was found.
     line = bestLine;
     MakeFrame(line.nx, line.nz);
-    ShiftToEqualArea(line);
+    float shift = AreaShift(line);
+    for (int i = 0; i < line.knots; i++) line.off[i] += shift;
     score = ScoreCut(line);
     g_cut = line;
     g_cutReady = true;
     g_savedCut = line;
     g_cutSaved = true;
 
-    double side[RESOURCE_CHANNELS] = {};
-    for (const FramePoint& p : g_frameResources)
-        if (p.v < CutAt(line, p.u)) side[p.kind] += p.amount;
-    Logf("republicmp  REPUBLICS: the cut - direction (%.3f, %.3f), %d knots %.0f m apart; crossings %d, %d off an even share; "
-         "resources %.1f%% off, the worst %.1f%%",
-         line.nx, line.nz, knots, line.step, (int)g_crossings.size(), score.crossingsOff, score.resourcesOff * 100.0,
-         score.worstOff * 100.0);
-    for (int i = 0; i < RESOURCE_CHANNELS; i++)
-        if (g_resourceTotal[i] > 0)
-            Logf("republicmp  REPUBLICS:   resource %d: half 0 has %.1f%%", i, 100.0 * side[i] / g_resourceTotal[i]);
+    int lowCells = 0;
+    for (int k = 0; k < g_cells; k++) {
+        float u = g_cellZ[k] * line.nx - g_cellX[k] * line.nz, v = g_cellX[k] * line.nx + g_cellZ[k] * line.nz;
+        if (v < CutAt(line, u)) lowCells++;
+    }
+    Logf("republicmp  REPUBLICS: the cut - direction (%.3f, %.3f), %d knots %.0f m apart; half 0 has %.1f%% of the area; "
+         "crossings %d, %d off an even share; patches %d off",
+         line.nx, line.nz, knots, line.step, 100.0 * lowCells / g_cells, (int)g_crossings.size(), score.crossingsOff, score.patchesOff);
+    for (int i = 0; i < RESOURCE_CHANNELS; i++) {
+        if (g_resourceTotal[i] <= 0) continue;
+        double low = 0;
+        int lows = 0, patches = 0;
+        for (size_t d = 0; d < g_deposits.size(); d++) {
+            if (g_deposits[d].channel != i) continue;
+            low += g_depositLow[d];
+            if (g_deposits[d].amount < g_resourceTotal[i] * DEPOSIT_MIN_SHARE) continue;
+            patches++;
+            if (g_depositLow[d] * 2 >= g_deposits[d].amount) lows++;
+        }
+        Logf("republicmp  REPUBLICS:   resource %d: half 0 has %.1f%%, patches %d of %d", i, 100.0 * low / g_resourceTotal[i], lows, patches);
+    }
     std::vector<Crossing>().swap(g_crossings);
     std::vector<ResourcePoint>().swap(g_resources);
+    std::vector<Deposit>().swap(g_deposits);
+    std::vector<double>().swap(g_depositLow);
     std::vector<FramePoint>().swap(g_frameResources);
     std::vector<FramePoint>().swap(g_frameCrossings);
     std::vector<FramePoint>().swap(g_frameCells);

@@ -13,7 +13,7 @@
 - **Fix: "citizens" desyncs around construction sites** - the game placed a
   site's worker at a point read from before the start of the piece's points
   on some stages, which is whatever the memory held on that PC. The worker now
-  stands at the piece's first point. Protocol 63 - every player needs this
+  stands at the piece's first point. Protocol 64 - every player needs this
   build.
 - **Fix: a player's view after a re-sync** - every player got the host's view
   back: the game had already set the camera from the save when RepublicMP read
@@ -56,8 +56,10 @@
 - **A random, balanced border** - a broken line now, with bends about 2.5 km
   apart, from the world's seed, the same on every PC and kept in the save. Both
   halves get the same playable area, and the line is moved until the border
-  crossings and then the five resources are shared as evenly as the map allows;
-  it may run through a big deposit to do so. The log says how even it came out.
+  crossings and then the five resources are shared as evenly as the map allows,
+  counting their amounts and how many deposits each side has. Deposits stay
+  whole where they can; a resource with only one is cut in two. The log says how
+  even it came out.
 - **The cancel tools on one's own half only** (#49) - a network's cancel tool
   (cancel road and the others) removed a piece anywhere, the other
   republic's too. A piece with an end on the other half is now refused, with
