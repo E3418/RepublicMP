@@ -283,6 +283,73 @@ static void NearBuildingsEnd()
 // Placement
 // ---------------------------------------------------------------------------
 //
+// Bit BUILDING_PICK_FINISHED: placed as usual, so the ground is levelled and painted,
+// then finished as the game's world generation finishes what it placed (4ee3d8..4ee3fa,
+// the networks' pieces 4ee43d..4ee47e): full progress and one construction update
+// with a step (a zero step reads as a pause at 159234), which runs a site's own end.
+#define SITE_UPDATE_RVA 0x159070
+#define SITE_FINISH_STEP 0.1f            // 4ee3bb
+#define NET_COUNT_OFFSET 0x14034         // world: the networks in the table
+#define NET_FIRST_OFFSET 0x14038         // world: entries of 0x50, the network first
+#define NET_STRIDE 0x50
+#define NET_MAX 64
+#define NET_EDGES_OFFSET 0x2B0
+#define EDGE_NODE0_OFFSET 0x20
+#define EDGE_NODE1_OFFSET 0x28
+#define EDGE_SITE_OFFSET 0x138
+#define NODE_POS_OFFSET 4
+#define FINISH_RADIUS_M 150.0f
+typedef unsigned __int64 (*SiteUpdateFn)(__int64 world, BYTE* site, float step, unsigned __int64 a4);
+
+static void FinishSite(__int64 world, BYTE* site)
+{
+    *(float*)(site + OBJ_PROGRESS_OFFSET) = 1.0f;
+    ((SiteUpdateFn)((uintptr_t)g_exeBase + SITE_UPDATE_RVA))(world, site, SITE_FINISH_STEP, 0);
+}
+
+static bool NodeNear(const BYTE* node, float x, float z)
+{
+    if (!node) return false;
+    const float* p = (const float*)(node + NODE_POS_OFFSET);
+    float dx = p[0] - x, dz = p[2] - z;
+    return dx * dx + dz * dz < FINISH_RADIUS_M * FINISH_RADIUS_M;
+}
+
+// One piece's site around x, z, or none. Looked for anew each time: an end of a
+// site changes the network's lists, and the game's loop starts over too (4ee494).
+static BYTE* NetworkSiteNear(__int64 world, float x, float z)
+{
+    int networks = *(int*)(world + NET_COUNT_OFFSET);
+    if (networks < 0 || networks > NET_MAX) return nullptr;
+    for (int t = 0; t < networks; t++) {
+        BYTE* net = *(BYTE**)(world + NET_FIRST_OFFSET + (size_t)t * NET_STRIDE);
+        if (!net) continue;
+        BYTE** it = *(BYTE***)(net + NET_EDGES_OFFSET);
+        BYTE** end = *(BYTE***)(net + NET_EDGES_OFFSET + 8);
+        for (; it && it < end; ++it) {
+            BYTE* edge = *it;
+            if (!edge) continue;
+            BYTE* site = *(BYTE**)(edge + EDGE_SITE_OFFSET);
+            if (site && (NodeNear(*(BYTE**)(edge + EDGE_NODE0_OFFSET), x, z) || NodeNear(*(BYTE**)(edge + EDGE_NODE1_OFFSET), x, z)))
+                return site;
+        }
+    }
+    return nullptr;
+}
+
+static void FinishPlaced(__int64 world, BYTE* building, float x, float z)
+{
+    FinishSite(world, building);
+    int pieces = 0;
+    while (pieces < 256) {
+        BYTE* site = NetworkSiteNear(world, x, z);
+        if (!site) break;
+        FinishSite(world, site);
+        pieces++;
+    }
+    Logf("republicmp  BUILDINGS: finished, with %d network pieces around it", pieces);
+}
+
 // The placement is the building tool's own click frame: 2bade0 as the tool
 // calls it (param_4 = 0, param_8 = 0) with the button pressed this frame and
 // the clicking PC's cursor, yaw and mirror. param_4 = 0 is what lays the
@@ -376,6 +443,10 @@ bool Buildings_ApplyPlacementCommand(const BuildingMsg& msg)
                     SnapshotBeforePlacement();
                     g_origUniversal(thisPtr, typeName, 0, 1, msg.param5, 0xffffffff, 0, 1);
                     placed = PickMainNewObject(msg.cursorX, msg.cursorZ, &newCount, &delta) != nullptr;
+                }
+                if (placed && (msg.pickModes & BUILDING_PICK_FINISHED)) {
+                    void* building = PickMainNewObject(msg.cursorX, msg.cursorZ, &newCount, &delta);
+                    if (building) FinishPlaced(thisPtr, (BYTE*)building, msg.cursorX, msg.cursorZ);
                 }
             } __finally {
                 *pressed = 0;

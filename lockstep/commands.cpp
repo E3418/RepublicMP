@@ -470,8 +470,8 @@ void Commands_SetGlobalRule(CommandGlobalFn fn) { g_globalRule = fn; }
 static CommandSpawnedFn g_spawned = nullptr;
 void Commands_SetSpawned(CommandSpawnedFn fn) { g_spawned = fn; }
 
-// A building placed as the build-with-money tool does, so it stands finished at
-// once, with the game's "no charges" flag on while it is made: nobody pays.
+// A building finished at once (BUILDING_PICK_FINISHED), with the game's "no charges"
+// flag on while it is made: nobody pays.
 #define WORLD_FREE_BUILDING 0x578
 #define BORDER_CHECK_OFF_RVA 0xA54BC0
 static bool ApplySpawnBuilding(const BuildingMsg& m)
@@ -490,6 +490,8 @@ static bool ApplySpawnBuilding(const BuildingMsg& m)
     RemoteSounds_Silence(false);
     *anywhere = wasAnywhere;
     *free = wasFree;
+    if (*Rubles() != rub || *Dollars() != usd)
+        Logf("republicmp  LOCKSTEP: a spawned building would have cost %.2f rubles %.2f dollars - put back", rub - *Rubles(), usd - *Dollars());
     *Rubles() = rub;
     *Dollars() = usd;
     return ok;

@@ -38,6 +38,7 @@ struct BuildingMsg {
     int pickModes;
 };
 #define BUILDING_PICK_NO_LINKS 4
+#define BUILDING_PICK_FINISHED 8 // finished at once, as the game's world generation finishes what it places
 #define BUILDING_NO_LINKS_BINDING "BUILDING_SLOW_ROTATE"
 
 void Buildings_Bind(const ModHost* host);

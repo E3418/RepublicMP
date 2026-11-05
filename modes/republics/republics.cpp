@@ -728,7 +728,10 @@ static void TrySpawnCustoms(const Cut& c)
                 continue;
             }
             g_spawnDone = true;
-            Logf("republicmp  REPUBLICS: %d customs houses on the line (pass %d)", g_spawnMade, g_spawnPass);
+            double rub = 0, usd = 0;
+            World_Money(&rub, &usd);
+            Logf("republicmp  REPUBLICS: %d customs houses on the line (pass %d); the balances now %.2f rubles %.2f dollars", g_spawnMade,
+                 g_spawnPass, rub, usd);
             return;
         }
         float clear = g_spawnPass < 2 ? SPAWN_CLEAR_M : SPAWN_EASY_CLEAR_M;
@@ -765,10 +768,13 @@ static void TrySpawnCustoms(const Cut& c)
             m.y = m.cursorY = y;
             m.z = m.cursorZ = z;
             m.cursorRot = yaw;
-            m.pickModes = BUILDING_PICK_NO_LINKS;
+            m.pickModes = BUILDING_PICK_NO_LINKS | BUILDING_PICK_FINISHED;
             strncpy_s(m.typeName, type.name, _TRUNCATE);
             g_spawnWaiting = true;
-            Logf("republicmp  REPUBLICS: pass %d place %d: %s at (%.0f, %.0f), height %.1f", g_spawnPass, g_spawnPlace, m.typeName, x, z, y);
+            double rub = 0, usd = 0;
+            World_Money(&rub, &usd);
+            Logf("republicmp  REPUBLICS: pass %d place %d: %s at (%.0f, %.0f), height %.1f; the balances before it %.2f rubles %.2f dollars",
+                 g_spawnPass, g_spawnPlace, m.typeName, x, z, y, rub, usd);
             if (lockstep) Commands_Submit(LS_CMD_SPAWN_BUILDING, &m, sizeof(m));
             else Commands_SpawnBuildingNow(m);
             return;

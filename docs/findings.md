@@ -333,6 +333,15 @@ Inferred, several sites each.
   turns the check off, and the next one too: a `$BORDER_BUILDING` (type `+0xAE0`)
   must stand on the border, else `0x2CAF91` -> `0x411270` refuses with error 5,
   `0x4E1F`.
+- **A building finished at once.** World generation places as usual, then sets
+  progress `+0x604` to 1 and calls `0x159070` with step 0.1 (`0x4EE3D8`..`0x4EE3FA`),
+  and does the same for each network piece with a site at edge `+0x138`, starting
+  over after each (`0x4EE43D`..). A zero step reads as a pause at `0x159234`. The
+  third argument of `0x2BADE0` is another thing: used only for the load's air customs
+  (`zoll_air_*`), it skips levelling and leaves the model hidden: fragment `+0x55` is
+  set at `0x2D636E` for every building, and the engine draws no model with `+0x54` or
+  `+0x55` (DLL `0x338F2`); a site's end clears it (`0x15C576`). The customs models hold
+  no ground: the flat surfaces near y = 0 total under 70 m2.
 
 ## Clock and threads
 
