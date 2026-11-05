@@ -18,7 +18,7 @@
 // Not carried on purpose: the personal "notify me" checkboxes.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
 #define SETTINGS_SCAN_INTERVAL_MS 250 // the field diff's scan
 #define SETTINGS_CLICK_WINDOW_MS 1500
@@ -36,7 +36,7 @@ struct BuildingSettingMsg {
 };
 #define SETTINGS_FIELD_SLOT 1000
 
-void BuildingSettings_Bind(const TsmHost* host);
+void BuildingSettings_Bind(const ModHost* host);
 
 // Per-frame (game thread, Present hook): tracks the clicks and runs the field
 // diff when it is on.

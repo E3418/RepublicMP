@@ -14,9 +14,9 @@
 #define SELECTED_TOOL_OFFSET 0xD428      // qword: the selected tool, 0 = none (Escape opens the menu only then)
 #define TOOLBAR_SCALE_RVA 0x992088       // float: the toolbar's scale s
 
-void SystemMenu_Bind(const TsmHost* host)
+void SystemMenu_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 bool SystemMenu_IsOpen()

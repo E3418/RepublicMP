@@ -70,11 +70,10 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
-  <!-- Output goes to TesmioLoader\build\plugins\RepublicMP.dll, same place
-       TesmioLoader expects plugins with no extra config. Project lives in
-       TesmioLoader\RepublicMP\, so build\plugins is one level up. -->
+  <!-- Output goes to build\game\, next to the proxy: those two files are what
+       goes into the game's folder. -->
   <PropertyGroup>
-    <OutDir>$(SolutionDir)..\build\plugins\</OutDir>
+    <OutDir>$(SolutionDir)build\game\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\$(Platform)\</IntDir>
     <TargetName>RepublicMP</TargetName>
   </PropertyGroup>
@@ -91,13 +90,12 @@
            instead of the ANSI code page - needed for the status console. -->
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <!-- ..\src - so #include "tesmio_plugin.h" resolves without a manual
-           relative path (TesmioLoader\src, one level above this project).
+      <!-- core - so #include "host.h" resolves without a relative path.
            third_party\imgui(\backends) - vendored Dear ImGui 1.92.8, see
            hooks\imgui_hook.cpp. third_party\imrad - single-header ImRAD
            runtime support lib (ImRad::HBox etc.), used by ui\main_menu.cpp
            to reuse the layout designed in the ImRAD editor. -->
-      <AdditionalIncludeDirectories>..\src;third_party\imgui;third_party\imgui\backends;third_party\imrad;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>core;third_party\imgui;third_party\imgui\backends;third_party\imrad;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <!-- /MTd - static CRT, so the plugin needs no vcruntime redistributables
            alongside SOVIET64.exe. -->
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
@@ -120,7 +118,7 @@
       <ConformanceMode>true</ConformanceMode>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>..\src;third_party\imgui;third_party\imgui\backends;third_party\imrad;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>core;third_party\imgui;third_party\imgui\backends;third_party\imrad;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
     </ClCompile>
     <Link>
@@ -139,7 +137,7 @@
       <ConformanceMode>true</ConformanceMode>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>..\src;third_party\imgui;third_party\imgui\backends;third_party\imrad;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>core;third_party\imgui;third_party\imgui\backends;third_party\imrad;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
     </ClCompile>
     <Link>
@@ -160,7 +158,7 @@
       <ConformanceMode>true</ConformanceMode>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>..\src;third_party\imgui;third_party\imgui\backends;third_party\imrad;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>core;third_party\imgui;third_party\imgui\backends;third_party\imrad;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
     </ClCompile>
     <Link>
@@ -176,6 +174,7 @@
   <ItemGroup>
     <ClCompile Include="game\save_load.cpp" />
     <ClCompile Include="core\main.cpp" />
+    <ClCompile Include="core\host.cpp" />
     <ClCompile Include="core\profile.cpp" />
     <ClCompile Include="core\frame_timing.cpp" />
     <ClCompile Include="determinism\site_watch.cpp" />
@@ -250,6 +249,9 @@
     <ClCompile Include="world\buildings.cpp" />
     <ClCompile Include="world\networks.cpp" />
     <ClCompile Include="save\save_zip.cpp" />
+    <ClCompile Include="save\mod_save.cpp" />
+    <ClCompile Include="save\camera_keep.cpp" />
+    <ClCompile Include="lockstep\remote_sounds.cpp" />
     <ClCompile Include="transport\network.cpp" />
     <ClCompile Include="transport\steam_net.cpp" />
     <ClCompile Include="transport\steam_lobby.cpp" />
@@ -346,6 +348,7 @@
     <ClInclude Include="world\view_list_scope.h" />
     <ClInclude Include="world\menus_closed.h" />
     <ClInclude Include="game\input_block.h" />
+    <ClInclude Include="core\host.h" />
     <ClInclude Include="core\version.h" />
     <ClInclude Include="core\profile.h" />
     <ClInclude Include="core\frame_timing.h" />
@@ -358,6 +361,9 @@
     <ClInclude Include="world\build_mode.h" />
     <ClInclude Include="core\host_config.h" />
     <ClInclude Include="save\save_zip.h" />
+    <ClInclude Include="save\mod_save.h" />
+    <ClInclude Include="save\camera_keep.h" />
+    <ClInclude Include="lockstep\remote_sounds.h" />
     <ClInclude Include="transport\network.h" />
     <ClInclude Include="transport\steam_net.h" />
     <ClInclude Include="transport\steam_lobby.h" />

@@ -1,8 +1,8 @@
 # RepublicMP
 
-Multiplayer mod for *Workers & Resources: Soviet Republic*, built as a
-[TesmioLoader](https://github.com/MaxLegend/TesmioLoader) plugin. Up to four
-players share one city (**co-op**): the host's game is transferred to the
+Multiplayer mod for *Workers & Resources: Soviet Republic*. It starts through
+a small proxy DLL with the game itself and needs no mod loader, so it works
+alongside any other one. Up to four players share one city (**co-op**): the host's game is transferred to the
 joining players, and from there every game runs the same simulation tick by
 tick (**lockstep**).
 
@@ -10,7 +10,7 @@ A second mode, **Republics** (in development), gives two players a republic
 each on one map cut in two halves of equal playable area; so far each builds on their own half
 only, and money is still shared.
 
-**Status:** alpha, tested with up to four players. Current version: **0.7.5**
+**Status:** alpha, tested with up to four players. Current version: **0.7.6**
 ([changelog](CHANGELOG.md)).
 
 ## Support and community
@@ -79,24 +79,23 @@ mismatch refuses it.
 
 ## Building
 
-1. Clone [TesmioLoader](https://github.com/MaxLegend/TesmioLoader) and clone
-   this repository into its root folder (`TesmioLoader\RepublicMP`). The
-   project uses `TesmioLoader\src` for headers and writes the DLL to
-   `TesmioLoader\build\plugins\`, where TesmioLoader loads plugins from.
-2. Optional: copy `mp_config.h.example` to `mp_config.h` and set
+1. Optional: copy `mp_config.h.example` to `mp_config.h` and set
    `REPUBLICMP_HOST_IP` to prefill the host address. The file is gitignored;
    without it the address is simply typed in the game.
-3. Open `RepublicMP.slnx` in Visual Studio 2026 (toolset v145) and build
+2. Open `RepublicMP.slnx` in Visual Studio 2026 (toolset v145) and build
    **Release x64**, or from a developer prompt:
 
    ```
-   MSBuild RepublicMP.vcxproj /p:Configuration=Release /p:Platform=x64
+   MSBuild RepublicMP.slnx /p:Configuration=Release /p:Platform=x64
    ```
+
+   Both DLLs go to `build\game\`.
 
 ## Usage
 
-1. Both players start the game with TesmioLoader and the same
-   `RepublicMP.dll` installed.
+1. Every player copies `xinput9_1_0.dll` and the same `RepublicMP.dll` into
+   the game's folder, next to `SOVIET64.exe`, and starts the game as usual.
+   Deleting the two files removes the mod.
 2. The host opens the **MULTIPLAYER** page - in the game's main menu, or in
    the Multiplayer section of the Escape menu in a city - picks **Co-op** or
    **Republics**,
@@ -136,8 +135,8 @@ welcome as a pull request.
 The **Debug** button in the main window opens the lockstep state, the
 determinism probe, the money trace (on by default: on a desync each log gets
 the balances and construction sites of the ticks before it) and the detailed
-log. A full log is written to
-`tesmioloader.log`; when reporting a problem, attach the logs of every
+log. A full log is written to `RepublicMP\logs\republicmp.log` in the game's
+folder; when reporting a problem, attach the logs of every
 player.
 
 ## Versioning
@@ -148,11 +147,25 @@ capability is added, `PATCH` for fixes within a feature.
 `REPUBLICMP_PROTOCOL` in `version.h` is raised whenever a network message
 changes.
 
+## Authors
+
+- **E3418** - the mod, lockstep and determinism, the game hooks.
+- **Sohn** ([juniorsohn](https://github.com/juniorsohn)) - Steam P2P
+  transport and lobbies, the MULTIPLAYER page, the Republics mode, the
+  game internals from WRMP.
+
+Their names are in the code, the menu and the log; GPL v3 (section 4)
+asks every copy to keep these notices intact.
+
 ## Credits
 
 The lockstep work builds on SoylentGreed's research and code (RepublicLAN);
 parts taken from it are marked "(by SoylentGreed)". Thanks to veryinsanee
 and TucKnock for pull requests and detailed bug reports.
+
+The log, the patching primitives and the crash report in `core/host.cpp` are
+derived from [TesmioLoader](https://github.com/MaxLegend/TesmioLoader) by
+MaxLegend (GPL-3.0).
 
 Steam connections use the headers of Valve's
 [GameNetworkingSockets](https://github.com/ValveSoftware/GameNetworkingSockets)
@@ -162,4 +175,3 @@ Steam connections use the headers of Valve's
 
 [GPL-3.0-only](LICENSE) for everything after the tag `v0.4.3-mit`. Versions up
 to that tag were published under the MIT License and stay under it.
-TesmioLoader, which loads this plugin, is GPL-3.0 as well.

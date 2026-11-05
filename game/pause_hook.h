@@ -4,7 +4,7 @@
 // game_speed.h.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void PauseHook_Bind(const TsmHost* host);
+void PauseHook_Bind(const ModHost* host);
 bool InstallPauseHooks();

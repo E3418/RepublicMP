@@ -19,11 +19,11 @@
 // downloads nothing and is only told what differs; neither refuses a join.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 #include <vector>
 #include <string>
 
-void Workshop_Bind(const TsmHost* host);
+void Workshop_Bind(const ModHost* host);
 bool Workshop_GetSync();
 void Workshop_SetSync(bool on);
 

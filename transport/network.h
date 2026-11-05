@@ -9,7 +9,7 @@
 // (steam_net.h) when the host is given as a SteamID64; a listener takes both.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
@@ -17,7 +17,7 @@
 typedef UINT_PTR NetLink;
 #define NET_NO_LINK ((NetLink)INVALID_SOCKET)
 
-void Network_Bind(const TsmHost* host);
+void Network_Bind(const ModHost* host);
 bool NetworkInit();
 
 // A listening socket kept open across accepts (the lockstep host takes

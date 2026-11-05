@@ -73,9 +73,9 @@ typedef void (*WaterFn)(U64 field, unsigned a2);
 
 static PressFn g_press = nullptr;
 
-void CancelPlans_Bind(const TsmHost* host)
+void CancelPlans_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 static U64 Q(U64 at) { return *(U64*)at; }

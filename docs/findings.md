@@ -535,6 +535,6 @@ read in the disassembly, what a payer pays for is a guess unless said.
 - On exit the game tries to write `.bin` files into
   `media_soviet/saved_last/` and fails with error 2 when the folder does not
   exist (**observed**; game behaviour, not a mod's).
-- TesmioLoader's vectored exception handler runs before any plugin `__try`:
-  a caught fault in a plugin still produces a `=== CRASH` report and counts
-  toward a limit of 8 per process (**observed** in the loader source).
+- The crash report's vectored exception handler (`core/host.cpp`) runs before
+  any `__try`: a caught fault still produces a `=== CRASH` report and counts
+  toward a limit of 8 per process.

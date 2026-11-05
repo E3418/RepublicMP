@@ -20,9 +20,9 @@
 // then the callback, which can draw strips the same way.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void BorderDraw_Bind(const TsmHost* host);
+void BorderDraw_Bind(const ModHost* host);
 
 // False when the call sites or the routine differ (nothing is drawn then).
 bool BorderDraw_Ready();

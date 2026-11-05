@@ -1,6 +1,6 @@
 # RepublicMP architecture
 
-RepublicMP is one TesmioLoader plugin (`RepublicMP.dll`, C++, MSVC) for
+RepublicMP is one DLL (`RepublicMP.dll`, C++, MSVC), started by its proxy (`Proxy/`, `xinput9_1_0.dll`), for
 Workers & Resources: Soviet Republic 1.1.1.9 (`SOVIET64.exe`, PE stamp
 `0x6A3EB6AD`). It hooks the game, reads its memory and calls its own
 functions; there is no scripting API. Every address in the code is for that
@@ -32,7 +32,7 @@ determinism/   making the simulation identical on every PC: fixed ticks, RNG,
 game/          the game itself: world fields, camera, save/load, input, Present
 transport/     links: blocking TCP, or Steam P2P through Valve's relay (steam_net)
 save/          zip of a save folder
-core/          plugin entry points, version, the player's profile (ini)
+core/          the entry point, the host (log, patching, crash report), version, the player's profile (ini)
 api/           republicmp_api.h - what a mode may use (one include)
 ```
 
@@ -104,6 +104,8 @@ function.
 | `C3D_TERRAIN::Edit*`, heightmap/mask open/close | IAT | `world/terrain_hook` |
 | `C3D_INPUT` mouse/key reads | IAT | `game/input_block` |
 | `0x30C790` simulation step, `0x430FC0` world load | inline | `determinism/determinism` |
+| `0x42CC70` save routine (after it: `republicmp.ini`) | inline | `save/mod_save` |
+| `C3D_SOUNDMANAGER::PlaySound2D`, `PlaySound3D` | IAT | `lockstep/remote_sounds` |
 | `rand`, `srand`, `C3DRandom_*`, `C3D_TIMER`, `GetKeyDown`, `_beginthread`, `SetEvent`, `malloc`, CRT math | IAT | `determinism/determinism` |
 | `0x30D1A0` Late body, call-site relays, tool stubs | inline / call sites | `determinism/sim_patches` |
 | window button call sites (`kSites`) | call sites | `lockstep/game_calls` |
@@ -144,7 +146,7 @@ different build.
 
 ## Rules
 
-- Every `.cpp` that reads the game calls `TsmBind(host)` in its Bind
+- Every `.cpp` that reads the game calls `ModHost_Bind(host)` in its Bind
   (`g_exeBase` and `Logf` are per translation unit).
 - `__try` around every read of the game's memory; inside a hook that runs
   within the game's own call: no allocation, logging or I/O.
@@ -159,4 +161,4 @@ different build.
   internal tags. Work taken from another project is credited in the code,
   e.g. "(by SoylentGreed)".
 - Build: `MSBuild RepublicMP.vcxproj /p:Configuration=Debug /p:Platform=x64`
-  with the game closed; the DLL goes to `..\build\plugins\RepublicMP.dll`.
+  with the game closed; the DLL goes to `build\game\`, with the proxy.

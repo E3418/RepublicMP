@@ -94,9 +94,9 @@ static std::vector<LobbyGame> g_games;
 
 static ULONGLONG Now() { return GetTickCount64(); }
 
-void SteamLobby_Bind(const TsmHost* host)
+void SteamLobby_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 static bool InitOnce()

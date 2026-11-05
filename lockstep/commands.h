@@ -24,7 +24,7 @@
 // run 2 after the same ticks, with no input; both runs must stay identical.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
 enum LockstepCommandKind {
     LS_CMD_SEGMENT = 1,      // NetSegmentMsg: a drag tool's finished segment
@@ -77,7 +77,7 @@ struct LsMoneyDelta {
     double dollars;
 };
 
-void Commands_Bind(const TsmHost* host);
+void Commands_Bind(const ModHost* host);
 
 // True while local actions become commands instead of acting at once.
 bool Commands_Capturing();
@@ -177,6 +177,8 @@ void Commands_Boundary(unsigned long long completed);
 bool Commands_Due(unsigned long long completed);
 // True while a command is being made (its replay runs).
 bool Commands_Applying();
+// True on the thread making a command of another player (lockstep/remote_sounds).
+bool Commands_ApplyingRemote();
 
 // Probe (main thread, right after a run's load): run 0 with `record` captures
 // and records; run 1 makes the recorded commands again. record = false: off.

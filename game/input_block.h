@@ -17,9 +17,9 @@
 // goes through these imports.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void InputBlock_Bind(const TsmHost* host);
+void InputBlock_Bind(const ModHost* host);
 bool InstallInputBlockHooks();
 
 // Lockstep commands (main thread): while a command is made, the keys and

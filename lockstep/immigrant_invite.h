@@ -15,9 +15,9 @@
 // button's loop at the boundary (sounds and refusal messages are not replayed).
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void ImmigrantInvite_Bind(const TsmHost* host);
+void ImmigrantInvite_Bind(const ModHost* host);
 
 // Startup: points the three press reads at a relay. False leaves the buttons
 // as they were (they then act on the clicking PC only).

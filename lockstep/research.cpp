@@ -30,9 +30,9 @@ static std::vector<U64> g_held;
 static bool g_taken = false;
 static unsigned long long g_epoch = 0;
 
-void Research_Bind(const TsmHost* host)
+void Research_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 static bool Entries(U64* begin, unsigned* count)

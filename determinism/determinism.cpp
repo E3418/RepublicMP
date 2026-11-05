@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// RepublicMP by E3418 and Sohn (juniorsohn); all authors in README.md.
 // See determinism.h.
 #include "determinism.h"
 #include "state_hash.h"
@@ -10,6 +11,9 @@
 #include "../lockstep/lockstep_net.h"
 #include "../game/save_load.h"
 #include "../game/weather.h"
+#include "../game/world.h"
+#include "../save/mod_save.h"
+#include "../save/camera_keep.h"
 #include "../session/game_speed.h"
 #include "../session/save_sync.h" // SaveSync_IsBusy - no probe during a session
 #include "../core/profile.h"
@@ -60,10 +64,10 @@ static const unsigned char kLoadWorldExpect[18] = {
 
 static void LoadSettings();
 
-void Determinism_Bind(const TsmHost* host)
+void Determinism_Bind(const ModHost* host)
 {
     LoadSettings();
-    TsmBind(host);
+    ModHost_Bind(host);
     HeldFrame_Bind(host);
     Commands_Bind(host);
     LockstepNet_Bind(host);
@@ -151,6 +155,12 @@ static volatile LONG g_privateWorker = 0;
 // 330690 outside a command, say) gave a placement's new city another name
 // there.
 static thread_local SiteCounters* t_commandSites = nullptr;
+// The engine's own draws (C3DDLL64 calls rand through its own imports: tree
+// placement, particles, sounds, clouds, grass). Keyed DLL_SITE | the DLL's RVA
+// and counted apart from the exe's sites, so they stay out of the probe's
+// counts and the desync reports - most of them follow the camera.
+#define DLL_SITE 0x40000000u
+static thread_local SiteCounters* t_dllSites = nullptr;
 static thread_local bool t_inCommand = false;
 static thread_local unsigned long long t_commandSeq = 0;
 void Determinism_CommandBegin(unsigned long long seq)
@@ -172,15 +182,18 @@ static inline unsigned long long SplitMix(unsigned long long x)
     return x ^ (x >> 31);
 }
 
-// 0..32767, like the CRT's rand(). site = return address of the game's call.
-static int SiteRand(void* returnAddress)
+// 0..32767, like the CRT's rand(). site = return address of the game's call
+// (an exe RVA, or DLL_SITE | a C3DDLL64 RVA when dll).
+static int SiteRandAt(unsigned site, bool dll, void* returnAddress)
 {
-    unsigned site = (unsigned)((BYTE*)returnAddress - g_exeBase);
+    // RepublicMP (E3418, Sohn). Lifted on its own, this gives every PC the
+    // same numbers only together with the import patches in
+    // Determinism_Install and the command streams. Read those too.
     // Held presentation and UI can call the same native routines as a tick.
     // Separate counters keep any number of local frames out of that stream.
     bool privateDraw = t_privateDepth || GetCurrentThreadId() == (DWORD)g_privateWorker;
     bool command = t_inCommand && !privateDraw;
-    SiteCounters*& counters = command ? t_commandSites : privateDraw ? t_privateSites : t_sites;
+    SiteCounters*& counters = command ? t_commandSites : privateDraw ? t_privateSites : dll ? t_dllSites : t_sites;
     if (!counters) {
         counters = new SiteCounters{ 0, {} };
         if (&counters == &t_sites) {
@@ -206,7 +219,7 @@ static int SiteRand(void* returnAddress)
     unsigned long long seed = command ? g_seed ^ SplitMix(t_commandSeq) : g_seed;
     unsigned long long x = SplitMix(seed ^ ((unsigned long long)site << 32) ^ n);
     int value = (int)((x >> 33) & 0x7FFF);
-    if (!privateDraw && g_inEarly && !IsPresentationSite(site)) {
+    if (!privateDraw && !dll && g_inEarly && !IsPresentationSite(site)) {
         if (GetCurrentThreadId() == g_simThread) {
             g_simDraws++;
             g_simDrawHash = (g_simDrawHash ^ (((unsigned long long)site << 32) | (unsigned)value)) * 1099511628211ull;
@@ -216,6 +229,11 @@ static int SiteRand(void* returnAddress)
         }
     }
     return value;
+}
+
+static int SiteRand(void* returnAddress)
+{
+    return SiteRandAt((unsigned)((BYTE*)returnAddress - g_exeBase), false, returnAddress);
 }
 
 int Determinism_CommandRand(unsigned site)
@@ -270,6 +288,25 @@ static __declspec(noinline) double __cdecl H_randDouble(double a, double b)
 static __declspec(noinline) void __cdecl H_randStart(void)
 {
     if (!g_active) o_randStart();
+}
+
+// C3DDLL64's own imports of rand and srand: the engine draws inside its exports
+// (C3D_FOREST::EditorGenerateCursor / EditorGeneratePosition place the tree
+// tool's trees, SpawnParticles, PlaySound2D/3D, ...) never pass the exe's
+// imports. The CRT keeps one state per thread, so the camera-driven draws
+// shifted the trees' positions on one PC.
+static RandFn o_engineRand;
+static SrandFn o_engineSrand;
+static BYTE* g_engineBase = nullptr;
+static __declspec(noinline) int __cdecl H_engineRand(void)
+{
+    if (!g_active) return o_engineRand();
+    void* ra = _ReturnAddress();
+    return SiteRandAt(DLL_SITE | (unsigned)((BYTE*)ra - g_engineBase), true, ra);
+}
+static __declspec(noinline) void __cdecl H_engineSrand(unsigned seed)
+{
+    if (!g_active) o_engineSrand(seed);
 }
 
 // ---------------------------------------------------------------------------
@@ -857,12 +894,22 @@ unsigned Determinism_WorldLoads()
     return (unsigned)g_worldLoads;
 }
 
+// What RepublicMP keeps in the save (save/mod_save), and the view it brings
+// back (save/camera_keep), right after the game's load.
+static void AfterLoadFiles()
+{
+    ModSave_AfterLoad();
+    CameraKeep_AfterLoad();
+}
+
 static void HookedLoadWorld(void)
 {
     InterlockedIncrement(&g_worldLoads);
     // A probe run starts its generator epoch exactly at the load, so the
     // random numbers the load itself draws are the same in both runs.
     bool session = g_sessionLoadPending;
+    ModSave_BeforeLoad();
+    CameraKeep_BeforeLoad(session);
     if (g_probeState == PROBE_WAIT_LOAD || session) {
         if (!SimPatches_Apply()) {
             if (session) {
@@ -873,7 +920,15 @@ static void HookedLoadWorld(void)
             }
             o_loadWorld();
             EmptyWorkerVehicles();
+            AfterLoadFiles();
             return;
+        }
+        // The load draws too: from the world's seed already, when the save
+        // has one (every PC loads the same save, file included).
+        if (session) {
+            unsigned long long world = ModSave_LoadSeed();
+            g_seed = world ? SplitMix(LOCKSTEP_SEED ^ world) : LOCKSTEP_SEED;
+            Logf("republicmp  LOCKSTEP: load seed %016llx (%s)", g_seed, world ? "the save's world seed" : "no world seed in the save");
         }
         Determinism_Restart();
         g_simDraws = 0;
@@ -890,6 +945,7 @@ static void HookedLoadWorld(void)
     }
     o_loadWorld();
     EmptyWorkerVehicles();
+    AfterLoadFiles();
     if (session || g_probeState == PROBE_WAIT_LOAD) SiteWatch_Reset();
     if (session) {
         // The same start on both PCs as a probe run gets: the shared
@@ -900,6 +956,20 @@ static void HookedLoadWorld(void)
         ResetFrames();
         g_paused = true;
         g_stepCount = 0;
+        // The draws from here on: the world's own seed (in the save, the same
+        // on every PC) and the date the save was made, so each world and
+        // each load of it draws its own numbers - LOCKSTEP_SEED alone
+        // started every load with the same ones.
+        int day = 0, year = 0;
+        float progress = 0.0f;
+        World_Date(&day, &year, &progress);
+        unsigned bits;
+        memcpy(&bits, &progress, sizeof(bits));
+        g_seed = SplitMix(LOCKSTEP_SEED ^ ModSave_WorldSeed() ^ SplitMix(((unsigned long long)(unsigned)year << 32 | (unsigned)day) ^
+                                                                       ((unsigned long long)bits << 16)));
+        Determinism_Restart();
+        Logf("republicmp  LOCKSTEP: simulation seed %016llx (world seed %016llx, day %d of %d)", g_seed,
+             ModSave_WorldSeed(), day, year);
         // Not in the save: every PC starts it alike, from the date and the shared draws.
         Weather_StartShared();
         g_sessionLoadPending = false;
@@ -1630,6 +1700,14 @@ bool Determinism_Install()
     ok += PatchIat(g_exe, DLL_C3D, "?Stop@C3D_TIMER@@QEAAXXZ", (void*)&H_timerStop, (void**)&o_timerStop, "det timer Stop");
     ok += PatchIat(g_exe, DLL_C3D, "?Start@C3D_TIMER@@QEAAXXZ", (void*)&H_timerStart, (void**)&o_timerStart, "det timer Start");
     ok += PatchIat(g_exe, DLL_C3D, "?GetKeyDown@C3D_INPUT@@QEAA_NH@Z", (void*)&H_getKeyDown, (void**)&o_getKeyDown, "det GetKeyDown");
+    HMODULE engine = g_engine ? g_engine : GetModuleHandleA(DLL_C3D);
+    int engineRand = 0;
+    if (engine) {
+        g_engineBase = (BYTE*)engine;
+        engineRand += PatchIat(engine, DLL_CRT_UTILITY, "rand", (void*)&H_engineRand, (void**)&o_engineRand, "det engine rand");
+        engineRand += PatchIat(engine, DLL_CRT_UTILITY, "srand", (void*)&H_engineSrand, (void**)&o_engineSrand, "det engine srand");
+    }
+    Logf("republicmp  DETERMINISM: %d/2 engine (C3DDLL64) random imports redirected", engineRand);
     g_doneThreadHandle = CreateEventW(nullptr, TRUE, TRUE, nullptr);
     ok += PatchIat(g_exe, "api-ms-win-crt-runtime-l1-1-0.dll", "_beginthread", (void*)&H_beginThread, (void**)&o_beginThread, "det _beginthread");
     ok += PatchIat(g_exe, "KERNEL32.dll", "SetEvent", (void*)&H_setEvent, (void**)&o_setEvent, "det SetEvent");

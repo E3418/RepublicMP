@@ -6,9 +6,9 @@
 // no hook. RE of SOVIET64.exe 1.1.1.9 on 2026-10-23.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void SystemMenu_Bind(const TsmHost* host);
+void SystemMenu_Bind(const ModHost* host);
 
 // The menu is open on its main page (no settings sub-page).
 bool SystemMenu_IsOpen();

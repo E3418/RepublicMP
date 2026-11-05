@@ -10,9 +10,9 @@
 
 namespace fs = std::filesystem;
 
-void SaveZip_Bind(const TsmHost* host)
+void SaveZip_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 static bool ZipSaveDirectoryInner(const char* srcDir, const char* outZipPath, ZipProgressFn onProgress, void* userData)

@@ -48,9 +48,9 @@ struct SourceMsg {
 };
 #pragma pack(pop)
 
-void SourceSlots_Bind(const TsmHost* host)
+void SourceSlots_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 bool SourceSlots_Ready()

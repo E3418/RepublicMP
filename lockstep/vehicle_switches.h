@@ -13,9 +13,9 @@
 // sampled frames, left out and reported once (they would change one PC only).
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void VehicleSwitches_Bind(const TsmHost* host);
+void VehicleSwitches_Bind(const ModHost* host);
 
 // Render thread, around the interface routine. simBusy: the simulation's phase
 // runs now (the comparison is skipped).

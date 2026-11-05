@@ -2,12 +2,12 @@
 // Dear ImGui overlay rendered from the IDXGISwapChain::Present hook.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 #include <dxgi.h>
 
 struct ID3D11Device;
 
-void ImGuiHook_Bind(const TsmHost* host);
+void ImGuiHook_Bind(const ModHost* host);
 
 // Called every frame from HookedPresent; creates the ImGui context and the
 // DX11/Win32 backends on first call.

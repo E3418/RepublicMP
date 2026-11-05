@@ -2,9 +2,9 @@
 // See game_speed.h.
 #include "game_speed.h"
 
-void GameSpeed_Bind(const TsmHost* host)
+void GameSpeed_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 int ReadGameSpeed()

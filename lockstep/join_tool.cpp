@@ -39,9 +39,9 @@ typedef U64 (*HandlerFn)(U64 world, U64 mode);
 
 static int g_ready = -1;
 
-void JoinTool_Bind(const TsmHost* host)
+void JoinTool_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 bool JoinTool_Ready()

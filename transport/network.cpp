@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// RepublicMP by E3418 and Sohn (juniorsohn); all authors in README.md.
 // See network.h.
 #include "network.h"
 #include "steam_net.h"
@@ -11,9 +12,9 @@
 
 #pragma comment(lib, "ws2_32.lib")
 
-void Network_Bind(const TsmHost* host)
+void Network_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
     SteamNet_Bind(host);
     SteamLobby_Bind(host);
 }

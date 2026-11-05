@@ -16,7 +16,7 @@
 
 // Registers the Steam "Join Game" callback; from the plugin's Bind, before the
 // game's main thread pumps Steam callbacks.
-void SteamNet_Bind(const TsmHost* host);
+void SteamNet_Bind(const ModHost* host);
 // Gets the interfaces and starts the relay and the service thread, once.
 // False without Steam: links are then TCP only.
 bool SteamNet_Init();

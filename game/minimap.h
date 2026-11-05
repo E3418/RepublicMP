@@ -12,9 +12,9 @@
 //                   a metre: the scale the border is drawn with.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void Minimap_Bind(const TsmHost* host);
+void Minimap_Bind(const ModHost* host);
 bool Minimap_InstallHook();
 
 // Called right after the border is drawn (render thread); one, null for none.

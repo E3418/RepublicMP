@@ -69,9 +69,9 @@ static const RoutineEntry kRoutines[] = {
 };
 static int g_ready = -1;
 
-void CargoSettings_Bind(const TsmHost* host)
+void CargoSettings_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 static bool Ready()

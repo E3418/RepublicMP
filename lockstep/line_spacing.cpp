@@ -32,9 +32,9 @@ struct SpacingMsg {
 
 typedef BYTE (*GetterFn)(U64 line);
 
-void LineSpacing_Bind(const TsmHost* host)
+void LineSpacing_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 static U64 Q(U64 at) { return *(U64*)at; }

@@ -15,9 +15,9 @@
 // writes it (the source by identity) at the boundary.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void SourceSlots_Bind(const TsmHost* host);
+void SourceSlots_Bind(const ModHost* host);
 
 // The tool's routine is the checked one (the tool is put away otherwise).
 bool SourceSlots_Ready();

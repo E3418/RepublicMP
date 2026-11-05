@@ -97,9 +97,9 @@ struct RenameMsg {
 };
 #pragma pack(pop)
 
-void Rename_Bind(const TsmHost* host)
+void Rename_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 static BYTE* World() { return g_exeBase + WORLD_RVA; }

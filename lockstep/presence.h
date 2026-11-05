@@ -10,13 +10,13 @@
 // where the game's camera puts it (game/camera).
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
 #define PRESENCE_CURSOR 0
 #define PRESENCE_PING 1
 #define PRESENCE_HIDDEN 2 // the player's mouse left the map (alt-tab)
 
-void Presence_Bind(const TsmHost* host);
+void Presence_Bind(const ModHost* host);
 
 // A session runs: the overlay draws the marks even while it is hidden.
 bool Presence_Active();

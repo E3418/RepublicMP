@@ -21,7 +21,7 @@
 // words are put back after.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
 #pragma pack(push, 1)
 struct JoinMsg {
@@ -32,7 +32,7 @@ struct JoinMsg {
 };
 #pragma pack(pop)
 
-void JoinTool_Bind(const TsmHost* host);
+void JoinTool_Bind(const ModHost* host);
 
 // False when the handler differs (the tool is then put away in lockstep).
 bool JoinTool_Ready();

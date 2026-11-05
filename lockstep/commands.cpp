@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// RepublicMP by E3418 and Sohn (juniorsohn); all authors in README.md.
 // See commands.h.
 #include "commands.h"
 #include "../determinism/determinism.h"
@@ -7,6 +8,7 @@
 #include "../world/menus_closed.h"
 #include "../world/local_builds.h"
 #include "lockstep_net.h"
+#include "remote_sounds.h"
 #include "../game/input_block.h"
 #include "../game/world.h"
 #include "../session/save_sync.h"
@@ -46,9 +48,9 @@
 #include <vector>
 #include <string.h>
 
-void Commands_Bind(const TsmHost* host)
+void Commands_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
     Purchase_Bind(host);
     RouteTools_Bind(host);
     GameCalls_Bind(host);
@@ -101,6 +103,7 @@ static bool g_replaying = false;
 static volatile LONG g_applying = 0;
 static DWORD g_applyThread = 0;
 static int g_applyPlayer = 0; // the player of the command being made
+static volatile bool g_applyRemote = false; // the command being made is another player's
 static volatile LONG64 g_applyEpoch = 0;
 static unsigned g_seq = 0;
 static int g_session = COMMANDS_OFF; // in a session the player keeps the host's commands in g_record
@@ -202,6 +205,8 @@ static bool Frequent(int kind)
 
 void Commands_Submit(int kind, const void* data, size_t size)
 {
+    // RepublicMP (E3418, Sohn). The command list without the host ordering
+    // it at the tick boundary is a desync, not multiplayer.
     if (!g_capturing) return;
     // Called from the game's tools and windows: nothing may leave it.
     bool ok = Guard_Call("capturing a command", [&] {
@@ -617,6 +622,8 @@ static void Apply(const Command& c)
     bool ok = false;
     g_applyThread = GetCurrentThreadId();
     g_applyPlayer = c.player;
+    g_applyRemote = c.player != LockstepNet_SelfNumber();
+    if (g_applyRemote) RemoteSounds_CommandBegin();
     InterlockedIncrement(&g_applying);
     InterlockedIncrement64(&g_applyEpoch);
     double rubBefore = *Rubles(), usdBefore = *Dollars();
@@ -635,10 +642,17 @@ static void Apply(const Command& c)
     Determinism_CommandBegin(c.seq);
     Guard_Call(KindName(c.kind), [&] { ok = ApplyKind(c); });
     Determinism_CommandEnd();
+    // What the local mouse hovered may be rebuilt or gone now, and a replay
+    // leaves the sender's hover set: the local tool, later in this frame,
+    // read a node whose edges were gone (2bda49) or a road edge without the
+    // rail one (4fe681). Nothing hovered until the game picks again.
+    Networks_ClearHover();
     InputBlock_EndNeutral();
     if (recipeAudit && recipeLoad == Determinism_WorldLoads())
         Guard_Call("the construction recipe report", [&] { StateHash_LogRecipeChanges(recipes, c.seq, c.afterTick); });
     InterlockedDecrement(&g_applying);
+    if (g_applyRemote) RemoteSounds_CommandEnd();
+    g_applyRemote = false;
     g_madeThisFrame = true;
     // What the command paid or got: compared between the PCs' logs when the money differs.
     double paidRub = *Rubles() - rubBefore, paidUsd = *Dollars() - usdBefore;
@@ -664,6 +678,11 @@ bool Commands_Due(unsigned long long completed)
 bool Commands_Applying()
 {
     return InterlockedCompareExchange(&g_applying, 0, 0) != 0;
+}
+
+bool Commands_ApplyingRemote()
+{
+    return g_applyRemote && Commands_Applying() && GetCurrentThreadId() == g_applyThread;
 }
 
 // Player: its own actions go to the host; what the host made after this

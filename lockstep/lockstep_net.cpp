@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// RepublicMP by E3418 and Sohn (juniorsohn); all authors in README.md.
 // See lockstep_net.h.
 #include "lockstep_net.h"
 #include "commands.h"
@@ -16,9 +17,9 @@
 #include <stdio.h>
 #include <stdarg.h>
 
-void LockstepNet_Bind(const TsmHost* host)
+void LockstepNet_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 enum LockstepMsgType {
@@ -48,7 +49,7 @@ struct LsHash { unsigned long long tick; StateSummary s; };
 struct LsState { int paused; int speed; };
 struct LsPing { unsigned long long sentMs; int reply; };
 struct LsHello { char magic[8]; char nick[PROFILE_NICK_BYTES]; WorkshopContent content; }; // content: session/workshop
-struct LsPlayerEntry { char nick[PROFILE_NICK_BYTES]; int rttMs; unsigned behind; unsigned char host, self, pad[2]; };
+struct LsPlayerEntry { char nick[PROFILE_NICK_BYTES]; int rttMs; unsigned behind; unsigned char host, self, number, pad; }; // number: the commands' player (0 the host)
 struct LsPlayers { unsigned count; LsPlayerEntry e[PROFILE_MAX_PLAYERS]; };
 struct LsMark { int player; int kind; float pos[3]; char nick[PROFILE_NICK_BYTES]; };
 struct LsChat { int player; char nick[PROFILE_NICK_BYTES]; char text[CHAT_TEXT_BYTES]; };
@@ -1006,6 +1007,7 @@ static void FillList(LsPlayers& l, int forPeer)
         e.rttMs = p.rttKnown ? (int)p.rttMs : -1;
         e.behind = (unsigned)Behind(p);
         e.self = i == forPeer ? 1 : 0;
+        e.number = (unsigned char)(i + 1);
     }
 }
 
@@ -1059,6 +1061,7 @@ int LockstepNet_Players(LockstepPlayer* out, int max)
             memset(&e, 0, sizeof(e));
             strncpy_s(e.nick, p.nick, _TRUNCATE);
             strncpy_s(e.ip, p.ip, _TRUNCATE);
+            e.number = i + 1;
             e.rttMs = p.rttKnown ? (int)p.rttMs : -1;
             e.behind = Behind(p);
         }
@@ -1080,8 +1083,20 @@ int LockstepNet_Players(LockstepPlayer* out, int max)
         e.behind = l.e[i].behind;
         e.host = l.e[i].host != 0;
         e.self = l.e[i].self != 0;
+        e.number = l.e[i].number;
     }
     return n;
+}
+
+int LockstepNet_SelfNumber()
+{
+    if (g_isHost || !g_locksReady) return 0;
+    int number = -1;
+    EnterCriticalSection(&g_listLock);
+    for (unsigned i = 0; i < g_list.count && i < PROFILE_MAX_PLAYERS; i++)
+        if (g_list.e[i].self) number = g_list.e[i].number;
+    LeaveCriticalSection(&g_listLock);
+    return number;
 }
 
 bool LockstepNet_RoundTrip(unsigned long long* ms)

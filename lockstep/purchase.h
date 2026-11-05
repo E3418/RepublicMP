@@ -11,12 +11,13 @@
 // branch with the game's own routines (3e3f40 depot slot, 3e4a00 vehicle,
 // 3fd5d0 coupling, 33f0 slot list, 2ab810 slot done, the licence and factory
 // steps, the used-vehicle market). Sounds, messages and closing the window
-// stay with the clicking PC.
+// stay with the clicking PC; the Buy sound is played there at the click (the
+// press read "not pressed" skips the game's own).
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void Purchase_Bind(const TsmHost* host);
+void Purchase_Bind(const ModHost* host);
 
 // The relay at 810943 (sim_patches): the press read with the caller's context
 // one frame up. True: the game reads the press as it is.

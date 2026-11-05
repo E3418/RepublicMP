@@ -58,9 +58,9 @@ static State g_shared;           // the session's state as this PC last saw it a
 static bool g_sharedValid = false;
 static unsigned g_sharedLoads = 0; // Determinism_WorldLoads() when g_shared was taken
 
-void OfficeSelection_Bind(const TsmHost* host)
+void OfficeSelection_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 static bool Ready()

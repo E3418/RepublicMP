@@ -103,9 +103,9 @@ static bool Redirect(BYTE* slot, unsigned site, void* target)
     return true;
 }
 
-void BorderDraw_Bind(const TsmHost* host)
+void BorderDraw_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
     if (!CallsTo(BORDER_CALL, BORDER_DRAW_RVA) || !CallsTo(BORDER_CALL_INSET, BORDER_DRAW_INSET_RVA) ||
         memcmp(g_exeBase + BORDER_DRAW_RVA, kBorderEntry, sizeof(kBorderEntry)) ||
         strcmp((const char*)(g_exeBase + TECHNIQUE_RVA), "BumpBorder")) {

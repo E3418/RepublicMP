@@ -18,6 +18,7 @@
 #include "../transport/steam_lobby.h"
 #include "../lockstep/lockstep_net.h" // LockstepNet_PeerCount, LockstepNet_Players
 #include "../lockstep/presence.h"
+#include "../lockstep/remote_sounds.h"
 #include "chat.h"
 #include "sync_block.h"
 #include "../session/workshop.h"
@@ -485,12 +486,32 @@ static void SessionResync(float x, float y, float s, bool host, bool ready)
     }
 }
 
+// The player's name (the profile's), read again whenever it is not being
+// edited: the ImGui panel sets it too.
+static void NameInput(float x, float y, float s)
+{
+    static std::string s_nick;
+    static bool s_editing = false;
+    if (!s_editing) {
+        s_nick = Profile_GetNick();
+        if (s_nick == "Player") s_nick.clear();
+    }
+    Label(GAME_FONT_ARIAL, 24 * s, ImVec2(x, y), kInk, "Your name:");
+    ImGui::SetCursorScreenPos(ImVec2(x + 190 * s, y - 4 * s));
+    bool enter = false;
+    InkInput("##sNick", "Player", &s_nick, 280 * s, s, &enter);
+    s_editing = ImGui::IsItemActive();
+    if (ImGui::IsItemDeactivatedAfterEdit() || enter) Profile_SetNick(s_nick.c_str());
+}
+
 // SETTINGS: what is set once and kept (the profile), out of the way of HOST,
-// JOIN and SESSION. Left: the host's join and re-sync policies; right: what
-// this PC shows of the others and its keys.
+// JOIN and SESSION. Left: the player's name, the host's join and re-sync
+// policies; right: what this PC shows of the others and its keys.
 static void SettingsTab(float left, float right, float s)
 {
     float x = left - 225 * s, y = 540 * s;
+    NameInput(x, y, s);
+    y += 55 * s;
     Label(GAME_FONT_ARIAL, 24 * s, ImVec2(x, y), kInk, "Check DLCs:");
     bool dlcCheck = SaveSync_GetDlcCheck();
     if (Choice("##dlcOn", "ON", x + 115 * s, y + 30 * s, s, dlcCheck)) SaveSync_SetDlcCheck(true);
@@ -498,7 +519,7 @@ static void SettingsTab(float left, float right, float s)
     WrappedLabel(GAME_FONT_ARIAL, 20 * s, ImVec2(x, y + 70 * s), 470 * s, 1, kInk,
                  dlcCheck ? "Refuse players with different DLCs." : "Allow players with different DLCs.");
     // This player's own choice (session/workshop).
-    y += 130 * s;
+    y += 100 * s;
     Label(GAME_FONT_ARIAL, 24 * s, ImVec2(x, y), kInk, "Sync Workshop:");
     bool workshop = Workshop_GetSync();
     if (Choice("##wsOn", "ON", x + 115 * s, y + 30 * s, s, workshop)) Workshop_SetSync(true);
@@ -507,7 +528,7 @@ static void SettingsTab(float left, float right, float s)
                  workshop ? "Offer your Workshop items when you host; get the host's when you join."
                           : "Neither offer nor download Workshop items.");
     // The host's: a player's session follows the host.
-    y += 130 * s;
+    y += 120 * s;
     Label(GAME_FONT_ARIAL, 24 * s, ImVec2(x, y), kInk, "After a desync:");
     static const int seconds[] = { -1, 0, 60, 120, 300 };
     static const char* const labels[] = { "OFF", "NOW", "1 MIN", "2 MIN", "5 MIN" };
@@ -531,6 +552,11 @@ static void SettingsTab(float left, float right, float s)
     bool signs = Republics_GetShowSigns();
     if (Choice("##sSigns", "SHOW", c1, ry + 30 * s, s, signs)) Republics_SetShowSigns(true);
     if (Choice("##sNoSigns", "HIDE", c2, ry + 30 * s, s, !signs)) Republics_SetShowSigns(false);
+    ry += 80 * s;
+    Label(GAME_FONT_ARIAL, 24 * s, ImVec2(right, ry), kInk, "Others' sounds:");
+    bool muted = RemoteSounds_GetMuted();
+    if (Choice("##sSoundsOn", "ON", c1, ry + 30 * s, s, !muted)) RemoteSounds_SetMuted(false);
+    if (Choice("##sSoundsOff", "OFF", c2, ry + 30 * s, s, muted)) RemoteSounds_SetMuted(true);
     SessionKeys(right, ry + 100 * s, s);
 }
 

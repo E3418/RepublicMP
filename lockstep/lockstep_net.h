@@ -31,7 +31,7 @@
 // Sends come from the game thread and the session thread.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 #include "../determinism/state_hash.h"
 #include "../core/profile.h"
 
@@ -44,7 +44,7 @@
 #define LOCKSTEP_HASH_TICKS 60  // ticks between state comparisons
 #define LOCKSTEP_MAX_PEERS (PROFILE_MAX_PLAYERS - 1) // players besides the host
 
-void LockstepNet_Bind(const TsmHost* host);
+void LockstepNet_Bind(const ModHost* host);
 
 // Session thread. Host: takes `expected` players' connections (each opens
 // with its name) within timeoutMs; returns how many came. stillExpected
@@ -120,8 +120,12 @@ struct LockstepPlayer {
     unsigned long long behind;
     bool host;
     bool self;            // this PC
+    int number;           // the player its commands carry (0 the host)
 };
 int LockstepNet_Players(LockstepPlayer* out, int max);
+// The player this PC's commands carry: 0 on the host and outside a session,
+// -1 on a player before the host's first list. Any thread.
+int LockstepNet_SelfNumber();
 
 // Player (game thread).
 bool LockstepNet_TakeGrant(unsigned long long tick, int* speed);

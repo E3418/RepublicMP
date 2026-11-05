@@ -16,9 +16,9 @@
 
 #pragma comment(lib, "User32.lib")
 
-void LocalBuilds_Bind(const TsmHost* host)
+void LocalBuilds_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 // ---------------------------------------------------------------------------

@@ -24,7 +24,7 @@
 // the window keeps showing what the local player chose.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
 #define BUILD_MODE_THIS_RVA 0x9D4F10
 #define BUILD_MODE_RUB_OFFSET 0xaf8

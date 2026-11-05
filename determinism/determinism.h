@@ -45,15 +45,15 @@
 // differing step and subsystem point at the next source to fix.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 #include <vector>
 
 #define DETERMINISM_FIXED_FPS 30.0f
 
-void Determinism_Bind(const TsmHost* host);
+void Determinism_Bind(const ModHost* host);
 
 // Installs the import redirections and the step/load hooks (inactive until
-// Determinism_SetActive). Call once from TsmPluginStart.
+// Determinism_SetActive). Call once from RepublicMP_Start.
 bool Determinism_Install();
 
 // Turns the fixed timer and the call-site generator on/off. Turning it on

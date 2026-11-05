@@ -62,9 +62,9 @@ struct InviteMsg {
 static GetterFn g_getter = nullptr;
 static bool g_ready = false;
 
-void ImmigrantInvite_Bind(const TsmHost* host)
+void ImmigrantInvite_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 static U64 Q(U64 at) { return *(U64*)at; }

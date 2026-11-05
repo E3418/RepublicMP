@@ -17,9 +17,9 @@
 // command (each by its world field); every PC makes the loop at the boundary.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void CancelPlans_Bind(const TsmHost* host);
+void CancelPlans_Bind(const ModHost* host);
 bool CancelPlans_Install();
 
 // The command (lockstep/commands).

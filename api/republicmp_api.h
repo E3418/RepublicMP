@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// RepublicMP by E3418 and Sohn (juniorsohn); all authors in README.md.
 // What a game mode inside RepublicMP.dll (modes/<name>/) may use of the rest
 // of the DLL - one include, so nothing below gets written a second time.
 // Everything here is plain functions of the modules listed; each module's
 // header says the details. See ARCHITECTURE.md for the layers and rules.
 //
 // Rules for code in a mode's folder
-//   - Bind: every .cpp that reads the game calls TsmBind(host) in its own
-//     Bind function (g_exeBase and Logf are per translation unit); the mode's
+//   - Bind: every .cpp that reads the game calls ModHost_Bind(host) in its own
+//     Bind function (g_exeBase is per translation unit); the mode's
 //     Bind is called from core/main.cpp.
 //   - Hooks on the game have one owner each (ARCHITECTURE.md lists them):
 //     never a second hook on the same function - add a callback to the owner.
@@ -16,8 +17,8 @@
 //     WRSR 1.1.1.9 (stamp 0x6A3EB6AD).
 #pragma once
 
-// --- Loader: Logf, g_exeBase / g_exe, TsmBind, InstallInlineHook, PatchIat
-#include "tesmio_plugin.h"
+// --- Host: Logf, g_exeBase / g_exe, ModHost_Bind, InstallInlineHook, PatchIat
+#include "host.h"
 
 // --- The game's world: the world object, buildings, date, money, the
 // terrain point under the mouse.
@@ -72,6 +73,10 @@
 //   ZipSaveDirectory, UnzipToDirectory
 #include "../game/save_load.h"
 #include "../save/save_zip.h"
+// --- The mode's own data in the save (republicmp.ini): ModSave_Add with a
+// section's write and read callbacks, ModSave_Put* / ModSave_Get*, and the
+// world's own seed, the same on every PC (ModSave_WorldSeed).
+#include "../save/mod_save.h"
 
 // --- TCP (blocking, one thread per connection): NetworkInit, NetworkListen,
 // NetworkAcceptReady, NetworkConnect, NetworkSendExact, NetworkRecvExact,

@@ -17,9 +17,9 @@
 // without a click are learned from sampled frames and left out.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void BuildingSwitches_Bind(const TsmHost* host);
+void BuildingSwitches_Bind(const ModHost* host);
 
 // Render thread, around the interface routine. simBusy: the simulation's phase
 // runs now (the comparison is skipped).

@@ -67,9 +67,9 @@ static bool g_started = false;
 static WorkersMsg g_shared[2] = {}, g_seen = {}, g_sent = {};
 static bool g_sentValid = false;
 
-void WorldWorkers_Bind(const TsmHost* host)
+void WorldWorkers_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 static int Slot(int player) { return player > 0 && Commands_PerPlayer() ? 1 : 0; } // any player but the host, as the area rule

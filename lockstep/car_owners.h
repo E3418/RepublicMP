@@ -12,9 +12,9 @@
 // becomes one command; every PC makes the loop at the boundary.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void CarOwners_Bind(const TsmHost* host);
+void CarOwners_Bind(const ModHost* host);
 bool CarOwners_Install();
 
 // The command (lockstep/commands).

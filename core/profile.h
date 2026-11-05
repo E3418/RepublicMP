@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // This player's settings, set in the RepublicMP and Debug windows. They are
-// remembered by themselves in RepublicMP.profile.ini next to RepublicMP.dll
+// remembered by themselves in RepublicMP\RepublicMP.profile.ini next to RepublicMP.dll
 // (written when one changes, read at start; nobody has to edit it, and a
 // missing file or key means the default):
 //
@@ -10,6 +10,8 @@
 //                          host included (2..4); a host that is full stops
 //                          listening
 //             dlc_check    refuse a join when the DLCs differ (session/save_sync)
+//             desync_resync seconds after a desync before the host re-syncs
+//                          (-1 off, 0 at once; session/save_sync)
 //             workshop_sync download the host's Workshop items at a join (session/workshop)
 //   [overlay] show_cursors, ping_key (a virtual-key code; lockstep/presence)
 //   [debug]   money_trace (determinism), field_diff (lockstep/building_settings),
@@ -17,19 +19,20 @@
 //             construction_log (determinism/construction_view),
 //             site_watch (determinism/site_watch),
 //             frame_timing (core/frame_timing),
-//             storage_trace (determinism/state_hash, off unless remembered)
+//             storage_trace (determinism/state_hash, off unless remembered),
+//             sound_log (lockstep/remote_sounds)
 //
 // Each module reads its own setting when it is bound and writes it when it
 // is changed (Profile_GetInt / Profile_SetInt).
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
 #define PROFILE_NICK_BYTES 32
 #define PROFILE_MIN_PLAYERS 2
 #define PROFILE_MAX_PLAYERS 4
 
-void Profile_Bind(const TsmHost* host);
+void Profile_Bind(const ModHost* host);
 
 // Never empty: "Player" when none is set.
 const char* Profile_GetNick();

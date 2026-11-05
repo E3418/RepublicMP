@@ -1,15 +1,27 @@
 # Changelog
 
-## 0.7.5
+## Unreleased
 
-Many window actions that acted on the clicking PC only are now shared (by
-SoylentGreed), loans, the copy sources tool and resuming construction no
-longer split the games, and leaving a session right after it loaded no
-longer crashes. Protocol 58 - every player needs this build (the build
-check refuses another DLL, 0.7.4 included).
-
-**Fewer desyncs**
-
+- **New: no mod loader needed** - the mod now starts through its own proxy,
+  `xinput9_1_0.dll`, which sits next to `RepublicMP.dll` in the game's folder,
+  and it needs no file of TesmioLoader any more. It no longer loads as a
+  TesmioLoader plugin.
+- The log moved to `RepublicMP\logs\republicmp.log` and the profile to
+  `RepublicMP\RepublicMP.profile.ini`, in the game's folder. The nick and the
+  settings start from the defaults once, unless the old file is moved there.
+  `imgui.ini` moved to the same folder by itself.
+- **Fix: "citizens" desyncs around construction sites** - the game placed a
+  site's worker at a point read from before the start of the piece's points
+  on some stages, which is whatever the memory held on that PC. The worker now
+  stands at the piece's first point. Protocol 60 - every player needs this
+  build.
+- **Fix: a player's view after a re-sync** - every player got the host's view
+  back: the game had already set the camera from the save when RepublicMP read
+  "the view before the load". Each PC now keeps what it last showed, in the
+  same world.
+- **Fix: removing a stop in the vehicle window** - the button took the stop off
+  the clicking PC only, so that vehicle's route differed on the other PCs and
+  the games parted later. It is a command now.
 - **Money within 1 ruble is the same money** - the host compared each PC's
   rubles and dollars by their exact bits, so a difference in a double's last
   bits (0.000000001 rubles) was a desync and a re-sync. Money that differs by
@@ -28,6 +40,130 @@ check refuses another DLL, 0.7.4 included).
   path index on a key press read straight from the keyboard; a segment
   command made while this PC's player pressed it could take another path
   there. The key reads as not pressed while the command is made.
+
+**Republics**
+
+- **The cancel tools on one's own half only** (#49) - a network's cancel tool
+  (cancel road and the others) removed a piece anywhere, the other
+  republic's too. A piece with an end on the other half is now refused, with
+  the notice on the clicking PC, as the bulldozer is.
+- **The other republic's buildings can be looked at, not used** (#50) - its
+  windows still open, but what a player does there is refused on every PC
+  with the notice: settings, buttons, popups, construction funding,
+  research, purchases in its depots, links and specific sources to its
+  buildings, stops at its stations and roads, vehicles sent to its depots.
+  The join tool, road signs, waypoints, rail signals, junctions, factory
+  connection directions and the group tools act on one's own half only too.
+- **The other republic's vehicles and lines are not yours to run** - their
+  settings, schedules, depot orders and window buttons (sell, release and
+  the others) are refused, and so are edits of a line with a station on the
+  other half. A vehicle counts as on the side of the depot it is heading to,
+  else of the building it is registered at or in (a wagon by its
+  locomotive), else of where it is. Crossroads (their junction window and
+  name) and cities (new, renamed, deleted) stay on one's own half too.
+- **The game rules are the host's, workers are each player's** - the game
+  rules page changes for the host only, with a notice for the player (the
+  bottom menu's auto-build, auto-invite and auto-purchase stay shared for
+  now). "Max.
+  workers without CO" is each player's own: a player's construction sites
+  and demolitions take that player's number (a player's number is not saved;
+  a load starts both from the save's).
+- **Plans and terrain on one's own half** - "start planned construction" and
+  "cancel all plans" leave the other republic's plans alone, and the terrain
+  brushes (raise, lower, level, trees, topsoil) stop at the border: a brush
+  that reaches the other half is refused, with the notice.
+
+## 0.7.6
+
+Each player's view now survives a re-sync and is kept in the save, other
+players' commands no longer make sounds on your PC, the vehicle purchase
+sound is back, and every save carries RepublicMP's own file with the world's
+seed, for game modes to build on. Protocol 58 - every player needs this
+build (the build check refuses another DLL, 0.7.5 included).
+
+**The view and the sounds**
+
+- **New: each player's view is kept** - a re-sync or a join put every
+  player's camera back at the map's start. The view this PC had before a
+  session's load now comes back after it, and every save keeps each
+  player's view (by SteamID64, or the nick without Steam), so loading a
+  shared save puts every player where they left off.
+- **New: other players' commands make no sound here** - every PC makes every
+  player's command, and the host heard a player's roads and buildings being
+  built across the map. Their sounds are now left out on the other PCs, the
+  terrain and construction tools' loops included; the player who gave the
+  command hears it as before. SETTINGS - "Others' sounds" turns them back
+  on.
+- **Fix: no sound when buying a vehicle** - the purchase window's Buy press
+  became a command and the game's own purchase sound was skipped with it.
+  The clicking PC plays it again at the click.
+- **New: your name on the multiplayer page** - the name the other players
+  see was set only in the old overlay window. SETTINGS - "Your name" sets
+  it now too.
+- **Fix: crashes right after another player's road, path or building** - a
+  command left what the mouse points at (the road, rail or node under the
+  cursor) set to the sender's, or to a piece the command had just rebuilt,
+  and this PC's own tool read it later in the same frame: placing a bus stop
+  while building rail crashed the host, and a player crashed right after the
+  host's footpaths split a road. Nothing is pointed at after a command until
+  the game picks again.
+- **Fix: "After a desync" was not remembered** - SETTINGS' re-sync delay went
+  back to 1 minute on every start. It is kept in the profile now.
+- **New: autosave in a session** - the game's autosave was held off in a
+  session (it ran on each PC's own clock, and a save changes the world).
+  Now the host's autosave interval (the game's options) sends an autosave
+  to every PC at the same tick, and each PC writes its own next autosave
+  slot by its own options (slots, zip), as in a single-player game - every
+  player keeps backups of the shared game.
+
+**The save and the seed**
+
+- **New: RepublicMP's own file in a save** - every save gets a
+  `republicmp.ini` next to the game's files (the build that wrote it, the
+  world's own seed and the players' views; game modes add their own
+  sections). It travels with the save, and a save without it loads as
+  before. Game modes read and write their own sections through
+  `api/republicmp_api.h` (`ModSave_Add`).
+- **New: the world's own seed** - made once for each world and kept in its
+  saves, the same number on every PC of a session. Game modes use it for
+  what they make at random once per world (e.g. where the republics' border
+  runs).
+- **The simulation's random numbers differ for each world and each load** -
+  every session started its draws from one fixed seed, so after each load
+  or re-sync the game drew the same numbers again. The draws now start from
+  the world's seed and the save's date: still the same on every PC (they
+  all load the same save), but no longer the same pattern every time. The
+  load's own draws start from the world's seed too.
+- **Fix: the engine's own random numbers** - C3DDLL64 draws inside its own
+  routines through its own imports of `rand`, which the session never
+  covered: the tree tool's trees (their places, kinds and turns) came from
+  the same stream as the particles and sounds each PC makes for its camera,
+  so the same stroke could plant other trees on another PC. The engine's
+  draws now come from the session's generator too, one stream per place in
+  the engine, kept apart from the game's own (they are not in the desync
+  reports).
+
+**Other**
+
+- **The authors in the menu** - the RepublicMP window names the authors
+  (E3418 and Sohn) under the build, and so does the log at start; the
+  README has an Authors section.
+- **The log of a footpath node demolition** - a node demolition left a
+  different number of buildings on two PCs (the road pieces it split became
+  demolition sites on one PC only). The log now shows, on every PC, the
+  fields the game decides this by (each edge's construction site and its
+  progress) and the building count before and after, so two players' logs
+  show where the sites differed.
+
+## 0.7.5
+
+Many window actions that acted on the clicking PC only are now shared (by
+SoylentGreed), loans, the copy sources tool and resuming construction no
+longer split the games, and leaving a session right after it loaded no
+longer crashes. Protocol 57 - every player needs this build (the build
+check refuses another DLL, 0.7.4 included).
+
+**Fewer desyncs**
 
 - **Fix: the copy sources tool on one PC only** - the tool copies the
   source rows the player ticked, and that choice is the tool's own state on
@@ -92,37 +228,16 @@ check refuses another DLL, 0.7.4 included).
   was placed differently on each PC. A join is refused when the two values
   differ (by SoylentGreed).
 
-**Republics**
+**Economy**
 
-- **The cancel tools on one's own half only** (#49) - a network's cancel tool
-  (cancel road and the others) removed a piece anywhere, the other
-  republic's too. A piece with an end on the other half is now refused, with
-  the notice on the clicking PC, as the bulldozer is.
-- **The other republic's buildings can be looked at, not used** (#50) - its
-  windows still open, but what a player does there is refused on every PC
-  with the notice: settings, buttons, popups, construction funding,
-  research, purchases in its depots, links and specific sources to its
-  buildings, stops at its stations and roads, vehicles sent to its depots.
-  The join tool, road signs, waypoints, rail signals, junctions, factory
-  connection directions and the group tools act on one's own half only too.
-- **The other republic's vehicles and lines are not yours to run** - their
-  settings, schedules, depot orders and window buttons (sell, release and
-  the others) are refused, and so are edits of a line with a station on the
-  other half. A vehicle counts as on the side of the depot it is heading to,
-  else of the building it is registered at or in (a wagon by its
-  locomotive), else of where it is. Crossroads (their junction window and
-  name) and cities (new, renamed, deleted) stay on one's own half too.
-- **The game rules are the host's, workers are each player's** - the game
-  rules page changes for the host only, with a notice for the player (the
-  bottom menu's auto-build, auto-invite and auto-purchase stay shared for
-  now). "Max.
-  workers without CO" is each player's own: a player's construction sites
-  and demolitions take that player's number (a player's number is not saved;
-  a load starts both from the save's).
-- **Plans and terrain on one's own half** - "start planned construction" and
-  "cancel all plans" leave the other republic's plans alone, and the terrain
-  brushes (raise, lower, level, trees, topsoil) stop at the border: a brush
-  that reaches the other half is refused, with the notice.
+- **Fix: resource prices growing with every re-sync** - loading a save with
+  enough economy history makes the game compute every resource's price
+  again and add a history record. A session loads at every join and every
+  re-sync, each time from the save just written: the prices were computed
+  again from already computed ones, dozens of times an evening, and the
+  saves kept them (gravel at 17,000 a ton). A session's load now keeps the
+  saved prices. Saves that already have such prices keep them - load an
+  older save to get normal prices back.
 
 **Fewer crashes**
 
@@ -133,8 +248,17 @@ check refuses another DLL, 0.7.4 included).
   (the crash came while the game wrote saved_last). The list is emptied at
   every load.
 
+- **Fix: a host crash on a purchase into an unfinished depot** - when the
+  games had already split, a player could buy into a depot that was finished
+  on that PC but still a construction site on the host's, and the game's
+  depot routine faulted there. Such a purchase is now refused.
+
 **Debug**
 
+- **Debug: the sapling start in the log** - the saplings start growing only
+  once the engine's tree list is loaded (engine state, not in the save); the
+  log says when it is, so two logs show a PC that started its saplings at
+  another tick.
 - **Debug: fields, farm vehicles and the vehicles' random number in desync
   reports** - with buildings or citizens differing, a report lists each
   field's work words (the farm's planting test reads them); with vehicles or

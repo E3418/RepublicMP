@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// RepublicMP by E3418 and Sohn (juniorsohn); all authors in README.md.
 // See save_sync.h.
 #include "save_sync.h"
 #include "../core/version.h"
@@ -36,9 +37,9 @@
 
 static void LoadSettings();
 
-void SaveSync_Bind(const TsmHost* host)
+void SaveSync_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
     LoadSettings();
 }
 
@@ -106,7 +107,7 @@ static void SetSessionError(const char* fmt, ...)
     if (body[0]) Logf("republicmp  SESSION: error shown - %s", body);
 }
 
-// Writes to tesmioloader.log and the in-game UI log.
+// Writes to republicmp.log and the in-game UI log.
 void SaveStatus(const char* fmt, ...)
 {
     char body[512];
@@ -246,6 +247,8 @@ static bool HelloMatches(const SessionHello& peer, char* why, size_t whySize)
     }
     char peerVersion[17] = {};
     memcpy(peerVersion, peer.version, 16);
+    // RepublicMP (E3418, Sohn): a renamed copy of the mod still has to pass
+    // this check against the same copy on every PC.
     if (peer.protocol != REPUBLICMP_PROTOCOL || strcmp(peerVersion, REPUBLICMP_VERSION) != 0 ||
         peer.dllCrc != SaveSync_GetLocalDllCrc()) {
         _snprintf_s(why, whySize, _TRUNCATE,
@@ -1647,7 +1650,11 @@ void SaveSync_RequestResync()
     if (g_isHost && g_state == SESSION_HOST_IN_GAME) g_resyncRequested = true;
 }
 
-void SaveSync_SetDesyncResyncSeconds(int seconds) { g_desyncResyncSeconds = seconds < 0 ? -1 : seconds; }
+void SaveSync_SetDesyncResyncSeconds(int seconds)
+{
+    g_desyncResyncSeconds = seconds < 0 ? -1 : seconds;
+    Profile_SetInt("profile", "desync_resync", g_desyncResyncSeconds);
+}
 int SaveSync_GetDesyncResyncSeconds() { return g_desyncResyncSeconds; }
 
 ULONGLONG SaveSync_GetMsUntilDesyncResync()
@@ -1703,7 +1710,12 @@ void SaveSync_Tick()
 }
 
 SessionState SaveSync_GetState() { return g_state; }
-static void LoadSettings() { g_dlcCheck = Profile_GetInt("profile", "dlc_check", 1) != 0; }
+static void LoadSettings()
+{
+    g_dlcCheck = Profile_GetInt("profile", "dlc_check", 1) != 0;
+    int delay = Profile_GetInt("profile", "desync_resync", 60);
+    g_desyncResyncSeconds = delay < 0 ? -1 : delay;
+}
 
 void SaveSync_SetDlcCheck(bool on)
 {

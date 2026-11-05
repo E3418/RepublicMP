@@ -19,7 +19,7 @@
 //   are not taken.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
 #define HOOK_UNIVERSAL_RVA 0x2BADE0
 #define HOOK_ROAD_COMMIT_RVA 0x518A80
@@ -72,7 +72,7 @@ void LocalBuilds_Tick();
 // (thisPtr+0xd2ac).
 bool LocalBuilds_IsToolDragActive();
 
-void LocalBuilds_Bind(const TsmHost* host);
+void LocalBuilds_Bind(const ModHost* host);
 
 // Lockstep: a network demolition command was made (every PC); the clicking PC
 // may send that piece again if the tool still selects it.

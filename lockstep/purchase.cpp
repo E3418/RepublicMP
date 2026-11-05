@@ -11,9 +11,9 @@
 #include <string.h>
 #include <vector>
 
-void Purchase_Bind(const TsmHost* host)
+void Purchase_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 #define WORLD_RVA 0x9D4F10
@@ -37,6 +37,10 @@ void Purchase_Bind(const TsmHost* host)
 #define VARIANT_COUNT 0x20
 #define MAX_TRAILERS 16
 #define WINDOW_BYTES 0x600
+#define SOUND_RVA 0x3FFAD0             // 3ffad0(world, name, 1): the game's interface sound by name
+#define TYPE_CATEGORY 0x294            // vehicle type: its category
+#define TYPE_PLANE_LIST 0x7AD8         // vector of 12-byte entries; empty: the jet sound
+#define TYPE_ELECTRIC 0x8680           // byte: an electric train
 
 // The routines the replay calls; narrow arguments travel in full slots, as the branch passes them.
 typedef unsigned char (*SlotFn)(BYTE* world, BYTE* depot, BYTE* type, unsigned __int64 zero, int* slot);              // 3e3f40
@@ -338,6 +342,33 @@ static PressOutcome Capture(const CONTEXT* c, PurchaseMsg& m, const char** why)
     return PRESS_TAKE;
 }
 
+typedef void (*SoundFn)(BYTE* world, const char* name, unsigned __int64 one);
+
+// The Buy branch's sound (810d2c..810e77), which the press read "not pressed"
+// leaves out: played here on the clicking PC at the click, as the game does.
+// The branch's last test (the type's list +96b8 holding the "tram" ident, a
+// diesel train's sound) is left out: those types get "purchase_vehicle".
+static void PlayBuySound(BYTE* world, BYTE* type)
+{
+    __try {
+        int cat = *(int*)(type + TYPE_CATEGORY);
+        const char* name = "purchase_vehicle";
+        if (cat == 6) name = "building_purchase_vehicle_ship";
+        else if (cat == 7) name = "building_purchase_vehicle_cableway";
+        else if (cat == 10) name = "building_purchase_vehicle_helicopter";
+        else if (cat == 8) {
+            BYTE** props = (BYTE**)(type + TYPE_PLANE_LIST);
+            name = props[1] - props[0] >= 12 ? "building_purchase_vehicle_plane_prop" : "building_purchase_vehicle_plane_jet";
+        } else if (cat == 4 || cat == 5) {
+            name = type[TYPE_ELECTRIC] ? "building_purchase_vehicle_train_electric" : "building_purchase_vehicle_train_diesel";
+        } else if (cat == 3) {
+            name = "building_purchase_vehicle_train_tram";
+        }
+        ((SoundFn)(g_exeBase + SOUND_RVA))(world, name, 1);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
 bool Purchase_OnPress(bool pressed, const CONTEXT* caller)
 {
     if (!pressed || !Commands_TakeLocal()) return pressed;
@@ -355,6 +386,7 @@ bool Purchase_OnPress(bool pressed, const CONTEXT* caller)
         return false;
     }
     Commands_Submit(LS_CMD_PURCHASE, &m, sizeof(m));
+    PlayBuySound(g_exeBase + WORLD_RVA, (BYTE*)caller->R13);
     return false;
 }
 
@@ -589,6 +621,9 @@ static const char* Replay(const PurchaseMsg& m, BYTE** bought)
         BYTE* depot = BuildingAt(world, m.depot);
         if (!depot) return "the depot differs";
         if (!Commands_BuildingInArea((unsigned long long)depot)) return "the depot is outside the buyer's area";
+        // A building without a type is still a construction site: the depot was finished on the
+        // clicking PC only (the games had split), and 3e3f40 faulted on its type here.
+        if (!*(BYTE**)(depot + 0x318)) return "the depot is not finished here";
         if (!WriteVariants(type, m)) return "the trailers differ";
         int campaign = *(int*)(g_exeBase + CAMPAIGN_RVA);
         if (m.kind >= 5) return ReplayBlueprint(world, m, type, depot, campaign);

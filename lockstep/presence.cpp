@@ -55,9 +55,9 @@ static bool PingKeyAllowed(int vk)
     return vk > 0 && vk < 0xFF && vk != VK_LBUTTON && vk != VK_RBUTTON && vk != VK_ESCAPE && vk != VK_INSERT;
 }
 
-void Presence_Bind(const TsmHost* host)
+void Presence_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
     if (!g_marksReady) {
         InitializeCriticalSection(&g_marksLock);
         g_marksReady = true;

@@ -51,9 +51,9 @@ typedef void (*ReserveFn)(U64 vector, U64 count);
 static GetterFn g_getter = nullptr;
 static bool g_ready = false;
 
-void CallHome_Bind(const TsmHost* host)
+void CallHome_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 static U64 Q(U64 at) { return *(U64*)at; }

@@ -30,7 +30,7 @@
 // between machines - only indices, names and values.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 #include <vector>
 
 struct StateSummary {
@@ -48,7 +48,7 @@ struct StateSummary {
     unsigned long long hashCitizens;
 };
 
-void StateHash_Bind(const TsmHost* host);
+void StateHash_Bind(const ModHost* host);
 
 // Reads the current state. False if the world is not loaded or a read faulted.
 // Game thread only (reads live engine objects).

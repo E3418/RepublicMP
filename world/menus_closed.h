@@ -12,7 +12,7 @@
 // (by TucKnock; the same as SoylentGreed's replays do)
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
 #define MENUS_WORLD_RVA 0x9D4F10
 #define MENU_FLAG_COUNT 3

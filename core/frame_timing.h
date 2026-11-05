@@ -6,7 +6,7 @@
 // PC slow in a session.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
 enum FrameSlot {
     FRAME_EARLY,          // the tick's Early (the simulation), on step frames
@@ -24,7 +24,7 @@ enum FrameSlot {
     FRAME_SLOT_COUNT
 };
 
-void FrameTiming_Bind(const TsmHost* host);
+void FrameTiming_Bind(const ModHost* host);
 bool FrameTiming_GetOn();
 void FrameTiming_SetOn(bool on);
 

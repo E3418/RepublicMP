@@ -14,9 +14,9 @@
 // (exe+0x9E0B38). Found as the minimap draws its border (4bde80).
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void Panel2D_Bind(const TsmHost* host);
+void Panel2D_Bind(const ModHost* host);
 
 // The back buffer's size in pixels (exe+0x99528C width, +0x995274 height).
 bool Panel2D_ScreenSize(float* width, float* height);

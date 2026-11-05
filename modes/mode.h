@@ -6,7 +6,7 @@
 // (see ARCHITECTURE.md for the hooks on the game, which have one owner each).
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
 struct RmpMode {
     const char* title;  // the start page's card: its title and two lines
@@ -24,7 +24,7 @@ struct RmpMode {
     void (*drawOverlay)();
 };
 
-// Called once, from the mode's Bind (TsmPluginInit). Null members are skipped.
+// Called once, from the mode's Bind (RepublicMP_Start). Null members are skipped.
 void Modes_SetRepublics(const RmpMode* mode);
 // Null until a Republics mode is plugged in.
 const RmpMode* Modes_Republics();

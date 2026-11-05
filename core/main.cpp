@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// RepublicMP - TesmioLoader plugin entry points.
-#include "tesmio_plugin.h"
+// RepublicMP by E3418 and Sohn (juniorsohn); all authors in README.md.
+// RepublicMP - the entry point the proxy calls: RepublicMP_Start.
+#include "host.h"
 #include "../world/local_builds.h"
 #include "../game/present_hook.h"
 #include "../session/game_speed.h"
@@ -39,6 +40,9 @@
 #include "../lockstep/crime_cancel.h"
 #include "../lockstep/call_home.h"
 #include "../lockstep/popups.h"
+#include "../lockstep/remote_sounds.h"
+#include "../save/mod_save.h"
+#include "../save/camera_keep.h"
 #include "../lockstep/rename.h"
 
 #include "../game/world.h"
@@ -52,15 +56,10 @@
 #include "profile.h"
 #include "frame_timing.h"
 
-extern "C" __declspec(dllexport) unsigned TsmPluginApiVersion(void)
+// Binds every module to the host.
+static void BindModules(const ModHost* host)
 {
-    return TSM_API_VERSION;
-}
-
-// Binds every module to the loader's host API.
-extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPluginInfo* info)
-{
-    TsmBind(host);
+    ModHost_Bind(host);
     Profile_Bind(host);
     FrameTiming_Bind(host);
     World_Bind(host);
@@ -74,6 +73,9 @@ extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPlugi
     GameSpeed_Bind(host);
     SaveLoad_Bind(host);
     SaveZip_Bind(host);
+    ModSave_Bind(host);
+    CameraKeep_Bind(host);
+    RemoteSounds_Bind(host);
     Network_Bind(host);
     SaveSync_Bind(host);
     Workshop_Bind(host);
@@ -99,15 +101,13 @@ extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPlugi
     ProbeWatch_Bind(host);
     BuildingSettings_Bind(host);
     Republics_Bind(host);
-    info->name    = "republicmp";
-    info->version = REPUBLICMP_VERSION;
-    return 0;
 }
 
 // Installs the engine hooks and starts the background threads.
-extern "C" __declspec(dllexport) int TsmPluginStart(void)
+static int InstallHooks()
 {
     Logf("republicmp  version=%s", REPUBLICMP_VERSION);
+    Logf("republicmp  by %s - GPL v3, keep this line in any copy", REPUBLICMP_AUTHORS);
 
     bool okUniversal = InstallInlineHook(g_exeBase + HOOK_UNIVERSAL_RVA, (void*)HookedUniversal,
                                           (void**)&g_origUniversal, kUniversalExpect,
@@ -174,6 +174,12 @@ extern "C" __declspec(dllexport) int TsmPluginStart(void)
     bool okPopups = Popups_Install();
     Logf("republicmp  popup callbacks: %d%s", okPopups, okPopups ? "" : " - popups act on the clicking PC only");
 
+    bool okModSave = ModSave_Install();
+    Logf("republicmp  save hook: %d%s", okModSave, okModSave ? "" : " - saves get no " MOD_SAVE_FILE " (views are not kept in them)");
+
+    bool okSounds = RemoteSounds_Install();
+    Logf("republicmp  remote command sounds: %d%s", okSounds, okSounds ? "" : " - other players' commands are heard here");
+
     bool okLinkSearch = Buildings_InstallLinkSearch();
     Logf("republicmp  building link search: %d%s", okLinkSearch,
          okLinkSearch ? "" : " - placed buildings get no conveyor, pipe or factory connections in a session");
@@ -200,6 +206,14 @@ extern "C" __declspec(dllexport) int TsmPluginStart(void)
 
     if (!okUniversal) return 1;
     return 0;
+}
+
+// Called once by the proxy (xinput9_1_0.dll) on the game's main thread, before
+// the game's first instruction. Non-zero: the main hook could not be installed.
+extern "C" __declspec(dllexport) int RepublicMP_Start(void)
+{
+    BindModules(Host_Init());
+    return InstallHooks();
 }
 
 BOOL APIENTRY DllMain(HMODULE, DWORD, LPVOID) { return TRUE; }

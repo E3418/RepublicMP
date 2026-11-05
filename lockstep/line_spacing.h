@@ -12,9 +12,9 @@
 // every PC makes the toggle at the boundary.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void LineSpacing_Bind(const TsmHost* host);
+void LineSpacing_Bind(const ModHost* host);
 bool LineSpacing_Install();
 
 // The command (lockstep/commands).

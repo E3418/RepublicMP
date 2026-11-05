@@ -47,9 +47,9 @@ typedef U64 (*ToolFn)(U64 world, U64 a2);
 
 static int g_ready[KINDS] = { -1, -1, -1, -1, -1, -1 };
 
-void HoverTools_Bind(const TsmHost* host)
+void HoverTools_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 bool HoverTools_Ready(int kind)

@@ -18,9 +18,9 @@
 // command (both buildings); every PC makes the four steps at the boundary.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void CallHome_Bind(const TsmHost* host);
+void CallHome_Bind(const ModHost* host);
 bool CallHome_Install();
 
 // The command (lockstep/commands).

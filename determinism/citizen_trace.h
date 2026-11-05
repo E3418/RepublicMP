@@ -12,9 +12,9 @@
 // made); a building by its index (+0x00), a vehicle by its index (+0x04).
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void CitizenTrace_Bind(const TsmHost* host);
+void CitizenTrace_Bind(const ModHost* host);
 bool CitizenTrace_Install();
 
 // Writes the events of ticks fromTick+1 .. toTick to the log (any thread).

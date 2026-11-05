@@ -25,9 +25,9 @@ struct NewCityMsg {
 
 static bool g_assignTaken = false; // the tool's 32ff40 after a captured 32f450
 
-void NewCity_Bind(const TsmHost* host)
+void NewCity_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 static BYTE* World() { return g_exeBase + WORLD_RVA; }
