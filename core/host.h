@@ -43,6 +43,10 @@ static void ModHost_Bind(const ModHost* host)
 // mod: nothing below works before it. Runs once, from RepublicMP_Start.
 const ModHost* Host_Init();
 
+// The folder RepublicMP.dll lives in, the game's folder; "" when unknown. The
+// mod's own files go to its RepublicMP subfolder, which Host_Init makes.
+const wchar_t* Host_GameDir();
+
 // Writes to RepublicMP\logs\republicmp.log with a timestamp. Prefix the message
 // with the module's short name. The game holds the file open, so reading it
 // while the game runs needs FileShare.ReadWrite.

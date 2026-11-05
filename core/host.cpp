@@ -8,6 +8,9 @@
 static ModHost g_host;
 static CRITICAL_SECTION g_logLock;
 static HANDLE g_log = INVALID_HANDLE_VALUE;
+static wchar_t g_gameDir[MAX_PATH];
+
+const wchar_t* Host_GameDir() { return g_gameDir; }
 
 // ---------------------------------------------------------------- log
 
@@ -44,6 +47,7 @@ static void OpenLog()
     wchar_t* slash = wcsrchr(path, L'\\');
     if (!slash) return;
     *slash = 0;
+    wcscpy_s(g_gameDir, path);
 
     wchar_t dir[MAX_PATH + 32];
     swprintf_s(dir, L"%ls\\RepublicMP", path);

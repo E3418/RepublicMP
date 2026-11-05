@@ -34,6 +34,25 @@ static bool g_insertWasDown = false;
 
 bool g_imguiVisible = false; // a debug tool now: INSERT shows it; the MULTIPLAYER page is the players' UI
 
+// ImGui keeps the windows' places in imgui.ini in the current folder unless told
+// otherwise, which is the game's. An older one moves over once so the windows
+// stay where they were; the move fails harmlessly when there is nothing to move
+// or the new file already exists.
+static void PlaceImGuiIni(ImGuiIO& io)
+{
+    static char s_path[(MAX_PATH + 32) * 3]; // ImGui keeps the pointer; UTF-8
+    const wchar_t* dir = Host_GameDir();
+    if (!dir[0]) return;
+
+    wchar_t oldPath[MAX_PATH + 32], newPath[MAX_PATH + 32];
+    swprintf_s(oldPath, L"%ls\\imgui.ini", dir);
+    swprintf_s(newPath, L"%ls\\RepublicMP\\imgui.ini", dir);
+    MoveFileW(oldPath, newPath);
+
+    if (WideCharToMultiByte(CP_UTF8, 0, newPath, -1, s_path, sizeof(s_path), nullptr, nullptr))
+        io.IniFilename = s_path;
+}
+
 void ImGuiHook_Bind(const ModHost* host)
 {
     ModHost_Bind(host);
@@ -140,6 +159,7 @@ void ImGuiHook_EnsureInit(IDXGISwapChain* swapChain)
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
+    PlaceImGuiIni(io);
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     ImGui::StyleColorsDark();
 

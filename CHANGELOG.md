@@ -9,6 +9,7 @@
 - The log moved to `RepublicMP\logs\republicmp.log` and the profile to
   `RepublicMP\RepublicMP.profile.ini`, in the game's folder. The nick and the
   settings start from the defaults once, unless the old file is moved there.
+  `imgui.ini` moved to the same folder by itself.
 
 ## 0.7.6
 
