@@ -330,7 +330,9 @@ Inferred, several sites each.
   the map inset by 100. Placement `0x2BADE0` refuses with error 5
   (`editor/error_building_border.png`) at `0x2CAA4C` and `0x2CB15F`; the drag
   tick reaches it through `0x4FA970` and `0x51D160`. A byte at `0xA54BC0`
-  turns the check off (meaning unknown).
+  turns the check off, and the next one too: a `$BORDER_BUILDING` (type `+0xAE0`)
+  must stand on the border, else `0x2CAF91` -> `0x411270` refuses with error 5,
+  `0x4E1F`.
 
 ## Clock and threads
 

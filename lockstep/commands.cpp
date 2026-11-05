@@ -473,13 +473,20 @@ void Commands_SetSpawned(CommandSpawnedFn fn) { g_spawned = fn; }
 // A building placed as the build-with-money tool does, so it stands finished at
 // once, with the game's "no charges" flag on while it is made: nobody pays.
 #define WORLD_FREE_BUILDING 0x578
+#define BORDER_CHECK_OFF_RVA 0xA54BC0
 static bool ApplySpawnBuilding(const BuildingMsg& m)
 {
     int* free = (int*)(g_exeBase + 0x9D4F10 + WORLD_FREE_BUILDING);
     int wasFree = *free;
     double rub = *Rubles(), usd = *Dollars();
+    // A $BORDER_BUILDING goes only on the map's border (2caf91 -> 411270, error 5,
+    // 0x4E1F) unless this byte is set, which also lifts 410d50 while it is.
+    unsigned char* anywhere = g_exeBase + BORDER_CHECK_OFF_RVA;
+    unsigned char wasAnywhere = *anywhere;
     *free = 1;
+    *anywhere = 1;
     bool ok = Buildings_ApplyPlacementCommand(m);
+    *anywhere = wasAnywhere;
     *free = wasFree;
     *Rubles() = rub;
     *Dollars() = usd;
