@@ -141,6 +141,9 @@ bool Commands_PointInArea(const float pos[3], bool notify = true);
 // line (none of its stations outside; border connections count as anyone's)
 // and a station of a line.
 bool Commands_VehicleInArea(unsigned long long vehicle);
+// What decides a vehicle's side: the building it belongs to (0: none), else
+// where it is. False when the vehicle could not be read. Any thread.
+bool Commands_VehicleSide(unsigned long long vehicle, unsigned long long* building, float pos[3]);
 bool Commands_LineInArea(unsigned long long line);
 bool Commands_StationInArea(unsigned long long station);
 // While this thread makes a command: the mode's global rule for its player.

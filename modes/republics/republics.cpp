@@ -194,6 +194,15 @@ static bool AreaRule(int player, const float pos[3], bool notify)
     return ok;
 }
 
+// Wallets_SetHalfRule: whose money a building or a vehicle spends. No band here:
+// everything belongs to one of the two. Inside the game's own calls.
+static int OwnerHalf(const float pos[3])
+{
+    const Cut* c = ReadyCut();
+    if (!c) return -1;
+    return pos[0] * c->nx + pos[2] * c->nz - c->offset < 0 ? 0 : 1;
+}
+
 // Commands_SetGlobalRule: the game's rules (the rules page) are the host's.
 static bool GlobalRule(int player)
 {
@@ -417,8 +426,7 @@ static void DrawPage()
                        "moved so both halves get the same playable area. A red line on the map and the minimap shows it.");
     ImGui::Spacing();
     ImGui::TextColored(ImVec4(0.95f, 0.8f, 0.25f, 1.0f),
-                       "In development: buildings and networks stay on your half; each republic has its own money, "
-                       "but what buildings and vehicles earn and pay is still split in two.");
+                       "In development: buildings and networks stay on your half; each republic has its own money.");
     double rub0, usd0, rub1, usd1;
     if (Wallets_Read(&rub0, &usd0, &rub1, &usd1)) {
         ImGui::Spacing();
@@ -443,6 +451,7 @@ void Republics_Bind(const ModHost* host)
     g_showSigns = Profile_GetInt("overlay", "border_signs", 1) != 0;
     Commands_SetAreaRule(AreaRule);
     Commands_SetGlobalRule(GlobalRule);
+    Wallets_SetHalfRule(OwnerHalf);
     Determinism_AddFrameObserver(SampleBorder);
     Determinism_AddStepObserver(SampleBorder);
     SimPatches_SetUnderUi(DrawUnderUi);

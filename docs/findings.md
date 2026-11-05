@@ -520,6 +520,11 @@ read in the disassembly, what a payer pays for is a guess unless said.
   unknown.
 - **No owner:** the scenario script `0x59F1F0` sets the balances (only from
   the function tables `0x909818`, `0x967320`).
+- **Loans:** the records are `world+0x10BD0`, 0x28 bytes each; `0x4B9490(world,
+  loan)` pays one a day, through a computed address (`lVar2 + world`), called
+  only from `0x4B96D3`. `+0x08` currency (1 dollars), `+0x10` days left, `+0x14`
+  amount, `+0x18` amount under penalty. `+0x0C` ($LoanSubType) is 0 from
+  `Loan_Borrow` and the loan windows do not read it; Republics keeps the owner there.
 - **Load and new game:** the loader `0x430FC0` (`0x437CB6`, both at once),
   the header import `0x430690`; the new game's starting money `0x2FB1D0`.
 - **"Not enough money" checks:** the drag tick `0x5171A4`, `0x5172A9`;

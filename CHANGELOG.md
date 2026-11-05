@@ -13,7 +13,7 @@
 - **Fix: "citizens" desyncs around construction sites** - the game placed a
   site's worker at a point read from before the start of the piece's points
   on some stages, which is whatever the memory held on that PC. The worker now
-  stands at the piece's first point. Protocol 61 - every player needs this
+  stands at the piece's first point. Protocol 62 - every player needs this
   build.
 - **Fix: a player's view after a re-sync** - every player got the host's view
   back: the game had already set the camera from the save when RepublicMP read
@@ -48,8 +48,10 @@
   the save's `republicmp.ini`. A save without them starts each from the save's
   balances: Equal gives both the same, East vs West mirrors them (the East's
   rubles are the West's dollars and the other way round). Prices stay the same
-  for both. What a player does is paid from that player's account; what
-  buildings and vehicles earn and pay has no owner yet and is split in two.
+  for both. What a player does is paid from that player's account, a building
+  pays and earns for the half it stands on, a vehicle for the side of its depot
+  or building, and a loan is paid by who took it. What is left without an owner
+  is split in two and logged.
 - **The cancel tools on one's own half only** (#49) - a network's cancel tool
   (cancel road and the others) removed a piece anywhere, the other
   republic's too. A piece with an end on the other half is now refused, with

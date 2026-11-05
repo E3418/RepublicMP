@@ -8,12 +8,14 @@
 //
 //   between the frame's phases  this PC's republic (the HUD, a click's test)
 //   while a command is made     the republic of the player who made it
-//   while a tick runs           both added up: what the tick pays or earns has
-//                               no owner yet and is split in two
+//   while a tick updates a building, a vehicle or a loan
+//                               the republic it belongs to
+//   the rest of a tick          both added up: what is paid or earned there has
+//                               no owner and is split in two
 //
-// That third case is the next step: paying buildings and vehicles from their
-// own republic's account. Until then Wallets_LogState shows how much of the
-// money goes through it.
+// A building belongs to the half it stands on, a vehicle to the side of its
+// depot or building (Commands_VehicleSide), a loan to who took it. Wallets_LogState
+// shows how much money still goes through the split.
 //
 // The accounts are kept per half of the map, not per player, so a host who
 // picks the other side keeps the right one. They go into the save's
@@ -28,6 +30,18 @@
 #include "host.h"
 
 void Wallets_Bind(const ModHost* host);
+// The payers' hooks; they do nothing outside a Republics session.
+bool Wallets_Install();
+
+// The mode: which half a point is on, 0 or 1; -1 while the cut is not known. It
+// runs inside the game's own calls, so it only uses a cut already measured.
+typedef int (*WalletsHalfRule)(const float pos[3]);
+void Wallets_SetHalfRule(WalletsHalfRule rule);
+
+// Between the two, money belongs to this building's republic. Calls nest; End
+// takes what Begin returned. Used by the construction update's own relay.
+int Wallets_BuildingBegin(unsigned long long building);
+void Wallets_BuildingEnd(int previous);
 
 // Determinism's load hook, after the game's load and the save's file were read.
 // session: this load starts or re-syncs a lockstep session.

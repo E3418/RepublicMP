@@ -1431,6 +1431,8 @@ static U64 DetSiteUpdate(U64 world, U64 building, float a3, U64 a4)
     bool viewed = g_on && Determinism_IsActive() && b && b[0x115A];
     if (viewed) b[0x115A] = 0;
     SiteWatch_UpdateBefore(b);
+    // A session's construction update comes through here only from the tick's Late.
+    int walletScope = Wallets_BuildingBegin(building); // the site is paid by its own republic
     U64 r;
     if (!g_on || !Determinism_GetMoneyTrace()) {
         r = original(world, building, a3, a4);
@@ -1442,6 +1444,7 @@ static U64 DetSiteUpdate(U64 world, U64 building, float a3, U64 a4)
         SiteWatch_UpdateAfter(b);
         Determinism_NoteSitePayment(b, *(double*)(world + 0x588) - rub, *(double*)(world + 0x580) - usd);
     }
+    Wallets_BuildingEnd(walletScope);
     return r;
 }
 

@@ -393,24 +393,32 @@ static bool BuildingListed(unsigned long long building)
 
 // shortcut: the game keeps no owner of a vehicle, so it counts as on the side of
 // the depot it is going to, the building it is registered at or in, else of
-// where it is; a stored owner (recorded at purchase and saved) comes with the
-// per-player wallets.
-bool Commands_VehicleInArea(unsigned long long vehicle)
+// where it is; a stored owner would have to be recorded at purchase and saved.
+bool Commands_VehicleSide(unsigned long long vehicle, unsigned long long* building, float pos[3])
 {
-    if (!g_areaRule || !vehicle || g_applying == 0 || GetCurrentThreadId() != g_applyThread) return true;
-    unsigned long long building = 0;
-    float pos[3];
+    *building = 0;
+    if (!vehicle) return false;
     __try {
         for (int i = 0; i < 16 && *(unsigned long long*)(vehicle + VEHICLE_PARENT); i++)
             vehicle = *(unsigned long long*)(vehicle + VEHICLE_PARENT);
-        building = *(unsigned long long*)(vehicle + VEHICLE_DEPOT);
-        if (building && !BuildingListed(building)) building = 0; // a depot demolished since: not read
-        if (!building) building = *(unsigned long long*)(vehicle + VEHICLE_REGISTERED);
-        if (!building) building = *(unsigned long long*)(vehicle + VEHICLE_IN);
-        memcpy(pos, (const void*)(vehicle + VEHICLE_POS), sizeof(pos));
+        unsigned long long b = *(unsigned long long*)(vehicle + VEHICLE_DEPOT);
+        if (b && !BuildingListed(b)) b = 0; // a depot demolished since: not read
+        if (!b) b = *(unsigned long long*)(vehicle + VEHICLE_REGISTERED);
+        if (!b) b = *(unsigned long long*)(vehicle + VEHICLE_IN);
+        memcpy(pos, (const void*)(vehicle + VEHICLE_POS), sizeof(float) * 3);
+        *building = b;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return true;
+        return false;
     }
+    return true;
+}
+
+bool Commands_VehicleInArea(unsigned long long vehicle)
+{
+    if (!g_areaRule || !vehicle || g_applying == 0 || GetCurrentThreadId() != g_applyThread) return true;
+    unsigned long long building;
+    float pos[3];
+    if (!Commands_VehicleSide(vehicle, &building, pos)) return true;
     return building ? Commands_BuildingInArea(building) : Commands_PointInArea(pos);
 }
 
