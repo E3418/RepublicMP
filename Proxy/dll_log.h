@@ -6,4 +6,5 @@
 
 bool Log_Open(const wchar_t* path);
 void Log_Write(const char* text);
+void Log_WritePath(const char* label, const wchar_t* path);
 void Log_Close();

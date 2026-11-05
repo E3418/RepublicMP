@@ -164,11 +164,13 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="dllmain.cpp" />
+    <ClCompile Include="dll_entry.cpp" />
     <ClCompile Include="dll_loader.cpp" />
     <ClCompile Include="dll_log.cpp" />
     <ClCompile Include="dll_proxy.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="dll_entry.h" />
     <ClInclude Include="dll_loader.h" />
     <ClInclude Include="dll_log.h" />
   </ItemGroup>

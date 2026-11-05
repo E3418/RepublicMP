@@ -18,6 +18,9 @@
     <ClCompile Include="dllmain.cpp">
       <Filter>Zdrojové soubory</Filter>
     </ClCompile>
+    <ClCompile Include="dll_entry.cpp">
+      <Filter>Zdrojové soubory</Filter>
+    </ClCompile>
     <ClCompile Include="dll_loader.cpp">
       <Filter>Zdrojové soubory</Filter>
     </ClCompile>
@@ -29,6 +32,9 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="dll_entry.h">
+      <Filter>Zdrojové soubory</Filter>
+    </ClInclude>
     <ClInclude Include="dll_loader.h">
       <Filter>Zdrojové soubory</Filter>
     </ClInclude>
