@@ -139,9 +139,11 @@ static bool OutOfPlayable(const float p[3])
 // A broken line: a few general directions drawn from the world's seed, and for
 // each, knots about KNOT_SPACING_M apart moved at random; the most even result
 // wins. After every move the whole line shifts so the playable area stays half
-// and half. What is judged, in order: the border crossings; the resources' amounts,
-// the worst-shared one counting double; how many deposits (patches) each side has,
-// whole ones where it can be, and a resource with only one deposit cut in two.
+// and half. What is judged, in order: the border crossings (customs houses and
+// the other buildings on the border, each type shared evenly); each resource's
+// amount, which counts only past RESOURCE_TOLERANCE from an even share; how many
+// deposits (patches) each side has, whole ones where it can be, and a resource
+// with only one deposit cut in two.
 //
 // Only exact arithmetic is used (no sine or exp: the CRT's differ by CPU), and all
 // it reads is the same on every PC: the save everyone loaded. The cut is kept in
@@ -163,17 +165,16 @@ static bool OutOfPlayable(const float p[3])
 #define RESOURCE_CHANNELS 5 // coal, iron, oil, bauxite, uranium: resourcemap RGB, resourcemap2 RG
 #define RESOURCE_CELL 8     // texels added into one point
 #define MAX_CROSSINGS 1024
-#define CUT_CELL_STRIDE 16 // of the playable cells, one in this many while the knots move
-// The network table (lockstep/cancel_tool): each network's committed edges and their nodes.
-#define NET_COUNT 0x14034
-#define NET_FIRST 0x14038
-#define NET_STRIDE 0x50
-#define NET_MAX 64
-#define NET_EDGES 0x2B0
-#define EDGE_NODE0 0x20
-#define EDGE_NODE1 0x28
-#define NODE_POS 4
-#define NET_MAX_EDGES (1u << 20)
+#define CUT_CELL_STRIDE 3 // of the playable grid's rows and columns, one in this many while the knots move
+#define RESOURCE_TOLERANCE 0.10 // |a - b| / (a + b): 45% to 55% is even enough
+// A building's type: its category, and $BORDER_BUILDING (BuildingType_LoadIni,
+// 10fefe: the record starts at rbp+0x1ab0, as its category at rbp+0x1e10 shows).
+#define BUILDING_TYPE 0x318
+#define TYPE_CATEGORY 0x360
+#define TYPE_BORDER_FLAG 0xAE0
+#define CATEGORY_CUSTOMS 0x14
+#define CROSSING_GROUPS 64 // one per building type, and the last for all the customs houses
+#define CROSSING_ALL_CUSTOMS (CROSSING_GROUPS - 1)
 
 struct ResourcePoint {
     float x, z, amount;
@@ -185,7 +186,7 @@ struct Deposit {
 };
 struct Crossing {
     float x, z;
-    int network;
+    int group;
 };
 
 static std::vector<ResourcePoint> g_resources;
@@ -268,31 +269,30 @@ static void ReadResourceMap(const char* folder, const char* name, int firstChann
     fclose(f);
 }
 
-// The networks' edges that go out through the map's playable border: roads,
-// rails, wires and the rest that lead abroad, counted where they cross.
+// The buildings that lead abroad: the customs houses (the air ones have no
+// border flag) and what else the game marks as on the border. Each type is its
+// own group, so three of one kind and one of another do not count as even.
 static void FindCrossings()
 {
-    BYTE* world = (BYTE*)World_Object();
+    unsigned char** begin = nullptr;
+    unsigned char** end = nullptr;
+    if (!World_Buildings(&begin, &end)) return;
+    const BYTE* types[CROSSING_ALL_CUSTOMS] = {};
     __try {
-        int networks = *(int*)(world + NET_COUNT);
-        if (networks < 0 || networks > NET_MAX) return;
-        for (int t = 0; t < networks; t++) {
-            BYTE* net = *(BYTE**)(world + NET_FIRST + (size_t)t * NET_STRIDE);
-            if (!net) continue;
-            BYTE** begin = *(BYTE***)(net + NET_EDGES);
-            BYTE** end = *(BYTE***)(net + NET_EDGES + 8);
-            if (!begin || end <= begin || (size_t)(end - begin) > NET_MAX_EDGES) continue;
-            for (BYTE** e = begin; e < end && g_crossings.size() < MAX_CROSSINGS; ++e) {
-                BYTE* n0 = *(BYTE**)(*e + EDGE_NODE0);
-                BYTE* n1 = *(BYTE**)(*e + EDGE_NODE1);
-                if (!n0 || !n1) continue;
-                const float* a = (const float*)(n0 + NODE_POS);
-                const float* b = (const float*)(n1 + NODE_POS);
-                bool outA = OutOfPlayable(a), outB = OutOfPlayable(b);
-                if (outA == outB) continue;
-                const float* in = outA ? b : a;
-                g_crossings.push_back({ in[0], in[2], t });
-            }
+        for (unsigned char** b = begin; b < end && g_crossings.size() < MAX_CROSSINGS; ++b) {
+            if (!*b) continue;
+            const BYTE* type = *(const BYTE**)(*b + BUILDING_TYPE);
+            if (!type) continue;
+            bool customs = *(const int*)(type + TYPE_CATEGORY) == CATEGORY_CUSTOMS;
+            if (!customs && !type[TYPE_BORDER_FLAG]) continue;
+            int group = 0;
+            while (group < CROSSING_ALL_CUSTOMS && types[group] && types[group] != type) group++;
+            if (group == CROSSING_ALL_CUSTOMS) continue;
+            types[group] = type;
+            float pos[3];
+            if (!World_BuildingPos(*b, pos)) continue;
+            g_crossings.push_back({ pos[0], pos[2], group });
+            if (customs) g_crossings.push_back({ pos[0], pos[2], CROSSING_ALL_CUSTOMS });
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         g_measureFault = true;
@@ -301,11 +301,11 @@ static void FindCrossings()
 
 struct CutScore {
     int crossingsOff;    // crossings beyond an even share (an odd count leaves one over)
-    double resourcesOff; // mean of each resource's |a - b| / (a + b)
-    double worstOff;     // the most unevenly shared one
+    double resourcesOff; // mean of each resource's |a - b| / (a + b) past RESOURCE_TOLERANCE
+    double worstOff;     // the most unevenly shared one, past it too
     int patchesOff;      // deposits beyond an even count, each to the side with more of it
     double cuts;         // deposits cut, by how evenly; a lone one by how unevenly
-    double Total() const { return crossingsOff + resourcesOff + worstOff + patchesOff * PATCH_WEIGHT + cuts; }
+    double Total() const { return crossingsOff + resourcesOff * 2 + worstOff * 4 + patchesOff * PATCH_WEIGHT + cuts; }
 };
 
 // The measured things in the direction's own frame.
@@ -314,6 +314,7 @@ struct FramePoint {
     int kind, deposit;
 };
 static std::vector<FramePoint> g_frameResources, g_frameCrossings, g_frameCells;
+static std::vector<int> g_coarseCells; // an even grid of the playable cells
 
 static void MakeFrame(float nx, float nz)
 {
@@ -323,8 +324,8 @@ static void MakeFrame(float nx, float nz)
     for (const ResourcePoint& p : g_resources)
         g_frameResources.push_back({ p.z * nx - p.x * nz, p.x * nx + p.z * nz, p.amount, p.channel, p.deposit });
     for (const Crossing& p : g_crossings)
-        g_frameCrossings.push_back({ p.z * nx - p.x * nz, p.x * nx + p.z * nz, 1.0f, p.network, 0 });
-    for (int k = 0; k < g_cells; k += CUT_CELL_STRIDE)
+        g_frameCrossings.push_back({ p.z * nx - p.x * nz, p.x * nx + p.z * nz, 1.0f, p.group, 0 });
+    for (int k : g_coarseCells)
         g_frameCells.push_back({ g_cellZ[k] * nx - g_cellX[k] * nz, g_cellX[k] * nx + g_cellZ[k] * nz, 1.0f, 0, 0 });
 }
 
@@ -353,7 +354,8 @@ static CutScore ScoreCut(const Cut& c)
     int used = 0;
     for (int i = 0; i < RESOURCE_CHANNELS; i++) {
         if (g_resourceTotal[i] <= 0) continue;
-        double off = fabs(2 * side[i] - g_resourceTotal[i]) / g_resourceTotal[i];
+        double off = fabs(2 * side[i] - g_resourceTotal[i]) / g_resourceTotal[i] - RESOURCE_TOLERANCE;
+        if (off < 0) off = 0;
         s.resourcesOff += off;
         if (off > s.worstOff) s.worstOff = off;
         used++;
@@ -374,12 +376,12 @@ static CutScore ScoreCut(const Cut& c)
         int off = abs(2 * lows[i] - patches[i]);
         if (patches[i] > 1 && off > patches[i] % 2) s.patchesOff += off - patches[i] % 2;
     }
-    int low[NET_MAX] = {}, all[NET_MAX] = {};
+    int low[CROSSING_GROUPS] = {}, all[CROSSING_GROUPS] = {};
     for (const FramePoint& p : g_frameCrossings) {
         all[p.kind]++;
         if (p.v - shift < CutAt(c, p.u)) low[p.kind]++;
     }
-    for (int t = 0; t < NET_MAX; t++) {
+    for (int t = 0; t < CROSSING_GROUPS; t++) {
         int off = abs(2 * low[t] - all[t]);
         if (off > all[t] % 2) s.crossingsOff += off - all[t] % 2;
     }
@@ -410,10 +412,12 @@ static void MakeCut(float w, float h)
 {
     g_measureFault = false;
     g_cells = 0;
+    g_coarseCells.clear();
     for (int i = 0; i < CUT_GRID; i++)
         for (int j = 0; j < CUT_GRID; j++) {
             float p[3] = { ((i + 0.5f) / CUT_GRID - 0.5f) * w, 0, ((j + 0.5f) / CUT_GRID - 0.5f) * h };
             if (OutOfPlayable(p)) continue;
+            if (i % CUT_CELL_STRIDE == 0 && j % CUT_CELL_STRIDE == 0) g_coarseCells.push_back(g_cells);
             g_cellX[g_cells] = p[0];
             g_cellZ[g_cells++] = p[2];
         }
@@ -499,9 +503,21 @@ static void MakeCut(float w, float h)
         float u = g_cellZ[k] * line.nx - g_cellX[k] * line.nz, v = g_cellX[k] * line.nx + g_cellZ[k] * line.nz;
         if (v < CutAt(line, u)) lowCells++;
     }
+    int customs = 0, customsLow = 0, border = 0, borderLow = 0;
+    for (const FramePoint& p : g_frameCrossings) {
+        bool isLow = p.v < CutAt(line, p.u);
+        if (p.kind == CROSSING_ALL_CUSTOMS) {
+            customs++;
+            if (isLow) customsLow++;
+        } else {
+            border++;
+            if (isLow) borderLow++;
+        }
+    }
     Logf("republicmp  REPUBLICS: the cut - direction (%.3f, %.3f), %d knots %.0f m apart; half 0 has %.1f%% of the area; "
-         "crossings %d, %d off an even share; patches %d off",
-         line.nx, line.nz, knots, line.step, 100.0 * lowCells / g_cells, (int)g_crossings.size(), score.crossingsOff, score.patchesOff);
+         "customs houses %d of %d, border buildings %d of %d, %d off an even share by type; patches %d off",
+         line.nx, line.nz, knots, line.step, 100.0 * lowCells / g_cells, customsLow, customs, borderLow, border, score.crossingsOff,
+         score.patchesOff);
     for (int i = 0; i < RESOURCE_CHANNELS; i++) {
         if (g_resourceTotal[i] <= 0) continue;
         double low = 0;
@@ -522,6 +538,7 @@ static void MakeCut(float w, float h)
     std::vector<FramePoint>().swap(g_frameResources);
     std::vector<FramePoint>().swap(g_frameCrossings);
     std::vector<FramePoint>().swap(g_frameCells);
+    std::vector<int>().swap(g_coarseCells);
 }
 
 // g_savedCut holds this world's cut from its first measure until the next load: a
