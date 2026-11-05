@@ -16,9 +16,9 @@
 // call on that edge at the boundary.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void CancelTool_Bind(const TsmHost* host);
+void CancelTool_Bind(const ModHost* host);
 bool CancelTool_Install();
 
 // The command (lockstep/commands).

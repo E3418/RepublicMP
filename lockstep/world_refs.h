@@ -8,9 +8,9 @@
 // world +f908 / +fa28) by a hash of their words.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void WorldRefs_Bind(const TsmHost* host);
+void WorldRefs_Bind(const ModHost* host);
 
 typedef unsigned __int64 U64;
 

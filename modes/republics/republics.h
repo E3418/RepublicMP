@@ -10,10 +10,10 @@
 // may use of the rest of the DLL is listed in api/republicmp_api.h.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-// Called from TsmPluginInit; plugs the mode in (Modes_SetRepublics).
-void Republics_Bind(const TsmHost* host);
+// Called from RepublicMP_Start; plugs the mode in (Modes_SetRepublics).
+void Republics_Bind(const ModHost* host);
 
 // The border's stars on this PC (profile "overlay" "border_signs"; the SESSION page).
 bool Republics_GetShowSigns();

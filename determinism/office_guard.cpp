@@ -14,7 +14,7 @@
 #define MAX_LIST 1000000
 
 static volatile DWORD g_stepThread = 0;
-void OfficeGuard_Bind(const TsmHost* host) { TsmBind(host); }
+void OfficeGuard_Bind(const ModHost* host) { ModHost_Bind(host); }
 void OfficeGuard_BeginStep() { g_stepThread = GetCurrentThreadId(); }
 void OfficeGuard_EndStep() { g_stepThread = 0; }
 

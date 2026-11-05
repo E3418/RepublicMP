@@ -14,9 +14,9 @@
 // the timer are only ever watched that way.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void ProbeTrace_Bind(const TsmHost* host);
+void ProbeTrace_Bind(const ModHost* host);
 
 // Before run 1: drops everything kept.
 void ProbeTrace_Reset();

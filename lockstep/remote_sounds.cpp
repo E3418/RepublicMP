@@ -103,9 +103,9 @@ void RemoteSounds_CommandEnd()
     g_activeCount = 0;
 }
 
-void RemoteSounds_Bind(const TsmHost* host)
+void RemoteSounds_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
     g_muted = Profile_GetInt("overlay", "remote_sounds", 1) != 0;
     g_log = Profile_GetInt("debug", "sound_log", 0) != 0;
 }

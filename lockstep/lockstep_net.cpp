@@ -17,9 +17,9 @@
 #include <stdio.h>
 #include <stdarg.h>
 
-void LockstepNet_Bind(const TsmHost* host)
+void LockstepNet_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 enum LockstepMsgType {

@@ -94,9 +94,9 @@ static bool g_inputsRelayed = false;
 static GetterFn g_getters[2];
 static unsigned g_origin = 0;
 
-void BrushTools_Bind(const TsmHost* host)
+void BrushTools_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
     g_origin = (unsigned)(GetTickCount64() * 2246822519u) ^ (GetCurrentProcessId() << 8) ^ 0x42525348u;
     if (!g_origin) g_origin = 1;
 }

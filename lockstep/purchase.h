@@ -15,9 +15,9 @@
 // press read "not pressed" skips the game's own).
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void Purchase_Bind(const TsmHost* host);
+void Purchase_Bind(const ModHost* host);
 
 // The relay at 810943 (sim_patches): the press read with the caller's context
 // one frame up. True: the game reads the press as it is.

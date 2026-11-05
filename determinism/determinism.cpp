@@ -64,10 +64,10 @@ static const unsigned char kLoadWorldExpect[18] = {
 
 static void LoadSettings();
 
-void Determinism_Bind(const TsmHost* host)
+void Determinism_Bind(const ModHost* host)
 {
     LoadSettings();
-    TsmBind(host);
+    ModHost_Bind(host);
     HeldFrame_Bind(host);
     Commands_Bind(host);
     LockstepNet_Bind(host);

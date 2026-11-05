@@ -12,9 +12,9 @@ static const unsigned kNodeFields[2] = { 0xF908, 0xFA28 };
 
 const RouteRef kNoRef = { 0, -1, 0 };
 
-void WorldRefs_Bind(const TsmHost* host)
+void WorldRefs_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 static BYTE* World() { return g_exeBase + WORLD_RVA; }

@@ -87,9 +87,9 @@ static bool KeyAllowed(int vk)
            vk != Presence_GetPingKey();
 }
 
-void Chat_Bind(const TsmHost* host)
+void Chat_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
     if (!g_ready) {
         InitializeCriticalSection(&g_chatLock);
         g_ready = true;

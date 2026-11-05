@@ -51,9 +51,9 @@ static volatile LONG g_citizenPlace = -1;
 static LONG g_arms[2];
 static PVOID g_handler = nullptr;
 
-void ProbeWatch_Bind(const TsmHost* host)
+void ProbeWatch_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 static unsigned ExeOffset(DWORD64 a)

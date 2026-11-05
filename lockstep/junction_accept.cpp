@@ -53,9 +53,9 @@ struct JunctionMsg {
 };
 #pragma pack(pop)
 
-void JunctionAccept_Bind(const TsmHost* host)
+void JunctionAccept_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 static BYTE* World() { return g_exeBase + WORLD_RVA; }

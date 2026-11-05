@@ -75,6 +75,9 @@
     <ClCompile Include="core\main.cpp">
       <Filter>core</Filter>
     </ClCompile>
+    <ClCompile Include="core\host.cpp">
+      <Filter>core</Filter>
+    </ClCompile>
     <ClCompile Include="core\profile.cpp">
       <Filter>core</Filter>
     </ClCompile>
@@ -396,6 +399,9 @@
       <Filter>game</Filter>
     </ClInclude>
     <ClInclude Include="core\version.h">
+      <Filter>core</Filter>
+    </ClInclude>
+    <ClInclude Include="core\host.h">
       <Filter>core</Filter>
     </ClInclude>
     <ClInclude Include="core\profile.h">

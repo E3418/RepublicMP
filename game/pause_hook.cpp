@@ -5,9 +5,9 @@
 #include <intrin.h>
 #pragma intrinsic(_ReturnAddress)
 
-void PauseHook_Bind(const TsmHost* host)
+void PauseHook_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 typedef void (*TimerVoidFn)(void* thisPtr);

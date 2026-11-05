@@ -14,9 +14,9 @@
 // ordered value and the other PCs' fields show it.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void WorldWorkers_Bind(const TsmHost* host);
+void WorldWorkers_Bind(const ModHost* host);
 bool WorldWorkers_Install();
 
 // Main thread, every frame of a session (commands' collect): a typed change.

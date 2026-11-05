@@ -79,9 +79,9 @@ typedef void (*StartFn)(U64 world, U64 vehicle);
 static int g_ready = -1;
 static unsigned g_origin = 0; // this PC's commands, to use its own window
 
-void RouteTools_Bind(const TsmHost* host)
+void RouteTools_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
     g_origin = (unsigned)(GetTickCount64() * 2654435761u) ^ GetCurrentProcessId() ^ (unsigned)(U64)&g_origin;
     if (!g_origin) g_origin = 1;
 }

@@ -27,9 +27,9 @@
 // only the clicking PC holds: that stays local.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void RouteTools_Bind(const TsmHost* host);
+void RouteTools_Bind(const ModHost* host);
 
 // False when a game routine the commands call differs (the tools are then put away in lockstep).
 bool RouteTools_Ready();

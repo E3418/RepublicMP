@@ -45,9 +45,9 @@ static int g_depth = 0;
 static CRITICAL_SECTION* g_rendererLock = nullptr;
 static std::vector<__int64> g_whole; // scratch: a committed vector, sorted
 
-void ViewListScope_Bind(const TsmHost* host)
+void ViewListScope_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 static CRITICAL_SECTION* RendererLock()

@@ -13,9 +13,9 @@
 // writes it (the building by identity) at the boundary.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void Research_Bind(const TsmHost* host);
+void Research_Bind(const ModHost* host);
 
 // Render thread, around the interface routine. simBusy: the simulation's phase
 // runs now (nothing is compared).

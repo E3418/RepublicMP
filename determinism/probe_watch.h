@@ -10,9 +10,9 @@
 // (WATCH_ON in probe_watch.cpp).
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void ProbeWatch_Bind(const TsmHost* host);
+void ProbeWatch_Bind(const ModHost* host);
 
 // Before run 1: drops everything kept.
 void ProbeWatch_Reset();

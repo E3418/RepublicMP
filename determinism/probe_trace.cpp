@@ -56,9 +56,9 @@
 #define AGENTS_SIZE ((AGENT_LISTS + 1 + AGENT_MEMBERS + AGENT_CITIZENS) * 4)
 #define AGENT_TAG 0x80000000u // every word gets the top bit, so no pair of them looks like a heap pointer
 
-void ProbeTrace_Bind(const TsmHost* host)
+void ProbeTrace_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 // Bytes left out: written by the renderer, the camera or a window on its own

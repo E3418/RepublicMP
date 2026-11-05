@@ -21,9 +21,9 @@
 // PCs evolve it alike.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void BrushTools_Bind(const TsmHost* host);
+void BrushTools_Bind(const ModHost* host);
 
 // Startup: points 3a8a70's three press reads (3aa850, 3aaa58, 3aaaa9) at relays.
 bool BrushTools_Install();

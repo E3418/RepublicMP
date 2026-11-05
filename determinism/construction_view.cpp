@@ -34,9 +34,9 @@
 
 static bool g_log = false;
 
-void ConstructionView_Bind(const TsmHost* host)
+void ConstructionView_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
     g_log = Profile_GetInt("debug", "construction_log", 0) != 0;
 }
 

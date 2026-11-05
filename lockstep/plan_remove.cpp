@@ -36,9 +36,9 @@ struct PlanMsg {
 };
 #pragma pack(pop)
 
-void PlanRemove_Bind(const TsmHost* host)
+void PlanRemove_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 static U64 Q(U64 at) { return *(U64*)at; }

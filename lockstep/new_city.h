@@ -12,9 +12,9 @@
 // every PC makes both at the boundary. The name is drawn on the clicking PC.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void NewCity_Bind(const TsmHost* host);
+void NewCity_Bind(const ModHost* host);
 
 // At the 32f450 call (game_calls): true when the city became a command (the
 // tool's call is skipped, and so is its 32ff40 that follows).

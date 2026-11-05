@@ -12,9 +12,9 @@
 
 #pragma comment(lib, "ws2_32.lib")
 
-void Network_Bind(const TsmHost* host)
+void Network_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
     SteamNet_Bind(host);
     SteamLobby_Bind(host);
 }

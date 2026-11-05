@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // RepublicMP by E3418 and Sohn (juniorsohn); all authors in README.md.
-// RepublicMP - TesmioLoader plugin entry points.
-#include "tesmio_plugin.h"
+// RepublicMP - the entry point the proxy calls: RepublicMP_Start.
+#include "host.h"
 #include "../world/local_builds.h"
 #include "../game/present_hook.h"
 #include "../session/game_speed.h"
@@ -56,15 +56,10 @@
 #include "profile.h"
 #include "frame_timing.h"
 
-extern "C" __declspec(dllexport) unsigned TsmPluginApiVersion(void)
+// Binds every module to the host.
+static void BindModules(const ModHost* host)
 {
-    return TSM_API_VERSION;
-}
-
-// Binds every module to the loader's host API.
-extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPluginInfo* info)
-{
-    TsmBind(host);
+    ModHost_Bind(host);
     Profile_Bind(host);
     FrameTiming_Bind(host);
     World_Bind(host);
@@ -106,13 +101,10 @@ extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPlugi
     ProbeWatch_Bind(host);
     BuildingSettings_Bind(host);
     Republics_Bind(host);
-    info->name    = "republicmp";
-    info->version = REPUBLICMP_VERSION;
-    return 0;
 }
 
 // Installs the engine hooks and starts the background threads.
-extern "C" __declspec(dllexport) int TsmPluginStart(void)
+static int InstallHooks()
 {
     Logf("republicmp  version=%s", REPUBLICMP_VERSION);
     Logf("republicmp  by %s - GPL v3, keep this line in any copy", REPUBLICMP_AUTHORS);
@@ -214,6 +206,14 @@ extern "C" __declspec(dllexport) int TsmPluginStart(void)
 
     if (!okUniversal) return 1;
     return 0;
+}
+
+// Called once by the proxy (xinput9_1_0.dll) on the game's main thread, before
+// the game's first instruction. Non-zero: the main hook could not be installed.
+extern "C" __declspec(dllexport) int RepublicMP_Start(void)
+{
+    BindModules(Host_Init());
+    return InstallHooks();
 }
 
 BOOL APIENTRY DllMain(HMODULE, DWORD, LPVOID) { return TRUE; }

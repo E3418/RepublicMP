@@ -41,9 +41,9 @@ static Fn3 g_origBoard = nullptr;
 static Fn6 g_origJobSearch = nullptr;
 static Fn6 g_origRemove = nullptr;
 
-void CitizenTrace_Bind(const TsmHost* host)
+void CitizenTrace_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 static int IndexAt(__int64 object, int offset)

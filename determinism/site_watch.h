@@ -22,9 +22,9 @@
 // another object shows who did it.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void SiteWatch_Bind(const TsmHost* host);
+void SiteWatch_Bind(const ModHost* host);
 // Remembered; off by default.
 bool SiteWatch_GetOn();
 void SiteWatch_SetOn(bool on);

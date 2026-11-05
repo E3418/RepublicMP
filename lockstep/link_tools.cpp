@@ -79,9 +79,9 @@ struct LinkMsg {
 
 static int g_ready = -1, g_pickReady = -1;
 
-void LinkTools_Bind(const TsmHost* host)
+void LinkTools_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 bool LinkTools_Ready()

@@ -16,9 +16,9 @@
 // A save without an entry for this player loads with the game's own view.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void CameraKeep_Bind(const TsmHost* host);
+void CameraKeep_Bind(const ModHost* host);
 
 // Determinism's load hook (main thread): before the game's load, and after it
 // once the save's file was read (ModSave_AfterLoad).

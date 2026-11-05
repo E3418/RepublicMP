@@ -10,7 +10,7 @@
 // clears the flag when done.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
 // Load side (plain globals).
 #define SAVE_NAME_DAT_RVA     0x9962b0  // char[]: "save\\<name>"
@@ -29,7 +29,7 @@
 #define SAVE_NAME_FIELD_MAX_LEN     120
 #define SAVE_NAME_FIELD_PREFIX      "save/"
 
-void SaveLoad_Bind(const TsmHost* host);
+void SaveLoad_Bind(const ModHost* host);
 
 // Requests loading "save\\<saveName>".
 void TriggerLoadSave(const char* saveName);

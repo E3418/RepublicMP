@@ -9,10 +9,10 @@
 //
 // Only for code whose skipped rest leaves nothing half done (a whole thread,
 // one command, the plugin's own per-frame work). A module that includes this
-// must be bound (TsmBind) - the log goes through its host pointer.
+// must be bound (ModHost_Bind) - the log goes through its host pointer.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 #include <exception>
 
 #define GUARD_LOG_LIMIT 5

@@ -96,9 +96,9 @@ static void HookedBuildRoot(unsigned char* god)
     }
 }
 
-void MainMenuHook_Bind(const TsmHost* host)
+void MainMenuHook_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
     if (InstallInlineHook(g_exeBase + MENU_BUILD_ROOT_RVA, (void*)HookedBuildRoot, (void**)&g_origBuildRoot,
                           kBuildRootExpect, sizeof(kBuildRootExpect), "republicmp main menu"))
         Logf("republicmp  MAIN MENU: MULTIPLAYER item installed");

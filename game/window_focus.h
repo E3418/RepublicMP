@@ -3,7 +3,7 @@
 // overlay while alt-tabbed.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
 inline bool IsGameWindowFocused()
 {

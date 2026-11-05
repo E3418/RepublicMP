@@ -34,9 +34,9 @@ static bool g_insertWasDown = false;
 
 bool g_imguiVisible = false; // a debug tool now: INSERT shows it; the MULTIPLAYER page is the players' UI
 
-void ImGuiHook_Bind(const TsmHost* host)
+void ImGuiHook_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 static void CreateRenderTarget(IDXGISwapChain* swapChain)

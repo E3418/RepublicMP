@@ -59,9 +59,9 @@ struct SwitchMsg {
 };
 #pragma pack(pop)
 
-void BuildingSwitches_Bind(const TsmHost* host)
+void BuildingSwitches_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 static BYTE* World() { return g_exeBase + WORLD_RVA; }

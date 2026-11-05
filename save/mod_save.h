@@ -21,7 +21,7 @@
 //   a mode adds its own sections (e.g. Republics' parameters).
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
 #define MOD_SAVE_FILE "republicmp.ini"
 
@@ -33,7 +33,7 @@ typedef void (*ModSaveWriteFn)();
 typedef void (*ModSaveReadFn)(bool found);
 void ModSave_Add(const char* section, ModSaveWriteFn write, ModSaveReadFn read);
 
-void ModSave_Bind(const TsmHost* host);
+void ModSave_Bind(const ModHost* host);
 bool ModSave_Install();
 
 // Inside a write callback.

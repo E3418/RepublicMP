@@ -21,9 +21,9 @@
 // makes the tool's steps with the game's own routines and tests.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void LinkTools_Bind(const TsmHost* host);
+void LinkTools_Bind(const ModHost* host);
 
 // The routines are the checked ones (the tools are put away otherwise):
 // the link tools, and the fire and copy weights tools.

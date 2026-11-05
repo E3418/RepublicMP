@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <string.h>
 
-void HeldFrame_Bind(const TsmHost* host) { TsmBind(host); }
+void HeldFrame_Bind(const ModHost* host) { ModHost_Bind(host); }
 
 // 2593d0 draws world+12810 through 3fa850 (6712b0, 67c280, 66edd0).
 // Those builders recurse through parent +398, children +3a0 and link +4a0,

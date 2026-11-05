@@ -27,9 +27,9 @@ typedef __int64 (*MinimapDrawGameFn)(void* minimap);
 static MinimapDrawGameFn g_origDraw = nullptr;
 static MinimapDrawFn g_draw = nullptr;
 
-void Minimap_Bind(const TsmHost* host)
+void Minimap_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 void Minimap_SetDraw(MinimapDrawFn fn)

@@ -51,9 +51,9 @@
 static char g_replayEntry[REPLAY_ENTRY_SIZE]; // stand-in selected menu entry (main thread only)
 static volatile LONG g_applyingRemote = 0;
 
-void Buildings_Bind(const TsmHost* host)
+void Buildings_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 bool Buildings_IsApplyingCommand()

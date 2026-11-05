@@ -11,9 +11,9 @@
 #define DOLLARS_OFFSET 0x580
 #define RUBLES_OFFSET 0x588
 
-void World_Bind(const TsmHost* host)
+void World_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 unsigned char* World_Object()

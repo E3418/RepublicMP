@@ -20,9 +20,9 @@
 // shared game.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void SharedSave_Bind(const TsmHost* host);
+void SharedSave_Bind(const ModHost* host);
 
 // Main thread, before the Late body: this PC's save request becomes a command.
 void SharedSave_BeforeLate(unsigned char* world);

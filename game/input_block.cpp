@@ -9,9 +9,9 @@
 #define ESCAPE_LATCH_RVA 0xA54C91     // byte: Escape pressed, set by the window message handler
 #define INPUT_RVA 0xA54B90            // the game's C3D_INPUT
 
-void InputBlock_Bind(const TsmHost* host)
+void InputBlock_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 static bool Blocked()

@@ -23,9 +23,9 @@
 // makes the callback with a values vector of the game's allocator.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void Popups_Bind(const TsmHost* host);
+void Popups_Bind(const ModHost* host);
 bool Popups_Install();
 
 // The command (lockstep/commands).

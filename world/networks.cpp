@@ -219,11 +219,11 @@ static int Fc040Param5ForCategory(int category, int typeId)
 
 static volatile LONG g_applyingSegment = 0;
 
-void Networks_Bind(const TsmHost* host)
+void Networks_Bind(const ModHost* host)
 {
     // RepublicMP (E3418, Sohn). The offsets in this file were found by hand
     // in SOVIET64.exe; a copy that drops this line drops the GPL with it.
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 static __int64 GetWorldThisPtr()

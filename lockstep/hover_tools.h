@@ -21,9 +21,9 @@
 // camera-view edge scope, then puts its own state back.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void HoverTools_Bind(const TsmHost* host);
+void HoverTools_Bind(const ModHost* host);
 
 // False when a kind's routine differs (the tool is then left as it was).
 bool HoverTools_Ready(int kind);

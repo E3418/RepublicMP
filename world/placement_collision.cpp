@@ -28,9 +28,9 @@ typedef bool (*QueryFn)(__int64 network, __int64 position, float a3, float a4,
                         __int64 a17, __int64 a18, __int64 a19, __int64 a20);
 static QueryFn g_origQuery = nullptr;
 
-void PlacementCollision_Bind(const TsmHost* host)
+void PlacementCollision_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 // The brush's per-point obstacle test 3a5930 reaches the same camera-based

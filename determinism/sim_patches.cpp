@@ -37,9 +37,9 @@
 
 #define WORLD_RVA 0x9D4F10
 
-void SimPatches_Bind(const TsmHost* host)
+void SimPatches_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
     OfficeGuard_Bind(host);
 }
 

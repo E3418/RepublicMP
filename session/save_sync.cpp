@@ -37,9 +37,9 @@
 
 static void LoadSettings();
 
-void SaveSync_Bind(const TsmHost* host)
+void SaveSync_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
     LoadSettings();
 }
 
@@ -107,7 +107,7 @@ static void SetSessionError(const char* fmt, ...)
     if (body[0]) Logf("republicmp  SESSION: error shown - %s", body);
 }
 
-// Writes to tesmioloader.log and the in-game UI log.
+// Writes to republicmp.log and the in-game UI log.
 void SaveStatus(const char* fmt, ...)
 {
     char body[512];

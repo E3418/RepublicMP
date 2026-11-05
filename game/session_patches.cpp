@@ -40,9 +40,9 @@ static SessionPatch kPatches[] = {
 static bool g_applied = false;
 static bool g_refused = false; // the bytes didn't match - never tried again
 
-void SessionPatches_Bind(const TsmHost* host)
+void SessionPatches_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 // ---------------------------------------------------------------------------

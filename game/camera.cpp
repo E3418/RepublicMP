@@ -23,9 +23,9 @@ static CamVectorFn g_setPosition = nullptr, g_setLookAt = nullptr;
 static CamViewFn g_calculateView = nullptr;
 static CamFinalFn g_calculateFinal = nullptr;
 
-void Camera_Bind(const TsmHost* host)
+void Camera_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
     HMODULE c3d = GetModuleHandleA(DLL_C3D);
     if (!c3d) return;
     g_setPosition = (CamVectorFn)GetProcAddress(c3d, "?ViewSetPosition@C3D_CAMERA@@QEAAXVC3DVECTOR3@@@Z");

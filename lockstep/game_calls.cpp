@@ -343,9 +343,9 @@ struct GameCallMsg {
 
 static bool g_siteOn[SITE_COUNT];
 
-void GameCalls_Bind(const TsmHost* host)
+void GameCalls_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 static BYTE* World() { return g_exeBase + WORLD_RVA; }
 static U64 Q(U64 at) { return *(U64*)at; }

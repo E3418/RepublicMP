@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **New: no mod loader needed** - the mod now starts through its own proxy,
+  `xinput9_1_0.dll`, which sits next to `RepublicMP.dll` in the game's folder,
+  and it needs no file of TesmioLoader any more. It no longer loads as a
+  TesmioLoader plugin.
+- The log moved to `RepublicMP\logs\republicmp.log` and the profile to
+  `RepublicMP\RepublicMP.profile.ini`, in the game's folder. The nick and the
+  settings start from the defaults once, unless the old file is moved there.
+
 ## 0.7.6
 
 Each player's view now survives a re-sync and is kept in the save, other

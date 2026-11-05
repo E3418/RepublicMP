@@ -11,9 +11,9 @@
 // every PC makes the same call at the boundary.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void GameCalls_Bind(const TsmHost* host);
+void GameCalls_Bind(const ModHost* host);
 
 // Startup: points the call sites at their relays. Sites whose bytes differ are left alone.
 bool GameCalls_Install();

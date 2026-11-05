@@ -95,9 +95,9 @@ static void Sample()
     }
 }
 
-void CameraKeep_Bind(const TsmHost* host)
+void CameraKeep_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
     ModSave_Add("camera", Write, Read);
     Determinism_AddFrameObserver(Sample);
     Determinism_AddStepObserver(Sample);

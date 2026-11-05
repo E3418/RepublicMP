@@ -13,9 +13,9 @@
 // calls on its own line at the boundary.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void LineAccept_Bind(const TsmHost* host);
+void LineAccept_Bind(const ModHost* host);
 
 // Render thread, at the 495830 call (game_calls): true when the Accept became a command.
 bool LineAccept_Capture(unsigned __int64 line, unsigned __int64 copy);

@@ -30,9 +30,9 @@ static DemolishFn g_origDemolish = nullptr;
 
 static volatile long g_depth = 0;
 
-void DemolishHook_Bind(const TsmHost* host)
+void DemolishHook_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 bool DemolishHook_InDemolish()

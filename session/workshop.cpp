@@ -58,9 +58,9 @@ static std::unordered_map<unsigned long long, std::string> g_names; // read once
 static volatile LONG g_watching = 0;
 static std::unordered_set<unsigned long long> g_declined; // not offered again in this run
 
-void Workshop_Bind(const TsmHost* host)
+void Workshop_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
     InitializeCriticalSection(&g_workshopLock);
     g_sync = Profile_GetInt("profile", "workshop_sync", 1) != 0;
 }
