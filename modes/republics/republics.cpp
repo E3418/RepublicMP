@@ -627,17 +627,31 @@ static void MakeCut(float w, float h)
 // The customs houses on the line
 // ---------------------------------------------------------------------------
 //
-// Every SPAWN_EVERY_M along the line a customs house, spawned free of charge, so
-// each player reaches it from their own side; the world's seed picks which are big
-// and which small. A place: land all around within SPAWN_CLEAR_M and inside the
-// playable border, level to SPAWN_LEVEL_M within SPAWN_LEVEL_RADIUS_M, no building
-// near. One that does not fit moves along the line up to SPAWN_SLIDE_M; a place
-// with none is left out. The host picks: alone it places them at once and the save
-// carries them to who joins, else each is a command. A save keeps how far it got.
+// Every SPAWN_EVERY_M along the line a customs house, spawned free of charge, its
+// middle between its ports exactly on the line and its ports across it, so each
+// player reaches it from their own side; the world's seed picks which are big and
+// which small. A place: land all around within SPAWN_CLEAR_M and inside the playable
+// border, level to SPAWN_LEVEL_M within SPAWN_LEVEL_RADIUS_M, no building near. One
+// that does not fit moves along the line up to SPAWN_SLIDE_M; a place with none is
+// left out. Fewer than SPAWN_MIN_HOUSES on the whole line: a second pass between the
+// places, then a last with easier ground. The host picks: alone it places them at
+// once and the save carries them to who joins, else each is a command. A save keeps
+// how far it got.
 
-#define SPAWN_SMALL "zoll_sahy"   // a road
-#define SPAWN_BIG "zoll_milhost"  // roads and rails
-#define SPAWN_EVERY_M 2000.0f
+// A type's ports (its ini): normal ones at one end of an axis, border ones at the
+// other, and where the middle between them lies on that axis.
+struct SpawnType {
+    const char* name;
+    bool portsOnX;   // along the building's x axis, else its z axis
+    float middle;
+};
+static const SpawnType kSpawnSmall = { "zoll_sahy", false, 0.758f };   // a road: z 17.53 and -16.01
+static const SpawnType kSpawnBig = { "zoll_milhost", true, 4.524f };   // roads and rails: x 64.30 and -55.26
+#define SPAWN_EVERY_M 4000.0f
+#define SPAWN_MIN_HOUSES 2
+#define SPAWN_PASSES 3
+#define SPAWN_EASY_CLEAR_M 50.0f  // the last pass
+#define SPAWN_EASY_LEVEL_M 20.0f
 #define SPAWN_SLIDE_M 800.0f
 #define SPAWN_SLIDE_STEP_M 100.0f
 #define SPAWN_CLEAR_M 100.0f
@@ -649,11 +663,12 @@ static void MakeCut(float w, float h)
 
 static bool g_spawnDone = false;    // this world has them all (from the save, or made)
 static bool g_spawnWaiting = false; // the host's command is on its way
+static int g_spawnPass = 0;         // 0 the places, 1 between them, 2 between again on easier ground
 static int g_spawnPlace = 0;        // the place along the line it has reached
 static int g_spawnSlide = 0;        // spots of this place the engine refused
 static int g_spawnMade = 0;
 
-static bool SpawnSpotFits(float x, float z, float clear)
+static bool SpawnSpotFits(float x, float z, float clear, float level)
 {
     float at[3] = { x, 0, z }, y0;
     if (!TerrainHook_HeightAt(at, &y0)) return false;
@@ -668,7 +683,7 @@ static bool SpawnSpotFits(float x, float z, float clear)
         for (float dz = -SPAWN_LEVEL_RADIUS_M; dz <= SPAWN_LEVEL_RADIUS_M; dz += SPAWN_LEVEL_STEP_M) {
             if (dx * dx + dz * dz > SPAWN_LEVEL_RADIUS_M * SPAWN_LEVEL_RADIUS_M) continue;
             float p[3] = { x + dx, 0, z + dz }, y;
-            if (!TerrainHook_HeightAt(p, &y) || fabsf(y - y0) > SPAWN_LEVEL_M) return false;
+            if (!TerrainHook_HeightAt(p, &y) || fabsf(y - y0) > level) return false;
         }
     unsigned char** begin = nullptr;
     unsigned char** end = nullptr;
@@ -703,35 +718,52 @@ static void TrySpawnCustoms(const Cut& c)
     float phase = (float)(seed % 1000) / 1000.0f * SPAWN_EVERY_M;
     g_measureFault = false;
     for (;; g_spawnPlace++, g_spawnSlide = 0) {
-        float along = phase + SPAWN_EVERY_M * g_spawnPlace;
-        if (along >= length || g_measureFault) {
-            g_spawnDone = !g_measureFault;
-            if (g_spawnDone) Logf("republicmp  REPUBLICS: %d customs houses on the line", g_spawnMade);
+        // Each pass's places lie between the last one's.
+        float along = phase + SPAWN_EVERY_M * g_spawnPlace + SPAWN_EVERY_M * 0.5f * (g_spawnPass > 0) + SPAWN_EVERY_M * 0.25f * (g_spawnPass > 1);
+        if (g_measureFault) return;
+        if (along >= length) {
+            if (g_spawnMade < SPAWN_MIN_HOUSES && g_spawnPass + 1 < SPAWN_PASSES) {
+                g_spawnPass++;
+                g_spawnPlace = -1; // the loop's step makes it 0
+                continue;
+            }
+            g_spawnDone = true;
+            Logf("republicmp  REPUBLICS: %d customs houses on the line (pass %d)", g_spawnMade, g_spawnPass);
             return;
         }
+        float clear = g_spawnPass < 2 ? SPAWN_CLEAR_M : SPAWN_EASY_CLEAR_M;
+        float level = g_spawnPass < 2 ? SPAWN_LEVEL_M : SPAWN_EASY_LEVEL_M;
         for (; g_spawnSlide < SPAWN_SLIDES; g_spawnSlide++) {
             float u = c.startU + along + SpawnSlide(g_spawnSlide), slope;
             float v = CutAt(c, u, &slope);
             float x = c.nx * v - c.nz * u, z = c.nz * v + c.nx * u;
-            if (!SpawnSpotFits(x, z, SPAWN_CLEAR_M)) continue;
+            if (!SpawnSpotFits(x, z, clear, level)) continue;
+            // The line's normal here: (n - slope * dir), its length sqrt(1 + slope^2).
+            float across[2] = { c.nx + slope * c.nz, c.nz - slope * c.nx };
+            float size = sqrtf(across[0] * across[0] + across[1] * across[1]);
+            across[0] /= size;
+            across[1] /= size;
+            const SpawnType& type = (CutMix(seed + (unsigned)(g_spawnPass * 1000 + g_spawnPlace)) & 1) ? kSpawnBig : kSpawnSmall;
+            // The yaw turns the axis with the ports onto the normal: x lies a quarter turn from z. It
+            // only goes in the command, which carries the number: atan2 differing by CPU cannot split the games.
+            float yaw = atan2f(across[0], across[1]);
+            if (type.portsOnX) yaw -= 1.5707964f;
+            // The middle between the ports on the line.
+            x -= across[0] * type.middle;
+            z -= across[1] * type.middle;
             float at[3] = { x, 0, z }, y = 0;
             TerrainHook_HeightAt(at, &y);
-            // The line's normal here is the building's own z axis: its road port on one
-            // side, its border port on the other. The yaw only goes in the command, which
-            // carries the number: atan2 differing by CPU cannot split the games.
-            float across[2] = { c.nx - slope * -c.nz, c.nz - slope * c.nx };
-            bool big = (CutMix(seed + (unsigned)g_spawnPlace) & 1) != 0;
             BuildingMsg m = {};
             m.kind = BUILDING_PLACE;
             m.mode.rub = 1;
             m.x = m.cursorX = x;
             m.y = m.cursorY = y;
             m.z = m.cursorZ = z;
-            m.cursorRot = atan2f(across[0], across[1]);
+            m.cursorRot = yaw;
             m.pickModes = BUILDING_PICK_NO_LINKS;
-            strncpy_s(m.typeName, big ? SPAWN_BIG : SPAWN_SMALL, _TRUNCATE);
+            strncpy_s(m.typeName, type.name, _TRUNCATE);
             g_spawnWaiting = true;
-            Logf("republicmp  REPUBLICS: place %d: %s at (%.0f, %.0f), height %.1f", g_spawnPlace, m.typeName, x, z, y);
+            Logf("republicmp  REPUBLICS: pass %d place %d: %s at (%.0f, %.0f), height %.1f", g_spawnPass, g_spawnPlace, m.typeName, x, z, y);
             if (lockstep) Commands_Submit(LS_CMD_SPAWN_BUILDING, &m, sizeof(m));
             else Commands_SpawnBuildingNow(m);
             return;
@@ -765,6 +797,7 @@ static void WriteCutSection()
     float v[4 + MAX_KNOTS] = { g_savedCut.nx, g_savedCut.nz, g_savedCut.startU, g_savedCut.step };
     memcpy(v + 4, g_savedCut.off, sizeof(float) * g_savedCut.knots);
     ModSave_PutInt("customs", g_spawnDone ? 1 : 0);
+    ModSave_PutInt("customs_pass", g_spawnPass);
     ModSave_PutInt("customs_place", g_spawnPlace);
     ModSave_PutInt("customs_made", g_spawnMade);
     ModSave_PutInt("knots", g_savedCut.knots);
@@ -774,10 +807,11 @@ static void WriteCutSection()
 static void ReadCutSection(bool found)
 {
     g_cutSaved = false;
-    long long knots = 0, spawned = 0, place = 0, made = 0;
+    long long knots = 0, spawned = 0, place = 0, made = 0, pass = 0;
     g_spawnWaiting = false;
     g_spawnSlide = 0;
     g_spawnDone = found && ModSave_GetInt("customs", &spawned) && spawned == 1;
+    g_spawnPass = found && ModSave_GetInt("customs_pass", &pass) ? (int)pass : 0;
     g_spawnPlace = found && ModSave_GetInt("customs_place", &place) ? (int)place : 0;
     g_spawnMade = found && ModSave_GetInt("customs_made", &made) ? (int)made : 0;
     if (!found || !ModSave_GetInt("knots", &knots) || knots < 2 || knots > MAX_KNOTS) return;
@@ -933,13 +967,27 @@ static void SampleBorder()
     }
     float ua = g_border[first][2] * c->nx - g_border[first][0] * c->nz;
     float ub = g_border[last][2] * c->nx - g_border[last][0] * c->nz;
-    // A piece's own length is up to sqrt(1 + slope^2) times its length along u.
-    int pieces = (int)ceilf((ub - ua) * STRIP_STRETCH / STRIP_STEP_M);
-    if (pieces < 1) pieces = 1;
-    if (pieces > STRIP_POINTS - 1) pieces = STRIP_POINTS - 1;
+    // Its points: every knot, so the pieces do not cut the corners, and between them
+    // pieces of at most STRIP_STEP_M (their own length is more than along u on a slope).
+    float stripU[STRIP_POINTS];
+    int pieces = 0;
+    stripU[0] = ua;
+    for (int k = 0; k <= c->knots && pieces < STRIP_POINTS - 1; k++) {
+        float end = k < c->knots ? c->startU + c->step * k : ub;
+        if (end > ub) end = ub;
+        float from = stripU[pieces];
+        if (end <= from) continue;
+        int steps = (int)ceilf((end - from) * STRIP_STRETCH / STRIP_STEP_M);
+        if (steps < 1) steps = 1;
+        for (int i = 1; i <= steps && pieces < STRIP_POINTS - 1; i++) stripU[++pieces] = from + (end - from) * i / steps;
+    }
+    if (pieces < 1) {
+        g_stripCount = g_signCount[0] = g_signCount[1] = 0;
+        return;
+    }
     g_stripCount = 0; // the render thread draws none while they change
     for (int i = 0; i <= pieces; i++) {
-        float t = ua + (ub - ua) * i / pieces;
+        float t = stripU[i];
         float v = CutAt(*c, t);
         float* p = g_strip[i];
         p[0] = c->nx * v + dir[0] * t;
@@ -955,7 +1003,7 @@ static void SampleBorder()
         int m = 0;
         g_signCount[half] = 0;
         for (int i = 0; i < pieces; i++) {
-            float t = ua + (ub - ua) * (i + 0.5f) / pieces, slope;
+            float t = (stripU[i] + stripU[i + 1]) * 0.5f, slope;
             float v = CutAt(*c, t, &slope);
             float across = k / sqrtf(1.0f + slope * slope); // the normal of this piece: (n - slope * dir), normalized
             float* p = g_signs[half][m];
