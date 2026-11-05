@@ -312,6 +312,9 @@
     <ClCompile Include="lockstep\cancel_tool.cpp">
       <Filter>lockstep</Filter>
     </ClCompile>
+    <ClCompile Include="lockstep\wallets.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
     <ClCompile Include="lockstep\world_workers.cpp">
       <Filter>lockstep</Filter>
     </ClCompile>
@@ -642,6 +645,9 @@
       <Filter>lockstep</Filter>
     </ClInclude>
     <ClInclude Include="lockstep\cancel_tool.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\wallets.h">
       <Filter>lockstep</Filter>
     </ClInclude>
     <ClInclude Include="lockstep\world_workers.h">

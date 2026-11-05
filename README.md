@@ -8,7 +8,8 @@ tick (**lockstep**).
 
 A second mode, **Republics** (in development), gives two players a republic
 each on one map cut in two halves of equal playable area; so far each builds on their own half
-only, and money is still shared.
+only, and each has their own money (what buildings and vehicles earn and pay
+is still split in two).
 
 **Status:** alpha, tested with up to four players. Current version: **0.7.6**
 ([changelog](CHANGELOG.md)).

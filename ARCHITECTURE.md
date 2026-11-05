@@ -14,7 +14,7 @@ The DLL offers two kinds of game on the RepublicMP window's start page:
 - **Republics** (in development, `modes/republics/`): 2 players, each with a
   republic of their own on one map cut along its diagonal. It runs on the
   same lockstep as co-op; the mode adds rules on top (where a player may
-  build, later a wallet per player).
+  build) and a wallet per republic (`lockstep/wallets`).
 
 ## Layers
 

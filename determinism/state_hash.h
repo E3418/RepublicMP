@@ -37,6 +37,7 @@ struct StateSummary {
     int day, year;
     float dayProgress;
     double rub, usd;
+    double rub2, usd2;      // Republics: rub, usd are half 0's account and these half 1's; else 0
     int buildings, vehicles, citizens;
     double storageTotal;    // all building storage amounts
     double cargoTotal;      // all vehicle cargo amounts

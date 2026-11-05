@@ -53,6 +53,9 @@
 // player's building or network command by where it is, on every PC.
 #include "../lockstep/commands.h"
 
+// --- Each republic's money (Wallets_On, Wallets_Read).
+#include "../lockstep/wallets.h"
+
 // --- Pause and speed: ReadGameSpeed, WriteGameSpeed, EnsureGamePaused,
 // EnsureGameUnpaused (in a co-op session the host decides them).
 #include "../session/game_speed.h"

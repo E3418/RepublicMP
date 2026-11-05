@@ -806,9 +806,10 @@ static void Compare(int index, const LsHash& theirs)
     char what[160] = "";
     // The clock exactly; money by its bits, or within MONEY_TOLERANCE when allowed,
     // so a difference in a double's last bits (0.000000001 rubles) does not split the session.
-    bool moneyOff = !MoneyMatches(a.rub, b.rub) || !MoneyMatches(a.usd, b.usd);
+    bool moneyOff = !MoneyMatches(a.rub, b.rub) || !MoneyMatches(a.usd, b.usd) || !MoneyMatches(a.rub2, b.rub2) ||
+                    !MoneyMatches(a.usd2, b.usd2);
     if (a.day != b.day || a.year != b.year || a.dayProgress != b.dayProgress || moneyOff) strcat_s(what, "clock/money ");
-    if (!moneyOff && (a.rub != b.rub || a.usd != b.usd) && !g_moneyDriftLogged) {
+    if (!moneyOff && (a.rub != b.rub || a.usd != b.usd || a.rub2 != b.rub2 || a.usd2 != b.usd2) && !g_moneyDriftLogged) {
         g_moneyDriftLogged = true;
         Logf("republicmp  LOCKSTEP:   %s's money differs by %.9g rubles %.9g dollars after tick %llu - under the tolerance, "
              "money alone is not counted as a desync (logged once a session)", peer.nick, a.rub - b.rub, a.usd - b.usd,

@@ -206,6 +206,7 @@
     <ClCompile Include="lockstep\new_city.cpp" />
     <ClCompile Include="lockstep\join_tool.cpp" />
     <ClCompile Include="lockstep\cancel_tool.cpp" />
+    <ClCompile Include="lockstep\wallets.cpp" />
     <ClCompile Include="lockstep\world_workers.cpp" />
     <ClCompile Include="lockstep\cancel_plans.cpp" />
     <ClCompile Include="lockstep\plan_remove.cpp" />
@@ -304,6 +305,7 @@
     <ClInclude Include="lockstep\new_city.h" />
     <ClInclude Include="lockstep\join_tool.h" />
     <ClInclude Include="lockstep\cancel_tool.h" />
+    <ClInclude Include="lockstep\wallets.h" />
     <ClInclude Include="lockstep\world_workers.h" />
     <ClInclude Include="lockstep\cancel_plans.h" />
     <ClInclude Include="lockstep\plan_remove.h" />

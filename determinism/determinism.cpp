@@ -9,6 +9,7 @@
 #include "held_frame.h"
 #include "../lockstep/commands.h"
 #include "../lockstep/lockstep_net.h"
+#include "../lockstep/wallets.h"
 #include "../game/save_load.h"
 #include "../game/weather.h"
 #include "../game/world.h"
@@ -71,6 +72,7 @@ void Determinism_Bind(const ModHost* host)
     HeldFrame_Bind(host);
     Commands_Bind(host);
     LockstepNet_Bind(host);
+    Wallets_Bind(host);
 }
 
 // ---------------------------------------------------------------------------
@@ -900,6 +902,7 @@ static void AfterLoadFiles()
 {
     ModSave_AfterLoad();
     CameraKeep_AfterLoad();
+    Wallets_AfterLoad(g_sessionLoadPending);
 }
 
 static void HookedLoadWorld(void)
@@ -1078,6 +1081,7 @@ void Determinism_EndSession()
     g_sessionRunning = false;
     g_sessionLoadPending = false;
     Commands_SetSession(COMMANDS_OFF);
+    Wallets_SessionEnd();
     Determinism_SetActive(false, 0);
     Logf("republicmp  LOCKSTEP: session ended after %llu ticks", (unsigned long long)g_stepCount);
 }
@@ -1589,7 +1593,9 @@ static void HookedSimStep(__int64 world)
     FrameTimingScope timing(FRAME_EARLY);
     SimPatches_BeforeEarly(world);
     g_inEarly = true;
+    Wallets_SimBegin();
     o_simStep(world);
+    Wallets_SimEnd();
     g_inEarly = false;
     SimPatches_AfterEarly();
     SiteWatch_Check("Early", true);
@@ -1612,11 +1618,15 @@ void Determinism_BeforeLate()
     // does: at speed 0 with no time step 159070 treats the game as paused
     // (159234) and skips the building update, so construction never advanced
     // and nothing was charged for it.
-    if (g_frameStep && g_frameEarly) WriteGameSpeed(GameSpeedOf(g_tickSpeed));
+    if (g_frameStep && g_frameEarly) {
+        WriteGameSpeed(GameSpeedOf(g_tickSpeed));
+        Wallets_SimBegin();
+    }
 }
 
 void Determinism_AfterLate()
 {
+    Wallets_SimEnd();
     if (!g_active) return;
     g_framePhase = 6;
     g_inEarly = false;
@@ -1633,7 +1643,10 @@ void Determinism_AfterLate()
                 StateSummary s;
                 if (StateHash_Compute(&s)) {
                     LockstepNet_StateAfter(g_stepCount, s);
-                    if (g_stepCount % (LOCKSTEP_HASH_TICKS * 5) == 0) LogSessionProgress(s);
+                    if (g_stepCount % (LOCKSTEP_HASH_TICKS * 5) == 0) {
+                        LogSessionProgress(s);
+                        Wallets_LogState();
+                    }
                 }
             }
         }

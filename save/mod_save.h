@@ -18,6 +18,7 @@
 //   [republicmp]  version, protocol - the build that wrote it;
 //                 world_seed - the world's own seed (ModSave_WorldSeed)
 //   [camera]      each player's view (save/camera_keep)
+//   [wallets]     each republic's money (lockstep/wallets)
 //   a mode adds its own sections (e.g. Republics' parameters).
 #pragma once
 

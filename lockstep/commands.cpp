@@ -2,6 +2,7 @@
 // RepublicMP by E3418 and Sohn (juniorsohn); all authors in README.md.
 // See commands.h.
 #include "commands.h"
+#include "wallets.h"
 #include "../determinism/determinism.h"
 #include "../world/networks.h"
 #include "../world/buildings.h"
@@ -626,6 +627,7 @@ static void Apply(const Command& c)
     if (g_applyRemote) RemoteSounds_CommandBegin();
     InterlockedIncrement(&g_applying);
     InterlockedIncrement64(&g_applyEpoch);
+    Wallets_CommandBegin(c.player);
     double rubBefore = *Rubles(), usdBefore = *Dollars();
     InputBlock_BeginNeutral();
     // A drag the local player has under way would share the tool manager with
@@ -656,6 +658,7 @@ static void Apply(const Command& c)
     g_madeThisFrame = true;
     // What the command paid or got: compared between the PCs' logs when the money differs.
     double paidRub = *Rubles() - rubBefore, paidUsd = *Dollars() - usdBefore;
+    Wallets_CommandEnd();
     char money[96] = "";
     if (paidRub != 0.0 || paidUsd != 0.0)
         sprintf_s(money, " (money %+.4f rubles %+.4f dollars)", paidRub, paidUsd);

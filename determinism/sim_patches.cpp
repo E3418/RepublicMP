@@ -3,6 +3,7 @@
 // See sim_patches.h.
 #include "sim_patches.h"
 #include "../lockstep/commands.h"
+#include "../lockstep/wallets.h"
 #include "../world/local_builds.h"
 #include "../lockstep/purchase.h"
 #include "../lockstep/route_tools.h"
@@ -800,6 +801,7 @@ static void ToolEnter()
     if (!g_toolActed) return;
     Determinism_ToolScopeBegin();
     PrivateViewIn(g_toolKept);
+    Wallets_SimEnd(); // the tool acts for this PC's player, with this player's money
     Commands_RecordMoney(); // the tick's own charges are not the tool's
     Commands_LateBegin();
 }
@@ -809,6 +811,7 @@ static void ToolLeave()
     if (!g_toolActed) return;
     g_toolActed = false;
     Commands_LateEnd();
+    Wallets_SimBegin();
     PrivateViewOut(g_toolKept);
     Determinism_ToolScopeEnd();
 }

@@ -417,7 +417,14 @@ static void DrawPage()
                        "moved so both halves get the same playable area. A red line on the map and the minimap shows it.");
     ImGui::Spacing();
     ImGui::TextColored(ImVec4(0.95f, 0.8f, 0.25f, 1.0f),
-                       "In development: buildings and networks stay on your half; money is still shared.");
+                       "In development: buildings and networks stay on your half; each republic has its own money, "
+                       "but what buildings and vehicles earn and pay is still split in two.");
+    double rub0, usd0, rub1, usd1;
+    if (Wallets_Read(&rub0, &usd0, &rub1, &usd1)) {
+        ImGui::Spacing();
+        ImGui::Text("East: %.0f rubles, %.0f dollars", rub0, usd0);
+        ImGui::Text("West: %.0f rubles, %.0f dollars", rub1, usd1);
+    }
 }
 
 static const RmpMode kRepublics = {

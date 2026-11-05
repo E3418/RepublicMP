@@ -2,6 +2,7 @@
 // See state_hash.h.
 #include "state_hash.h"
 #include "../core/profile.h"
+#include "../lockstep/wallets.h"
 #include "determinism.h"
 #include <string.h>
 #include <stdio.h>
@@ -107,6 +108,10 @@ bool StateHash_Compute(StateSummary* out)
         out->dayProgress = *(float*)(w + WORLD_PROGRESS_OFFSET);
         out->usd = *(double*)(w + WORLD_USD_OFFSET);
         out->rub = *(double*)(w + WORLD_RUB_OFFSET);
+        // In Republics the balances hold this PC's own account: they differ by design.
+        Wallets_Read(&out->rub, &out->usd, &out->rub2, &out->usd2);
+        Mix(out->hashClock, &out->usd2, sizeof(double));
+        Mix(out->hashClock, &out->rub2, sizeof(double));
         MixInt(out->hashClock, out->day);
         MixInt(out->hashClock, out->year);
         MixFloat(out->hashClock, out->dayProgress);
