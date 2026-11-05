@@ -188,6 +188,7 @@ static const char* KindName(int kind)
     case LS_CMD_NET_CANCEL: return "network cancel";
     case LS_CMD_WORKERS: return "workers without an office";
     case LS_CMD_CANCEL_PLANS: return "cancel all plans";
+    case LS_CMD_SPAWN_BUILDING: return "building spawn";
     case LS_CMD_PLAN_REMOVE: return "plan removal";
     case LS_CMD_CAR_OWNERS: return "car owners";
     case LS_CMD_LINE_SPACING: return "line spacing";
@@ -466,6 +467,32 @@ static CommandGlobalFn g_globalRule = nullptr;
 
 void Commands_SetGlobalRule(CommandGlobalFn fn) { g_globalRule = fn; }
 
+static CommandSpawnedFn g_spawned = nullptr;
+void Commands_SetSpawned(CommandSpawnedFn fn) { g_spawned = fn; }
+
+// A building placed as the build-with-money tool does, so it stands finished at
+// once, with the game's "no charges" flag on while it is made: nobody pays.
+#define WORLD_FREE_BUILDING 0x578
+static bool ApplySpawnBuilding(const BuildingMsg& m)
+{
+    int* free = (int*)(g_exeBase + 0x9D4F10 + WORLD_FREE_BUILDING);
+    int wasFree = *free;
+    double rub = *Rubles(), usd = *Dollars();
+    *free = 1;
+    bool ok = Buildings_ApplyPlacementCommand(m);
+    *free = wasFree;
+    *Rubles() = rub;
+    *Dollars() = usd;
+    return ok;
+}
+
+bool Commands_SpawnBuildingNow(const BuildingMsg& m)
+{
+    bool ok = ApplySpawnBuilding(m);
+    if (g_spawned) g_spawned(ok);
+    return ok;
+}
+
 bool Commands_GlobalAllowed()
 {
     int player = Commands_ApplyingPlayer();
@@ -500,6 +527,10 @@ static bool ApplyKind(const Command& c)
         break;
     case LS_CMD_DEMOLISH:
         if (n == sizeof(BuildingMsg)) ok = Buildings_ApplyDemolishCommand(*(const BuildingMsg*)p);
+        break;
+    case LS_CMD_SPAWN_BUILDING:
+        if (n == sizeof(BuildingMsg) && c.player == 0) ok = ApplySpawnBuilding(*(const BuildingMsg*)p);
+        if (g_spawned) g_spawned(ok);
         break;
     case LS_CMD_SETTING:
         if (n == sizeof(BuildingSettingMsg)) ok = BuildingSettings_ApplyCommand(*(const BuildingSettingMsg*)p);

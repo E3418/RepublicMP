@@ -68,6 +68,7 @@ enum LockstepCommandKind {
     LS_CMD_CAR_OWNERS = 39,     // car_owners.cpp: the car building window's "Reset owners" (the building)
     LS_CMD_PLAN_REMOVE = 40,    // plan_remove.cpp: the factory window's "Remove from plan" (factory, entry)
     LS_CMD_CANCEL_PLANS = 41,   // cancel_plans.cpp: "Cancel all plans" (the networks by world field)
+    LS_CMD_SPAWN_BUILDING = 42, // BuildingMsg: a mode's building, placed free of charge (the host's only)
 };
 
 // Money a local action changed on this PC (an interface purchase, a terrain
@@ -119,6 +120,13 @@ void Commands_SetAreaRule(CommandAreaFn fn);
 // null: everyone may.
 typedef bool (*CommandGlobalFn)(int player);
 void Commands_SetGlobalRule(CommandGlobalFn fn);
+
+// A mode hears how its LS_CMD_SPAWN_BUILDING ended, on every PC.
+typedef void (*CommandSpawnedFn)(bool placed);
+void Commands_SetSpawned(CommandSpawnedFn fn);
+// Outside the lockstep (a Republics host alone): the same placement, here at once.
+// Main thread. Its save carries the building to whoever joins.
+bool Commands_SpawnBuildingNow(const struct BuildingMsg& m);
 
 // Outside the lockstep (a Republics host alone) the game makes the local
 // player's actions itself: the hooks that would make a command ask here

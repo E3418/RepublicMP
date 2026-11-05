@@ -525,6 +525,10 @@ read in the disassembly, what a payer pays for is a guess unless said.
   only from `0x4B96D3`. `+0x08` currency (1 dollars), `+0x10` days left, `+0x14`
   amount, `+0x18` amount under penalty. `+0x0C` ($LoanSubType) is 0 from
   `Loan_Borrow` and the loan windows do not read it; Republics keeps the owner there.
+- **Customs houses:** type category `0x14`, `$BORDER_BUILDING` at type `+0xAE0`.
+  Building `+0x9EC` is the currency it trades in: 3 dollars (the West), 4 rubles
+  (the Soviets). The load sets it on the two hidden border buildings by the sign
+  of x (`0x43768D`, `0x4376CD`); a map's own customs house is read as inferred.
 - **Load and new game:** the loader `0x430FC0` (`0x437CB6`, both at once),
   the header import `0x430690`; the new game's starting money `0x2FB1D0`.
 - **"Not enough money" checks:** the drag tick `0x5171A4`, `0x5172A9`;

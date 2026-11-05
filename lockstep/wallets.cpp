@@ -31,6 +31,7 @@ enum UseMode { USE_VIEW, USE_COMMAND, USE_SIM };
 
 static volatile bool g_on = false; // a Republics session is running
 static bool g_kept = false;        // g_accounts hold this world's accounts (also after the session ended)
+static bool g_absorbLocal = false; // a session ended here: the balances are this PC's account and go on changing
 static Account g_accounts[2];
 static UseMode g_use = USE_VIEW;
 static int g_commandHalf = 0;
@@ -239,17 +240,21 @@ void Wallets_AfterLoad(bool session)
     g_loadedFound = false;
     g_use = USE_VIEW;
     g_scope = SCOPE_NONE;
-    if (!session || SaveSync_GetGameMode() != SESSION_MODE_REPUBLICS) {
-        g_on = false;
-        g_kept = false;
-        return;
-    }
+    g_absorbLocal = false;
     if (found) {
         g_accounts[0] = g_loaded[0];
         g_accounts[1] = g_loaded[1];
         size_t count = LoanCount();
         for (size_t i = 0; i < count && g_loadedLoans[i]; i++) *LoanOwner(i) = g_loadedLoans[i] - '0';
-    } else {
+    }
+    if (!session || SaveSync_GetGameMode() != SESSION_MODE_REPUBLICS) {
+        // A session's save holds the balances of the PC that wrote it, one player's: they
+        // say nothing about the accounts, which stay with the save for its next session.
+        g_on = false;
+        g_kept = found;
+        return;
+    }
+    if (!found) {
         // Half 0 is the East. Both PCs loaded the same save: the same numbers.
         double rub = Rubles(), usd = Dollars();
         g_accounts[0] = { rub, usd };
@@ -270,6 +275,7 @@ void Wallets_SessionEnd()
     if (!g_on) return;
     Wallets_LogState();
     g_on = false;
+    g_absorbLocal = true;
 }
 
 // A double's exact bits: a re-sync must bring back the same number.
@@ -301,7 +307,7 @@ static void WriteSection()
         LoadScope(g_scope);
     }
     // The host plays on alone: the balances are its account.
-    if (!g_on) g_accounts[LocalHalf()] = { Rubles(), Dollars() };
+    if (!g_on && g_absorbLocal) g_accounts[LocalHalf()] = { Rubles(), Dollars() };
     PutMoney("half0_rub", g_accounts[0].rub);
     PutMoney("half0_usd", g_accounts[0].usd);
     PutMoney("half1_rub", g_accounts[1].rub);

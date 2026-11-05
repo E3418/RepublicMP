@@ -3,6 +3,8 @@
 // See republics.h.
 #include "republics.h"
 #include "../../api/republicmp_api.h"
+#include "../../lockstep/lockstep_net.h"
+#include "../../world/buildings.h"
 #include "imgui.h"
 #include <limits.h>
 #include <math.h>
@@ -138,9 +140,14 @@ static bool OutOfPlayable(const float p[3])
 //
 // A broken line: a few general directions drawn from the world's seed, and for
 // each, knots about KNOT_SPACING_M apart moved at random; the most even result
-// wins. After every move the whole line shifts so the playable area stays half
-// and half. What is judged, in order: the border crossings (customs houses and
-// the other buildings on the border, each type shared evenly); each resource's
+// wins. After every move the whole line shifts so the playable land stays half
+// and half (water is not area: a half of open sea is no republic). No customs house
+// may lie within CUSTOMS_CLEAR_M of the line. What is judged, in order: the border
+// crossings (in East vs West only
+// that each side of the world has at least one land customs house on the half of
+// its currency, so each player can buy abroad with their own money; in Equal,
+// customs houses and the other buildings on the border, each type shared evenly);
+// each resource's
 // amount, which counts only past RESOURCE_TOLERANCE from an even share; how many
 // deposits (patches) each side has, whole ones where it can be, and a resource
 // with only one deposit cut in two.
@@ -149,8 +156,8 @@ static bool OutOfPlayable(const float p[3])
 // it reads is the same on every PC: the save everyone loaded. The cut is kept in
 // the save, so what players build or mine later never moves it.
 
-#define CUT_DIRECTIONS 8
-#define CUT_ROUNDS 1200       // moves of the knots, per direction
+#define CUT_DIRECTIONS 12
+#define CUT_ROUNDS 1500       // moves of the knots, per direction
 #define CUT_HEAT 0.05         // how readily a worse line is taken at the start; none at the end
 #define KNOT_SPACING_M 2500.0f
 #define MIN_KNOTS 4
@@ -173,6 +180,14 @@ static bool OutOfPlayable(const float p[3])
 #define TYPE_CATEGORY 0x360
 #define TYPE_BORDER_FLAG 0xAE0
 #define CATEGORY_CUSTOMS 0x14
+#define CUSTOMS_CLEAR_M 500.0f // so its yard and roads stay on one side
+#define CLEAR_WEIGHT 3.0 // a customs house too close counts more than a whole crossing
+#define SEA_LEVEL 0.0f // the terrain's height at the water (the game's border signs stop there too)
+// A customs house's side of the world: 3 the West, dollars; 4 the Soviets, rubles
+// (the load marks its own border buildings so, 43768d and 4376cd). Half 0 is the East.
+#define BUILDING_BLOC 0x9EC
+#define BLOC_WEST 3
+#define BLOC_SOVIET 4
 #define CROSSING_GROUPS 64 // one per building type, and the last for all the customs houses
 #define CROSSING_ALL_CUSTOMS (CROSSING_GROUPS - 1)
 
@@ -187,6 +202,7 @@ struct Deposit {
 struct Crossing {
     float x, z;
     int group;
+    int bloc; // East vs West: BLOC_* of a customs house that has a side to be on, else 0
 };
 
 static std::vector<ResourcePoint> g_resources;
@@ -194,6 +210,7 @@ static std::vector<Deposit> g_deposits;
 static std::vector<double> g_depositLow; // ScoreCut: each deposit's amount below the line
 static double g_resourceTotal[RESOURCE_CHANNELS];
 static std::vector<Crossing> g_crossings;
+static std::vector<Crossing> g_customs; // every customs house, for the distance from the line
 static int g_cells = 0; // playable cells in g_cellX / g_cellZ
 static float g_cellX[CUT_GRID * CUT_GRID], g_cellZ[CUT_GRID * CUT_GRID];
 static Cut g_savedCut;
@@ -278,6 +295,7 @@ static void FindCrossings()
     unsigned char** end = nullptr;
     if (!World_Buildings(&begin, &end)) return;
     const BYTE* types[CROSSING_ALL_CUSTOMS] = {};
+    bool eastWest = SaveSync_GetGameVariant() == SESSION_REPUBLICS_EAST_WEST;
     __try {
         for (unsigned char** b = begin; b < end && g_crossings.size() < MAX_CROSSINGS; ++b) {
             if (!*b) continue;
@@ -291,8 +309,15 @@ static void FindCrossings()
             types[group] = type;
             float pos[3];
             if (!World_BuildingPos(*b, pos)) continue;
-            g_crossings.push_back({ pos[0], pos[2], group });
-            if (customs) g_crossings.push_back({ pos[0], pos[2], CROSSING_ALL_CUSTOMS });
+            if (customs) g_customs.push_back({ pos[0], pos[2], 0, 0 });
+            if (eastWest) {
+                // Only land customs houses with a side count here; the air ones have no border flag.
+                int bloc = customs && type[TYPE_BORDER_FLAG] ? *(const int*)(*b + BUILDING_BLOC) : 0;
+                if (bloc == BLOC_WEST || bloc == BLOC_SOVIET) g_crossings.push_back({ pos[0], pos[2], 0, bloc });
+                continue;
+            }
+            g_crossings.push_back({ pos[0], pos[2], group, 0 });
+            if (customs) g_crossings.push_back({ pos[0], pos[2], CROSSING_ALL_CUSTOMS, 0 });
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         g_measureFault = true;
@@ -305,7 +330,11 @@ struct CutScore {
     double worstOff;     // the most unevenly shared one, past it too
     int patchesOff;      // deposits beyond an even count, each to the side with more of it
     double cuts;         // deposits cut, by how evenly; a lone one by how unevenly
-    double Total() const { return crossingsOff + resourcesOff * 2 + worstOff * 4 + patchesOff * PATCH_WEIGHT + cuts; }
+    double tooClose;     // customs houses within CUSTOMS_CLEAR_M, more the closer
+    double Total() const
+    {
+        return crossingsOff + tooClose * CLEAR_WEIGHT + resourcesOff * 2 + worstOff * 4 + patchesOff * PATCH_WEIGHT + cuts;
+    }
 };
 
 // The measured things in the direction's own frame.
@@ -313,7 +342,7 @@ struct FramePoint {
     float u, v, amount;
     int kind, deposit;
 };
-static std::vector<FramePoint> g_frameResources, g_frameCrossings, g_frameCells;
+static std::vector<FramePoint> g_frameResources, g_frameCrossings, g_frameCells, g_frameCustoms;
 static std::vector<int> g_coarseCells; // an even grid of the playable cells
 
 static void MakeFrame(float nx, float nz)
@@ -321,10 +350,13 @@ static void MakeFrame(float nx, float nz)
     g_frameResources.clear();
     g_frameCrossings.clear();
     g_frameCells.clear();
+    g_frameCustoms.clear();
+    for (const Crossing& p : g_customs)
+        g_frameCustoms.push_back({ p.z * nx - p.x * nz, p.x * nx + p.z * nz, 1.0f, 0, 0 });
     for (const ResourcePoint& p : g_resources)
         g_frameResources.push_back({ p.z * nx - p.x * nz, p.x * nx + p.z * nz, p.amount, p.channel, p.deposit });
     for (const Crossing& p : g_crossings)
-        g_frameCrossings.push_back({ p.z * nx - p.x * nz, p.x * nx + p.z * nz, 1.0f, p.group, 0 });
+        g_frameCrossings.push_back({ p.z * nx - p.x * nz, p.x * nx + p.z * nz, 1.0f, p.group, p.bloc });
     for (int k : g_coarseCells)
         g_frameCells.push_back({ g_cellZ[k] * nx - g_cellX[k] * nz, g_cellX[k] * nx + g_cellZ[k] * nz, 1.0f, 0, 0 });
 }
@@ -342,8 +374,14 @@ static float AreaShift(const Cut& c)
 // The line as it would stand with the areas equal.
 static CutScore ScoreCut(const Cut& c)
 {
-    CutScore s = { 0, 0.0, 0.0, 0, 0.0 };
+    CutScore s = { 0, 0.0, 0.0, 0, 0.0, 0.0 };
     float shift = AreaShift(c);
+    for (const FramePoint& p : g_frameCustoms) {
+        float slope;
+        float f = CutAt(c, p.u, &slope);
+        float d = fabsf(p.v - shift - f) / sqrtf(1.0f + slope * slope);
+        if (d < CUSTOMS_CLEAR_M) s.tooClose += 1.0 + (CUSTOMS_CLEAR_M - d) / CUSTOMS_CLEAR_M;
+    }
     double side[RESOURCE_CHANNELS] = {};
     g_depositLow.assign(g_deposits.size(), 0.0);
     for (const FramePoint& p : g_frameResources)
@@ -377,10 +415,20 @@ static CutScore ScoreCut(const Cut& c)
         if (patches[i] > 1 && off > patches[i] % 2) s.patchesOff += off - patches[i] % 2;
     }
     int low[CROSSING_GROUPS] = {}, all[CROSSING_GROUPS] = {};
+    bool hasBloc[2] = {}, blocHome[2] = {}; // the Soviets', the West's
     for (const FramePoint& p : g_frameCrossings) {
+        bool isLow = p.v - shift < CutAt(c, p.u);
+        if (p.deposit) { // here: the customs house's side of the world
+            int west = p.deposit == BLOC_WEST ? 1 : 0;
+            hasBloc[west] = true;
+            if (isLow != (west == 1)) blocHome[west] = true;
+            continue;
+        }
         all[p.kind]++;
-        if (p.v - shift < CutAt(c, p.u)) low[p.kind]++;
+        if (isLow) low[p.kind]++;
     }
+    for (int b = 0; b < 2; b++)
+        if (hasBloc[b] && !blocHome[b]) s.crossingsOff++;
     for (int t = 0; t < CROSSING_GROUPS; t++) {
         int off = abs(2 * low[t] - all[t]);
         if (off > all[t] % 2) s.crossingsOff += off - all[t] % 2;
@@ -411,19 +459,26 @@ static bool CutAllowed(const Cut& c, float swing)
 static void MakeCut(float w, float h)
 {
     g_measureFault = false;
-    g_cells = 0;
-    g_coarseCells.clear();
-    for (int i = 0; i < CUT_GRID; i++)
-        for (int j = 0; j < CUT_GRID; j++) {
-            float p[3] = { ((i + 0.5f) / CUT_GRID - 0.5f) * w, 0, ((j + 0.5f) / CUT_GRID - 0.5f) * h };
-            if (OutOfPlayable(p)) continue;
-            if (i % CUT_CELL_STRIDE == 0 && j % CUT_CELL_STRIDE == 0) g_coarseCells.push_back(g_cells);
-            g_cellX[g_cells] = p[0];
-            g_cellZ[g_cells++] = p[2];
-        }
+    // The land of the playable area; a map that is nearly all water counts as a whole.
+    for (int landOnly = 1; landOnly >= 0; landOnly--) {
+        g_cells = 0;
+        g_coarseCells.clear();
+        for (int i = 0; i < CUT_GRID; i++)
+            for (int j = 0; j < CUT_GRID; j++) {
+                float p[3] = { ((i + 0.5f) / CUT_GRID - 0.5f) * w, 0, ((j + 0.5f) / CUT_GRID - 0.5f) * h };
+                if (OutOfPlayable(p)) continue;
+                float y;
+                if (landOnly && TerrainHook_HeightAt(p, &y) && y <= SEA_LEVEL) continue;
+                if (i % CUT_CELL_STRIDE == 0 && j % CUT_CELL_STRIDE == 0) g_coarseCells.push_back(g_cells);
+                g_cellX[g_cells] = p[0];
+                g_cellZ[g_cells++] = p[2];
+            }
+        if (g_cells * 20 >= CUT_GRID * CUT_GRID) break;
+    }
     g_resources.clear();
     g_deposits.clear();
     g_crossings.clear();
+    g_customs.clear();
     memset(g_resourceTotal, 0, sizeof(g_resourceTotal));
     char folder[MAX_PATH];
     if (ModSave_LoadedFolder(folder, sizeof(folder))) {
@@ -446,7 +501,7 @@ static void MakeCut(float w, float h)
     line.step = len / (float)(knots - 1);
     line.knots = knots;
     bestLine = line;
-    CutScore score = { 1000000, 2.0, 2.0, 0, 0.0 };
+    CutScore score = { 1000000, 2.0, 2.0, 0, 0.0, 0.0 };
     for (int direction = 0; direction < CUT_DIRECTIONS; direction++) {
         // A point on the circle by exact arithmetic: t in [-1, 1) covers every line's direction.
         double t = CutRandom(&seed) * 2.0 - 1.0;
@@ -456,6 +511,18 @@ static void MakeCut(float w, float h)
         for (int k = 0; k < knots; k++) line.off[k] = 0;
         MakeFrame(line.nx, line.nz);
         CutScore now = ScoreCut(line);
+        // The same line with its halves the other way round, if that puts the customs houses better.
+        MakeFrame(-line.nx, -line.nz);
+        Cut turned = line;
+        turned.nx = -line.nx;
+        turned.nz = -line.nz;
+        CutScore other = ScoreCut(turned);
+        if (other.crossingsOff < now.crossingsOff) {
+            line = turned;
+            now = other;
+        } else {
+            MakeFrame(line.nx, line.nz);
+        }
         double total = now.Total();
         if (total < score.Total()) {
             score = now;
@@ -503,10 +570,22 @@ static void MakeCut(float w, float h)
         float u = g_cellZ[k] * line.nx - g_cellX[k] * line.nz, v = g_cellX[k] * line.nx + g_cellZ[k] * line.nz;
         if (v < CutAt(line, u)) lowCells++;
     }
+    float nearest = -1;
+    for (const FramePoint& p : g_frameCustoms) {
+        float slope;
+        float f = CutAt(line, p.u, &slope);
+        float d = fabsf(p.v - f) / sqrtf(1.0f + slope * slope);
+        if (nearest < 0 || d < nearest) nearest = d;
+    }
     int customs = 0, customsLow = 0, border = 0, borderLow = 0;
+    int bloc[2] = {}, blocRight[2] = {};
     for (const FramePoint& p : g_frameCrossings) {
         bool isLow = p.v < CutAt(line, p.u);
-        if (p.kind == CROSSING_ALL_CUSTOMS) {
+        if (p.deposit) {
+            int west = p.deposit == BLOC_WEST ? 1 : 0;
+            bloc[west]++;
+            if (isLow != (west == 1)) blocRight[west]++;
+        } else if (p.kind == CROSSING_ALL_CUSTOMS) {
             customs++;
             if (isLow) customsLow++;
         } else {
@@ -514,10 +593,11 @@ static void MakeCut(float w, float h)
             if (isLow) borderLow++;
         }
     }
-    Logf("republicmp  REPUBLICS: the cut - direction (%.3f, %.3f), %d knots %.0f m apart; half 0 has %.1f%% of the area; "
-         "customs houses %d of %d, border buildings %d of %d, %d off an even share by type; patches %d off",
-         line.nx, line.nz, knots, line.step, 100.0 * lowCells / g_cells, customsLow, customs, borderLow, border, score.crossingsOff,
-         score.patchesOff);
+    Logf("republicmp  REPUBLICS: the cut - direction (%.3f, %.3f), %d knots %.0f m apart; half 0 has %.1f%% of the land (%d cells); the nearest customs house %.0f m from the line; "
+         "western land customs %d of %d on the West's half, Soviet %d of %d on the East's; other customs %d of %d, "
+         "border buildings %d of %d; crossings %d off; patches %d off",
+         line.nx, line.nz, knots, line.step, 100.0 * lowCells / g_cells, g_cells, nearest, blocRight[1], bloc[1], blocRight[0], bloc[0], customsLow, customs,
+         borderLow, border, score.crossingsOff, score.patchesOff);
     for (int i = 0; i < RESOURCE_CHANNELS; i++) {
         if (g_resourceTotal[i] <= 0) continue;
         double low = 0;
@@ -532,6 +612,8 @@ static void MakeCut(float w, float h)
         Logf("republicmp  REPUBLICS:   resource %d: half 0 has %.1f%%, patches %d of %d", i, 100.0 * low / g_resourceTotal[i], lows, patches);
     }
     std::vector<Crossing>().swap(g_crossings);
+    std::vector<Crossing>().swap(g_customs);
+    std::vector<FramePoint>().swap(g_frameCustoms);
     std::vector<ResourcePoint>().swap(g_resources);
     std::vector<Deposit>().swap(g_deposits);
     std::vector<double>().swap(g_depositLow);
@@ -539,6 +621,121 @@ static void MakeCut(float w, float h)
     std::vector<FramePoint>().swap(g_frameCrossings);
     std::vector<FramePoint>().swap(g_frameCells);
     std::vector<int>().swap(g_coarseCells);
+}
+
+// ---------------------------------------------------------------------------
+// The customs house on the line
+// ---------------------------------------------------------------------------
+//
+// One road customs house, spawned free of charge on the line between the players,
+// so each reaches it from their own side. The spot: land all around within
+// SPAWN_CLEAR_M and inside the playable border, level to SPAWN_LEVEL_M within
+// SPAWN_LEVEL_RADIUS_M, no building near. The host picks it: alone it places it at
+// once and the save carries it to who joins, else it is a command. A save keeps
+// that it was done.
+
+#define SPAWN_TYPE "zoll_sahy"
+#define SPAWN_CLEAR_M 100.0f
+#define SPAWN_LEVEL_M 10.0f
+#define SPAWN_LEVEL_RADIUS_M 200.0f
+#define SPAWN_NO_BUILDING_M 150.0f
+#define SPAWN_CLEAR_STEP_M 25.0f
+#define SPAWN_LEVEL_STEP_M 50.0f
+#define SPAWN_SPOTS 96        // along the line
+#define SPAWN_MAX_TRIES 6     // spots the engine may refuse
+
+static bool g_spawnDone = false;    // this world has it (from the save, or made)
+static bool g_spawnWaiting = false; // the host's command is on its way
+static bool g_spawnGaveUp = false;  // until the next load
+static int g_spawnRefused = 0;
+
+static bool SpawnSpotFits(float x, float z, float clear)
+{
+    float at[3] = { x, 0, z }, y0;
+    if (!TerrainHook_HeightAt(at, &y0)) return false;
+    for (float dx = -clear; dx <= clear; dx += SPAWN_CLEAR_STEP_M)
+        for (float dz = -clear; dz <= clear; dz += SPAWN_CLEAR_STEP_M) {
+            if (dx * dx + dz * dz > clear * clear) continue;
+            float p[3] = { x + dx, 0, z + dz }, y;
+            if (OutOfPlayable(p)) return false;
+            if (!TerrainHook_HeightAt(p, &y) || y <= SEA_LEVEL) return false;
+        }
+    for (float dx = -SPAWN_LEVEL_RADIUS_M; dx <= SPAWN_LEVEL_RADIUS_M; dx += SPAWN_LEVEL_STEP_M)
+        for (float dz = -SPAWN_LEVEL_RADIUS_M; dz <= SPAWN_LEVEL_RADIUS_M; dz += SPAWN_LEVEL_STEP_M) {
+            if (dx * dx + dz * dz > SPAWN_LEVEL_RADIUS_M * SPAWN_LEVEL_RADIUS_M) continue;
+            float p[3] = { x + dx, 0, z + dz }, y;
+            if (!TerrainHook_HeightAt(p, &y) || fabsf(y - y0) > SPAWN_LEVEL_M) return false;
+        }
+    unsigned char** begin = nullptr;
+    unsigned char** end = nullptr;
+    if (World_Buildings(&begin, &end))
+        for (unsigned char** b = begin; b < end; ++b) {
+            float pos[3];
+            if (!*b || !World_BuildingPos(*b, pos)) continue;
+            float dx = pos[0] - x, dz = pos[2] - z;
+            if (dx * dx + dz * dz < SPAWN_NO_BUILDING_M * SPAWN_NO_BUILDING_M) return false;
+        }
+    return true;
+}
+
+// The skip-th spot that fits, starting at a place the world's seed picks.
+static bool FindSpawnSpot(const Cut& c, float clear, int skip, float* x, float* z, float* slope)
+{
+    unsigned first = (unsigned)(CutMix(ModSave_WorldSeed() ^ 0xC057u) % SPAWN_SPOTS);
+    for (int i = 0; i < SPAWN_SPOTS; i++) {
+        int spot = (int)((first + (unsigned)i) % SPAWN_SPOTS);
+        float u = c.startU + c.step * (c.knots - 1) * (spot + 0.5f) / SPAWN_SPOTS;
+        float v = CutAt(c, u, slope);
+        *x = c.nx * v - c.nz * u;
+        *z = c.nz * v + c.nx * u;
+        if (!SpawnSpotFits(*x, *z, clear)) continue;
+        if (skip-- == 0) return true;
+    }
+    return false;
+}
+
+// Main thread, a frame observer, the host. The command waits for the player, so
+// it is made on every PC.
+static void TrySpawnCustoms(const Cut& c)
+{
+    if (g_spawnDone || g_spawnWaiting || g_spawnGaveUp || !SaveSync_IsHostRole()) return;
+    bool lockstep = Commands_Capturing();
+    if (lockstep && !LockstepNet_CommandsReady()) return;
+    float x, z, slope, clear = SPAWN_CLEAR_M;
+    g_measureFault = false;
+    bool found = FindSpawnSpot(c, clear, g_spawnRefused, &x, &z, &slope);
+    if (!found || g_measureFault || g_spawnRefused >= SPAWN_MAX_TRIES) {
+        g_spawnGaveUp = true;
+        Logf("republicmp  REPUBLICS: no spot for a customs house on the line (%d refused)", g_spawnRefused);
+        return;
+    }
+    float at[3] = { x, 0, z }, y = 0;
+    TerrainHook_HeightAt(at, &y);
+    // The line's normal here is the building's own z axis: its road port on one
+    // side, its border port on the other. The yaw only goes in the command, which
+    // carries the number: atan2 differing by CPU cannot split the games.
+    float across[2] = { c.nx - slope * -c.nz, c.nz - slope * c.nx };
+    BuildingMsg m = {};
+    m.kind = BUILDING_PLACE;
+    m.mode.rub = 1;
+    m.x = m.cursorX = x;
+    m.y = m.cursorY = y;
+    m.z = m.cursorZ = z;
+    m.cursorRot = atan2f(across[0], across[1]);
+    m.pickModes = BUILDING_PICK_NO_LINKS;
+    strncpy_s(m.typeName, SPAWN_TYPE, _TRUNCATE);
+    g_spawnWaiting = true;
+    Logf("republicmp  REPUBLICS: a customs house at (%.0f, %.0f), height %.1f, land for %.0f m around", x, z, y, clear);
+    if (lockstep) Commands_Submit(LS_CMD_SPAWN_BUILDING, &m, sizeof(m));
+    else Commands_SpawnBuildingNow(m);
+}
+
+static void SpawnedCustoms(bool placed)
+{
+    g_spawnWaiting = false;
+    if (placed) g_spawnDone = true;
+    else g_spawnRefused++;
+    Logf("republicmp  REPUBLICS: the customs house %s", placed ? "stands" : "was refused by the engine");
 }
 
 // g_savedCut holds this world's cut from its first measure until the next load: a
@@ -552,6 +749,7 @@ static void WriteCutSection()
     if (!g_cutSaved) return;
     float v[4 + MAX_KNOTS] = { g_savedCut.nx, g_savedCut.nz, g_savedCut.startU, g_savedCut.step };
     memcpy(v + 4, g_savedCut.off, sizeof(float) * g_savedCut.knots);
+    ModSave_PutInt("customs", g_spawnDone ? 1 : 0);
     ModSave_PutInt("knots", g_savedCut.knots);
     ModSave_PutFloats("line", v, 4 + g_savedCut.knots);
 }
@@ -559,7 +757,10 @@ static void WriteCutSection()
 static void ReadCutSection(bool found)
 {
     g_cutSaved = false;
-    long long knots = 0;
+    long long knots = 0, spawned = 0;
+    g_spawnWaiting = g_spawnGaveUp = false;
+    g_spawnRefused = 0;
+    g_spawnDone = found && ModSave_GetInt("customs", &spawned) && spawned == 1;
     if (!found || !ModSave_GetInt("knots", &knots) || knots < 2 || knots > MAX_KNOTS) return;
     float v[4 + MAX_KNOTS];
     if (!ModSave_GetFloats("line", v, 4 + (int)knots) || v[3] <= 0) return;
@@ -675,6 +876,7 @@ static void SampleBorder()
         g_stripCount = g_signCount[0] = g_signCount[1] = 0;
         return;
     }
+    TrySpawnCustoms(*c);
     ULONGLONG now = GetTickCount64();
     if (g_borderCount && now - g_borderAt < BORDER_REFRESH_MS && g_borderLoads == g_cutLoads) return;
     g_borderLoads = g_cutLoads;
@@ -919,6 +1121,7 @@ void Republics_Bind(const ModHost* host)
     Commands_SetAreaRule(AreaRule);
     Commands_SetGlobalRule(GlobalRule);
     Wallets_SetHalfRule(OwnerHalf);
+    Commands_SetSpawned(SpawnedCustoms);
     ModSave_Add("republics", WriteCutSection, ReadCutSection);
     Determinism_AddFrameObserver(SampleBorder);
     Determinism_AddStepObserver(SampleBorder);
