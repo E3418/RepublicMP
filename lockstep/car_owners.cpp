@@ -38,9 +38,9 @@ typedef BYTE (*HomeFn)(U64 world, U64 car, BYTE a, BYTE b, BYTE c, BYTE d);
 static U64 g_lastBuilding = 0;
 static ULONGLONG g_lastAt = 0;
 
-void CarOwners_Bind(const TsmHost* host)
+void CarOwners_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 static U64 Q(U64 at) { return *(U64*)at; }

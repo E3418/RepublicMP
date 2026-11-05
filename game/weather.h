@@ -15,9 +15,9 @@
 // generator - the same weather everywhere, nobody's copied.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void Weather_Bind(const TsmHost* host);
+void Weather_Bind(const ModHost* host);
 
 // Main thread, right after the session's load, with the determinism layer on.
 void Weather_StartShared();

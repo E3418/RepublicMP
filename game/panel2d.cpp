@@ -28,9 +28,9 @@ typedef void (*DrawFn)(void* panel, float u0, float v0, float u1, float v1, floa
 typedef void (*RotationFn)(float* out, const float* in);
 typedef void (*SetTextureFn)(void* texture, unsigned slot, void* shaders);
 
-void Panel2D_Bind(const TsmHost* host)
+void Panel2D_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 bool Panel2D_ScreenSize(float* width, float* height)

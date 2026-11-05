@@ -19,6 +19,7 @@ obj/
 x64/
 Debug/
 Release/
+build/
 
 # Per-user project settings (debugger command line, etc.)
 *.vcxproj.user

@@ -31,7 +31,7 @@
 // are not seen.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
 enum TerrainMethod {
     TM_RAISE_LOWER,
@@ -67,7 +67,7 @@ struct TerrainArgs {
     unsigned char suppressed; // logging only: the call became a command and did not run here
 };
 
-void TerrainHook_Bind(const TsmHost* host);
+void TerrainHook_Bind(const ModHost* host);
 bool InstallTerrainHooks();
 
 // Per-frame (game thread, Present hook): flushes the aggregated calls of the

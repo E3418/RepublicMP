@@ -31,7 +31,7 @@
 // One session runs at a time: Host/Connect are refused while one is active.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 #include "../core/host_config.h"
 
 #define SAVE_SYNC_PORT 5556
@@ -47,9 +47,9 @@ enum SessionState {
     SESSION_CLIENT_IN_GAME,  // in the host's game, lockstep running
 };
 
-void SaveSync_Bind(const TsmHost* host);
+void SaveSync_Bind(const ModHost* host);
 
-// Writes to tesmioloader.log and the in-game UI log.
+// Writes to republicmp.log and the in-game UI log.
 void SaveStatus(const char* fmt, ...);
 
 // True while a world is loaded (not the main menu, not mid-load).

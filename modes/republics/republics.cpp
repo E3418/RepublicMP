@@ -420,9 +420,9 @@ static const RmpMode kRepublics = {
     DrawOverlay,
 };
 
-void Republics_Bind(const TsmHost* host)
+void Republics_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
     g_showSigns = Profile_GetInt("overlay", "border_signs", 1) != 0;
     Commands_SetAreaRule(AreaRule);
     Determinism_AddFrameObserver(SampleBorder);

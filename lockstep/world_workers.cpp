@@ -65,9 +65,9 @@ static bool g_started = false;
 static WorkersMsg g_shared = {}, g_seen = {}, g_sent = {};
 static bool g_sentValid = false;
 
-void WorldWorkers_Bind(const TsmHost* host)
+void WorldWorkers_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 static U64 Widget() { return *(U64*)(g_exeBase + WORLD_RVA + WIDGET_OFFSET); }

@@ -48,11 +48,11 @@
 // (by SoylentGreed)
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void SimPatches_Bind(const TsmHost* host);
+void SimPatches_Bind(const ModHost* host);
 
-// Installs the call relays and the Late hook. Call once from TsmPluginStart.
+// Installs the call relays and the Late hook. Call once from RepublicMP_Start.
 bool SimPatches_Install();
 
 // Writes the byte patches and turns the relays on. Main thread, with the

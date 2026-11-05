@@ -7,9 +7,9 @@
 // matrix being written meanwhile costs one frame's wrong position at worst.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void Camera_Bind(const TsmHost* host);
+void Camera_Bind(const ModHost* host);
 
 // A world point in clip space (x, y, z, w); false when there is no camera.
 bool Camera_Clip(const float p[3], float clip[4]);

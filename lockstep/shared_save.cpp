@@ -64,9 +64,9 @@ static bool MakeSaveFolder(const char* name)
     return CreateDirectoryA(path, nullptr) || GetLastError() == ERROR_ALREADY_EXISTS;
 }
 
-void SharedSave_Bind(const TsmHost* host)
+void SharedSave_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
     g_configInt = (ConfigIntFn)GetProcAddress(g_engine, "?GetValueInteger@C3D_CONFIGURATOR@@QEAAHPEAD@Z");
     g_configIntPtr = (ConfigIntPtrFn)GetProcAddress(g_engine, "?GetValueIntegerPointer@C3D_CONFIGURATOR@@QEAAPEAHPEAD@Z");
     g_configSave = (ConfigSaveFn)GetProcAddress(g_engine, "?SaveConfigParams@C3D_CONFIGURATOR@@QEAAHXZ");

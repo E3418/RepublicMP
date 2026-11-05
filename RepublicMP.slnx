@@ -3,5 +3,6 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
+  <Project Path="Proxy/Proxy.vcxproj" Id="9af80c93-f018-4cc5-bdd5-02234bb3d80a" />
   <Project Path="RepublicMP.vcxproj" Id="3c897d49-770e-43ad-ab25-9031ed655163" />
 </Solution>

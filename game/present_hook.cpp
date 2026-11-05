@@ -22,9 +22,9 @@
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
 
-void PresentHook_Bind(const TsmHost* host)
+void PresentHook_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 typedef HRESULT(STDMETHODCALLTYPE* PresentFn)(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags);

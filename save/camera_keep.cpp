@@ -95,9 +95,9 @@ static void Sample()
     }
 }
 
-void CameraKeep_Bind(const TsmHost* host)
+void CameraKeep_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
     ModSave_Add("camera", Write, Read);
     Determinism_AddFrameObserver(Sample);
     Determinism_AddStepObserver(Sample);
@@ -106,15 +106,12 @@ void CameraKeep_Bind(const TsmHost* host)
 void CameraKeep_BeforeLoad(bool session)
 {
     g_liveValid = false;
-    CameraView v = {};
-    if (session && World_IsLoaded() && Camera_GetView(&v)) {
-        g_live = v;
-        g_liveValid = true;
-    } else if (session && g_lastAt && GetTickCount64() - g_lastAt < LIVE_MAX_AGE_MS) {
+    // The camera itself holds the save's view by now (28e512 -> 430690, before the load): that is
+    // the view of the PC that saved. Only what a frame read counts, and only in the same world.
+    unsigned long long seed = ModSave_LoadSeed();
+    if (session && seed && seed == ModSave_WorldSeed() && g_lastAt && GetTickCount64() - g_lastAt < LIVE_MAX_AGE_MS) {
         g_live = g_last;
         g_liveValid = true;
-    } else if (session) {
-        LogUnreadable("before the load", v);
     }
     g_lastAt = 0; // a view of the world before this load
 }

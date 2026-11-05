@@ -104,6 +104,9 @@ enum {
     // rows the player ticked (the tool's own state, each PC's): the command carries its bits, and
     // every PC copies with them, not with its own (empty on the other PC: nothing was copied there).
     CALL_COPY_SOURCES,
+    // The vehicle window's remove stop (67d910): the captured press answers true, so the window
+    // asks no refusal; the window's follow-up is made too (RemoveStopAfter).
+    CALL_REMOVE_STOP,
 };
 #define WORKERS_PER_VEHICLE 0xDF0
 #define COPY_MASK_BITS 64  // the carried rows (values[5..6]; the count in kinds[5])
@@ -316,6 +319,10 @@ static const GameCallSite kSites[] = {
     { 0x21C97A, 0x161440, "construction tool: fund or resume", "WB", 0, 0, false },
     { 0x21CB44, 0x161440, "construction tool: fund (single building)", "WB", 0, 0, false },
     { 0x21CBAD, 0x161440, "construction tool: resume a stopped site (single building)", "WB", 0, 0, false },
+    // The vehicle window's remove stop took the stop off the clicking PC only: the words SWITCH
+    // carried (the current stop +698, +66c) then went to a list that still had it elsewhere.
+    { 0x7D9F2E, 0x67D910, "vehicle window: remove a stop", "VI", 0, 1, false, CALL_REMOVE_STOP },
+    { 0x7D9F6A, 0x499790, "vehicle window: remove a stop (lines refresh)", "MV", 0x12800, 0, false, CALL_PRESENTATION },
 };
 #define SITE_COUNT (sizeof(kSites) / sizeof(kSites[0]))
 
@@ -343,9 +350,9 @@ struct GameCallMsg {
 
 static bool g_siteOn[SITE_COUNT];
 
-void GameCalls_Bind(const TsmHost* host)
+void GameCalls_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 static BYTE* World() { return g_exeBase + WORLD_RVA; }
 static U64 Q(U64 at) { return *(U64*)at; }
@@ -832,6 +839,16 @@ static void BorderStop(U64 v, int index)
     if (U64 lines = Q(world + LINES_OFFSET)) ((LinesFn)(g_exeBase + LINE_REFRESH))(lines, v);
 }
 
+// The vehicle window's follow-up after a stop was removed (7d9f60..7d9f91): the lines manager
+// refreshed, the route to be rebuilt, and +530 cleared when it held the removed stop's station.
+static void RemoveStopAfter(U64 v, U64 station)
+{
+    typedef U64 (*LinesFn)(U64, U64);
+    if (U64 lines = Q((U64)World() + LINES_OFFSET)) ((LinesFn)(g_exeBase + LINE_REFRESH))(lines, v);
+    *(BYTE*)(v + 0xD3A) = 1;
+    if (Q(v + 0x530) && Q(v + 0x530) == station && !*(BYTE*)(v + 0x5FD)) *(U64*)(v + 0x530) = 0;
+}
+
 bool GameCalls_ApplyCommand(const void* data, size_t size)
 {
     if (size != sizeof(GameCallMsg)) return false;
@@ -863,8 +880,9 @@ bool GameCalls_ApplyCommand(const void* data, size_t size)
         why = Rebuild(m, a, held);
         if (!why && s.special != CALL_PLAIN && s.special != CALL_DELETE_LINE && s.special != CALL_DRAG &&
             s.special != CALL_REPEATING && s.special != CALL_BORDER_STOP && s.special != CALL_WORKERS_RECOUNT &&
-            s.special != CALL_COPY_SOURCES)
+            s.special != CALL_COPY_SOURCES && s.special != CALL_REMOVE_STOP)
             why = "not a command site";
+        if (!why && s.special == CALL_REMOVE_STOP && Q(a[0] + 0x688) <= Q(a[0] + 0x680)) why = "the vehicle has no stops here";
         if (!why && s.special == CALL_COPY_SOURCES && (m.kinds[5] > COPY_MASK_BITS || (!a[4] && m.kinds[5])))
             why = "the source rows";
         if (!why) {
@@ -876,6 +894,12 @@ bool GameCalls_ApplyCommand(const void* data, size_t size)
             }
             if (s.special == CALL_WORKERS_RECOUNT) *(unsigned*)(a[1] + WORKERS_PER_VEHICLE) = m.values[2];
             if (s.special == CALL_COPY_SOURCES && a[4]) a[4] = (U64)mask;
+            U64 removedStation = 0;
+            if (s.special == CALL_REMOVE_STOP) {
+                U64 begin = Q(a[0] + 0x680);
+                if ((int)(unsigned)a[1] >= 0 && (U64)(unsigned)a[1] < (Q(a[0] + 0x688) - begin) / 8)
+                    removedStation = Q(begin + (U64)(unsigned)a[1] * 8);
+            }
             if (k >= 0) {
                 sliderAt = (U64*)((U64)World() + s.worldPointer);
                 sliderWas = *sliderAt;
@@ -893,6 +917,7 @@ bool GameCalls_ApplyCommand(const void* data, size_t size)
                 ((DepotFn)(g_exeBase + SEND_TO_DEPOT))((U64)World(), a[1], 0, 0, 1, 1);
             }
             if (s.special == CALL_BORDER_STOP && (r & 0xff)) BorderStop(a[0], (int)(unsigned)a[2]);
+            if (s.special == CALL_REMOVE_STOP) RemoveStopAfter(a[0], removedStation);
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         why = "the call faulted";

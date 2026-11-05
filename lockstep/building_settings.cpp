@@ -72,9 +72,9 @@ static const int kFieldCount = sizeof(kFields) / sizeof(kFields[0]);
 
 static void LoadSettings();
 
-void BuildingSettings_Bind(const TsmHost* host)
+void BuildingSettings_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
     LoadSettings();
 }
 

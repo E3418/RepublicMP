@@ -18,9 +18,9 @@
 // profile [debug] sound_log=1 logs every sound and the command it came in.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void RemoteSounds_Bind(const TsmHost* host);
+void RemoteSounds_Bind(const ModHost* host);
 bool RemoteSounds_Install();
 
 // lockstep/commands, main thread, around another player's command.

@@ -2,9 +2,9 @@
 // Zip/unzip an entire save folder, using vendored miniz.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void SaveZip_Bind(const TsmHost* host);
+void SaveZip_Bind(const ModHost* host);
 
 typedef void (*ZipProgressFn)(size_t done, size_t total, void* userData);
 

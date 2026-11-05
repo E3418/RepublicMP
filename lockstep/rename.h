@@ -14,9 +14,9 @@
 // boundary.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void Rename_Bind(const TsmHost* host);
+void Rename_Bind(const ModHost* host);
 
 // Render thread, at the 5290 call (game_calls): true when the field is a city's or
 // a crossroad's name and the name became a command (the window's write is skipped).

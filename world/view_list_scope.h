@@ -24,9 +24,9 @@
 // (by SoylentGreed)
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void ViewListScope_Bind(const TsmHost* host);
+void ViewListScope_Bind(const ModHost* host);
 
 // XZ box. Returns true if the lists were replaced (call ViewListScope_End);
 // false leaves everything native (no lock, lists unreadable). Nested calls

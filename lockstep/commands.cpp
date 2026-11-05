@@ -46,9 +46,9 @@
 #include <vector>
 #include <string.h>
 
-void Commands_Bind(const TsmHost* host)
+void Commands_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
     Purchase_Bind(host);
     RouteTools_Bind(host);
     GameCalls_Bind(host);

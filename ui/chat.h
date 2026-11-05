@@ -11,11 +11,11 @@
 // window; everything else stays the game's.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
 #define CHAT_TEXT_BYTES 200 // a line's text, UTF-8, the terminating zero included
 
-void Chat_Bind(const TsmHost* host);
+void Chat_Bind(const ModHost* host);
 
 // Render thread, inside the overlay's frame: the chat key, the window or its icon.
 // Shown: anything of the chat is on screen this frame (the overlay draws it).

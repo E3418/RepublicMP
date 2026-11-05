@@ -219,11 +219,11 @@ static int Fc040Param5ForCategory(int category, int typeId)
 
 static volatile LONG g_applyingSegment = 0;
 
-void Networks_Bind(const TsmHost* host)
+void Networks_Bind(const ModHost* host)
 {
     // RepublicMP (E3418, Sohn). The offsets in this file were found by hand
     // in SOVIET64.exe; a copy that drops this line drops the GPL with it.
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 static __int64 GetWorldThisPtr()
@@ -1785,6 +1785,48 @@ static void LogPiecesAtEnds(const NetSegment& seg)
     if (found) Logf("republicmp  NETWORKS:   pieces at its ends:%s", text);
 }
 
+static long long PieceCount(int category)
+{
+    const NetCategoryInfo* info = Networks_GetCategoryInfo(category);
+    if (!info) return -1;
+    __try {
+        __int64 manager = *(__int64*)(GetWorldThisPtr() + info->managerOffset);
+        if (manager) return *(__int64**)(manager + MGR_SEGMENTS_END_OFFSET) - *(__int64**)(manager + MGR_SEGMENTS_BEGIN_OFFSET);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return -1;
+}
+
+// The pieces a segment added to its network (the first four): compared between
+// the PCs' logs when a segment splits or joins something on one PC only.
+static void LogNewPieces(int category, long long before)
+{
+    const NetCategoryInfo* info = Networks_GetCategoryInfo(category);
+    if (!info || before < 0) return;
+    char text[400] = "";
+    size_t used = 0;
+    long long now = -1;
+    __try {
+        __int64 manager = *(__int64*)(GetWorldThisPtr() + info->managerOffset);
+        __int64* b = manager ? *(__int64**)(manager + MGR_SEGMENTS_BEGIN_OFFSET) : nullptr;
+        __int64* e = manager ? *(__int64**)(manager + MGR_SEGMENTS_END_OFFSET) : nullptr;
+        if (b) now = e - b;
+        for (long long i = before; i < now && i < before + 4; i++) {
+            __int64 s = b[i];
+            __int64 n0 = s ? *(__int64*)(s + SEG_NODE0_OFFSET) : 0, n1 = s ? *(__int64*)(s + SEG_NODE1_OFFSET) : 0;
+            if (!n0 || !n1) continue;
+            const float* p0 = (const float*)(n0 + NODE_POS_OFFSET);
+            const float* p1 = (const float*)(n1 + NODE_POS_OFFSET);
+            int n = _snprintf_s(text + used, sizeof(text) - used, _TRUNCATE, " #%lld (%.3f,%.5f,%.3f)-(%.3f,%.5f,%.3f) planned %u/%u;", i,
+                                p0[0], p0[1], p0[2], p1[0], p1[1], p1[2], *(unsigned char*)(s + SEG_PLANNED_OFFSET),
+                                *(unsigned char*)(s + SEG_PLANNED_OFFSET + 1));
+            if (n > 0) used += n;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    Logf("republicmp  NETWORKS:   pieces %lld -> %lld:%s", before, now, text);
+}
+
 bool Networks_ApplyCommandSegment(const NetSegmentMsg& msg)
 {
     const NetSegment& seg = msg.seg;
@@ -1797,8 +1839,10 @@ bool Networks_ApplyCommandSegment(const NetSegmentMsg& msg)
     BuildMode_Write(msg.mode);
     bool engineAccepted = false;
     int before = BuildingCount();
+    long long piecesBefore = PieceCount(seg.category);
     LogPiecesAtEnds(seg);
     bool ok = ApplySegment(seg, &engineAccepted);
+    LogNewPieces(seg.category, piecesBefore);
     // Compared between the PCs' logs: a segment that makes construction
     // sites on one PC and none on the other (a planned road, type -1).
     Logf("republicmp  NETWORKS:   buildings %d -> %d (type %d, %s)", before, BuildingCount(), seg.typeId,

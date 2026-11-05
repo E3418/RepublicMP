@@ -6,7 +6,7 @@
 // protocol and the lobbies its Steam friends are in. Render thread only.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
 struct LobbyGame {
     unsigned long long host; // the SteamID64 to connect to
@@ -17,7 +17,7 @@ struct LobbyGame {
     bool friendGame;         // hosted by a Steam friend
 };
 
-void SteamLobby_Bind(const TsmHost* host);
+void SteamLobby_Bind(const ModHost* host);
 
 // Hosting: call every frame while the session should be listed (the lobby is
 // made, kept current and switched between friends only and public); Stop

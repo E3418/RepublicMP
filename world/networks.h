@@ -42,7 +42,7 @@
 // NetUpgradeMsg; see ApplyUpgrade in networks.cpp.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 #include "build_mode.h"
 #include <stddef.h> // offsetof
 
@@ -255,7 +255,7 @@ struct NetGroupToolMsg {
 
 #define NET_GROUP_TOOL_CATEGORY (-2)
 
-void Networks_Bind(const TsmHost* host);
+void Networks_Bind(const ModHost* host);
 
 // Footpath commit (inside the commit hook, before the original runs): reads
 // where its ends join roads - the start from the footpath manager
@@ -271,11 +271,11 @@ void Networks_ReadFootpathLinks(__int64 manager, int category, NetSegment& seg);
 void Networks_ClearHover();
 
 // Hooks FUN_1405258e0 / FUN_140525c30 (see NetPlanStartMsg). Call once
-// from TsmPluginStart.
+// from RepublicMP_Start.
 bool Networks_InstallPlanStartHooks();
 
 // Hooks FUN_14021c110 (see NetGroupToolMsg). Call once from
-// TsmPluginStart.
+// RepublicMP_Start.
 bool Networks_InstallGroupToolHook();
 
 // True while this module makes a command, so the commit hook does not take
@@ -299,7 +299,7 @@ void Networks_CancelLocalDrag();
 // cursor. Otherwise the drag stays ended.
 void Networks_ResumeLocalDrag();
 // Hooks FUN_1404fc040 (a drag's start) to keep this PC's own starts. Call
-// once from TsmPluginStart.
+// once from RepublicMP_Start.
 bool Networks_InstallDragStartHook();
 // Start planned construction (the interface's buttons) and the group tools'
 // commit frame become commands while commands are captured; made through the

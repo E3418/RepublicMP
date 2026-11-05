@@ -23,9 +23,9 @@
 // (by SoylentGreed)
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void SessionPatches_Bind(const TsmHost* host);
+void SessionPatches_Bind(const ModHost* host);
 
 // Per frame (Present hook): applies the patches while connected or while
 // the determinism probe runs, restores them otherwise.

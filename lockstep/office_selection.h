@@ -14,9 +14,9 @@
 // every PC. The assignments the tool makes are game calls (game_calls.cpp).
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void OfficeSelection_Bind(const TsmHost* host);
+void OfficeSelection_Bind(const ModHost* host);
 
 // Main thread, once a frame while commands are captured.
 void OfficeSelection_Poll();

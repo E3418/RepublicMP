@@ -24,7 +24,7 @@
 // (lockstep/lockstep_net, determinism/determinism).
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
 #define GAME_SPEED_DAT_RVA 0x9D4F10
 #define GAME_SPEED_OFFSET       0x5a4
@@ -40,7 +40,7 @@
 #define GAME_DAY_PROGRESS_OFFSET 0x59c // float: 0..60 through the day (2.5 = one hour)
 #define GAME_DAY_LENGTH          60.0f
 
-void GameSpeed_Bind(const TsmHost* host);
+void GameSpeed_Bind(const ModHost* host);
 
 int ReadGameSpeed();       // 0 = paused, 1/2
 int ReadGameSpeedSaved();  // speed saved before pause (-1 = none)

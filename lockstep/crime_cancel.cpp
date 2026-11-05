@@ -57,9 +57,9 @@ struct CrimeMsg {
 typedef void (*AdvanceFn)(U64 world, U64 c, float amount);
 typedef void (*CloseFn)(U64 world, U64 c);
 
-void CrimeCancel_Bind(const TsmHost* host)
+void CrimeCancel_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 static U64 Q(U64 at) { return *(U64*)at; }

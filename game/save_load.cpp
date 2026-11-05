@@ -3,9 +3,9 @@
 #include "save_load.h"
 #include <string.h>
 
-void SaveLoad_Bind(const TsmHost* host)
+void SaveLoad_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 static char* GetSaveNamePtr()

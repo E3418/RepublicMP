@@ -21,11 +21,11 @@
 // same flags (world/buildings, BUILDING_DEMOLISH).
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
 #define HOOK_DEMOLISH_RVA 0x168730
 
-void DemolishHook_Bind(const TsmHost* host);
+void DemolishHook_Bind(const ModHost* host);
 bool InstallDemolishHook();
 
 // True while FUN_140168730 is running (local or a command's). Road commits

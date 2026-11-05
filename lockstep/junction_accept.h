@@ -16,9 +16,9 @@
 // block's calls on its own junction at the boundary.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void JunctionAccept_Bind(const TsmHost* host);
+void JunctionAccept_Bind(const ModHost* host);
 
 // Render thread, at the 226530 call (game_calls): the window's Accept.
 void JunctionAccept_Capture(unsigned __int64 junction, unsigned __int64 copy);

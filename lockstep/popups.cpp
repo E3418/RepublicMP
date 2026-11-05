@@ -64,9 +64,9 @@ typedef void (*DestroyFn)(void* values);
 typedef U64 (*NewFn)(size_t bytes);
 typedef void (*CallbackFn)(U64 values, U64 argument);
 
-void Popups_Bind(const TsmHost* host)
+void Popups_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 static U64 Q(U64 at) { return *(U64*)at; }

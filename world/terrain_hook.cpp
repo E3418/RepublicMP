@@ -20,9 +20,9 @@ volatile long g_terrainApplyingCommand = 0;
 
 static void LoadSettings();
 
-void TerrainHook_Bind(const TsmHost* host)
+void TerrainHook_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
     LoadSettings();
 }
 

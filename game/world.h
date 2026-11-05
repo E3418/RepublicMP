@@ -19,7 +19,7 @@
 // a list while the simulation may change it.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
 #define GAME_WORLD_RVA 0x9D4F10
 #define GAME_BUILDINGS_BEGIN_RVA 0x9E6A18
@@ -33,7 +33,7 @@
 // routine 0x105700, =0 at 0x105723 and =1 at 0x1059A9 after the load (WRMP RE).
 #define GAME_WORLD_READY_RVA 0x993C65
 
-void World_Bind(const TsmHost* host);
+void World_Bind(const ModHost* host);
 
 // The world object (never null: it is a global of the exe).
 unsigned char* World_Object();

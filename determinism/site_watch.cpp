@@ -44,9 +44,9 @@ static std::unordered_map<BYTE*, SiteState> g_sites;
 static bool g_looked = false; // g_sites holds a look of this world
 static int g_lines = 0;
 
-void SiteWatch_Bind(const TsmHost* host)
+void SiteWatch_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
     InitializeCriticalSection(&g_watchLock);
     g_on = Profile_GetInt("debug", "site_watch", 0) != 0;
 }

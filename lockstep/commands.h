@@ -24,7 +24,7 @@
 // run 2 after the same ticks, with no input; both runs must stay identical.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
 enum LockstepCommandKind {
     LS_CMD_SEGMENT = 1,      // NetSegmentMsg: a drag tool's finished segment
@@ -77,7 +77,7 @@ struct LsMoneyDelta {
     double dollars;
 };
 
-void Commands_Bind(const TsmHost* host);
+void Commands_Bind(const ModHost* host);
 
 // True while local actions become commands instead of acting at once.
 bool Commands_Capturing();

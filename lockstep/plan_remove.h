@@ -13,9 +13,9 @@
 // every PC erases the same entry at the boundary.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void PlanRemove_Bind(const TsmHost* host);
+void PlanRemove_Bind(const ModHost* host);
 bool PlanRemove_Install();
 
 // The command (lockstep/commands).

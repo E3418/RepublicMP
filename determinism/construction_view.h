@@ -33,9 +33,9 @@
 // lists, and whether the drawer changed the kept fields.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void ConstructionView_Bind(const TsmHost* host);
+void ConstructionView_Bind(const ModHost* host);
 
 // The diagnostic log (remembered; off by default).
 bool ConstructionView_GetLog();

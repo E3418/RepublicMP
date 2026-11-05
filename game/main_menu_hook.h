@@ -6,9 +6,9 @@
 // (Root-menu RE by Sohn, WRMP.)
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void MainMenuHook_Bind(const TsmHost* host);
+void MainMenuHook_Bind(const ModHost* host);
 
 // True once per click on our item.
 bool MainMenuHook_TakeClick();

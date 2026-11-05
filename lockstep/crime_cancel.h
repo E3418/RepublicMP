@@ -16,9 +16,9 @@
 // at the boundary. Elsewhere the window goes on as before.
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void CrimeCancel_Bind(const TsmHost* host);
+void CrimeCancel_Bind(const ModHost* host);
 bool CrimeCancel_Install();
 
 // The command (lockstep/commands).

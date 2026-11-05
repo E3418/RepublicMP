@@ -46,9 +46,9 @@
 
 static void LoadSettings();
 
-void StateHash_Bind(const TsmHost* host)
+void StateHash_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
     LoadSettings();
 }
 

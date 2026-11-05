@@ -309,9 +309,9 @@ void ModSave_AfterLoad()
     g_loadSeed = 0;
 }
 
-void ModSave_Bind(const TsmHost* host)
+void ModSave_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 bool ModSave_Install()

@@ -17,9 +17,9 @@
 // vehicle on a line refreshes the line manager for it (499790).
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
-void CargoSettings_Bind(const TsmHost* host);
+void CargoSettings_Bind(const ModHost* host);
 
 // Render thread, around the interface routine. simBusy: the simulation's phase
 // runs now (nothing is compared).

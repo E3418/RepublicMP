@@ -7,7 +7,7 @@
 static char g_nick[PROFILE_NICK_BYTES] = "";
 static volatile int g_maxPlayers = PROFILE_MAX_PLAYERS;
 static CRITICAL_SECTION g_profileLock;
-static char g_file[MAX_PATH] = ""; // RepublicMP.profile.ini next to the DLL ("" when unknown)
+static char g_file[MAX_PATH] = ""; // RepublicMP\RepublicMP.profile.ini next to the DLL ("" when unknown)
 
 static void Clean(const char* in, char* out, size_t outSize);
 
@@ -22,7 +22,7 @@ static void FindFile()
     char* slash = strrchr(path, '\\');
     if (!slash) return;
     slash[1] = 0;
-    _snprintf_s(g_file, sizeof(g_file), _TRUNCATE, "%sRepublicMP.profile.ini", path);
+    _snprintf_s(g_file, sizeof(g_file), _TRUNCATE, "%sRepublicMP\\RepublicMP.profile.ini", path);
 }
 
 static void Save()
@@ -36,9 +36,9 @@ static void Save()
     WritePrivateProfileStringA("profile", "max_players", players, g_file);
 }
 
-void Profile_Bind(const TsmHost* host)
+void Profile_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
     InitializeCriticalSection(&g_profileLock);
     FindFile();
     if (!g_file[0]) return;

@@ -14,7 +14,7 @@
 // with the clicking PC's arguments (world/demolish_hook).
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 #include "build_mode.h"
 
 #define BUILDING_PLACE 0
@@ -40,7 +40,7 @@ struct BuildingMsg {
 #define BUILDING_PICK_NO_LINKS 4
 #define BUILDING_NO_LINKS_BINDING "BUILDING_SLOW_ROTATE"
 
-void Buildings_Bind(const TsmHost* host);
+void Buildings_Bind(const ModHost* host);
 
 // True while a placement or demolition command is being made.
 bool Buildings_IsApplyingCommand();

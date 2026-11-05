@@ -14,9 +14,9 @@
 
 typedef void (*WeatherFn)(void* world, unsigned long long init);
 
-void Weather_Bind(const TsmHost* host)
+void Weather_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 void Weather_StartShared()

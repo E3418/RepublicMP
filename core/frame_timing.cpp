@@ -30,9 +30,9 @@ static const char* const kSlotNames[FRAME_SLOT_COUNT] = {
 
 static void Start(bool on);
 
-void FrameTiming_Bind(const TsmHost* host)
+void FrameTiming_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
     if (Profile_GetInt("debug", "frame_timing", 0) != 0) Start(true);
 }
 

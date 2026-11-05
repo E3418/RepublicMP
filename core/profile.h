@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // This player's settings, set in the RepublicMP and Debug windows. They are
-// remembered by themselves in RepublicMP.profile.ini next to RepublicMP.dll
+// remembered by themselves in RepublicMP\RepublicMP.profile.ini next to RepublicMP.dll
 // (written when one changes, read at start; nobody has to edit it, and a
 // missing file or key means the default):
 //
@@ -26,13 +26,13 @@
 // is changed (Profile_GetInt / Profile_SetInt).
 #pragma once
 
-#include "tesmio_plugin.h"
+#include "host.h"
 
 #define PROFILE_NICK_BYTES 32
 #define PROFILE_MIN_PLAYERS 2
 #define PROFILE_MAX_PLAYERS 4
 
-void Profile_Bind(const TsmHost* host);
+void Profile_Bind(const ModHost* host);
 
 // Never empty: "Player" when none is set.
 const char* Profile_GetNick();

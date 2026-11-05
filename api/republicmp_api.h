@@ -6,8 +6,8 @@
 // header says the details. See ARCHITECTURE.md for the layers and rules.
 //
 // Rules for code in a mode's folder
-//   - Bind: every .cpp that reads the game calls TsmBind(host) in its own
-//     Bind function (g_exeBase and Logf are per translation unit); the mode's
+//   - Bind: every .cpp that reads the game calls ModHost_Bind(host) in its own
+//     Bind function (g_exeBase is per translation unit); the mode's
 //     Bind is called from core/main.cpp.
 //   - Hooks on the game have one owner each (ARCHITECTURE.md lists them):
 //     never a second hook on the same function - add a callback to the owner.
@@ -17,8 +17,8 @@
 //     WRSR 1.1.1.9 (stamp 0x6A3EB6AD).
 #pragma once
 
-// --- Loader: Logf, g_exeBase / g_exe, TsmBind, InstallInlineHook, PatchIat
-#include "tesmio_plugin.h"
+// --- Host: Logf, g_exeBase / g_exe, ModHost_Bind, InstallInlineHook, PatchIat
+#include "host.h"
 
 // --- The game's world: the world object, buildings, date, money, the
 // terrain point under the mouse.

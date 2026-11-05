@@ -34,9 +34,9 @@ typedef U64 (*RemoveFn)(U64 network, U64 edge, U64 a3, U64 a4, U64 a5);
 
 static BYTE* g_relay = nullptr;
 
-void CancelTool_Bind(const TsmHost* host)
+void CancelTool_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 static U64 Q(U64 at) { return *(U64*)at; }

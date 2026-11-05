@@ -11,9 +11,9 @@
 #include <string.h>
 #include <vector>
 
-void Purchase_Bind(const TsmHost* host)
+void Purchase_Bind(const ModHost* host)
 {
-    TsmBind(host);
+    ModHost_Bind(host);
 }
 
 #define WORLD_RVA 0x9D4F10
