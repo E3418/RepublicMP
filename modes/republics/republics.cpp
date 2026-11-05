@@ -743,7 +743,12 @@ static void TrySpawnCustoms(const Cut& c)
             float size = sqrtf(across[0] * across[0] + across[1] * across[1]);
             across[0] /= size;
             across[1] /= size;
-            const SpawnType& type = (CutMix(seed + (unsigned)(g_spawnPass * 1000 + g_spawnPlace)) & 1) ? kSpawnBig : kSpawnSmall;
+            // The first two are one of each, the seed says which comes first; the rest as it falls.
+            bool firstBig = (CutMix(seed) & 1) != 0;
+            bool big = g_spawnMade == 0   ? firstBig
+                       : g_spawnMade == 1 ? !firstBig
+                                          : (CutMix(seed + (unsigned)g_spawnMade) & 1) != 0;
+            const SpawnType& type = big ? kSpawnBig : kSpawnSmall;
             // The yaw turns the axis with the ports onto the normal: x lies a quarter turn from z. It
             // only goes in the command, which carries the number: atan2 differing by CPU cannot split the games.
             float yaw = atan2f(across[0], across[1]);
