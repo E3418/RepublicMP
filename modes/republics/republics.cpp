@@ -624,30 +624,34 @@ static void MakeCut(float w, float h)
 }
 
 // ---------------------------------------------------------------------------
-// The customs house on the line
+// The customs houses on the line
 // ---------------------------------------------------------------------------
 //
-// One road customs house, spawned free of charge on the line between the players,
-// so each reaches it from their own side. The spot: land all around within
-// SPAWN_CLEAR_M and inside the playable border, level to SPAWN_LEVEL_M within
-// SPAWN_LEVEL_RADIUS_M, no building near. The host picks it: alone it places it at
-// once and the save carries it to who joins, else it is a command. A save keeps
-// that it was done.
+// Every SPAWN_EVERY_M along the line a customs house, spawned free of charge, so
+// each player reaches it from their own side; the world's seed picks which are big
+// and which small. A place: land all around within SPAWN_CLEAR_M and inside the
+// playable border, level to SPAWN_LEVEL_M within SPAWN_LEVEL_RADIUS_M, no building
+// near. One that does not fit moves along the line up to SPAWN_SLIDE_M; a place
+// with none is left out. The host picks: alone it places them at once and the save
+// carries them to who joins, else each is a command. A save keeps how far it got.
 
-#define SPAWN_TYPE "zoll_sahy"
+#define SPAWN_SMALL "zoll_sahy"   // a road
+#define SPAWN_BIG "zoll_milhost"  // roads and rails
+#define SPAWN_EVERY_M 2000.0f
+#define SPAWN_SLIDE_M 800.0f
+#define SPAWN_SLIDE_STEP_M 100.0f
 #define SPAWN_CLEAR_M 100.0f
 #define SPAWN_LEVEL_M 10.0f
 #define SPAWN_LEVEL_RADIUS_M 200.0f
 #define SPAWN_NO_BUILDING_M 150.0f
 #define SPAWN_CLEAR_STEP_M 25.0f
 #define SPAWN_LEVEL_STEP_M 50.0f
-#define SPAWN_SPOTS 96        // along the line
-#define SPAWN_MAX_TRIES 6     // spots the engine may refuse
 
-static bool g_spawnDone = false;    // this world has it (from the save, or made)
+static bool g_spawnDone = false;    // this world has them all (from the save, or made)
 static bool g_spawnWaiting = false; // the host's command is on its way
-static bool g_spawnGaveUp = false;  // until the next load
-static int g_spawnRefused = 0;
+static int g_spawnPlace = 0;        // the place along the line it has reached
+static int g_spawnSlide = 0;        // spots of this place the engine refused
+static int g_spawnMade = 0;
 
 static bool SpawnSpotFits(float x, float z, float clear)
 {
@@ -678,63 +682,74 @@ static bool SpawnSpotFits(float x, float z, float clear)
     return true;
 }
 
-// The skip-th spot that fits, starting at a place the world's seed picks.
-static bool FindSpawnSpot(const Cut& c, float clear, int skip, float* x, float* z, float* slope)
+// Spots of one place in the order they are tried: on it, then ever further to each side.
+static float SpawnSlide(int index)
 {
-    unsigned first = (unsigned)(CutMix(ModSave_WorldSeed() ^ 0xC057u) % SPAWN_SPOTS);
-    for (int i = 0; i < SPAWN_SPOTS; i++) {
-        int spot = (int)((first + (unsigned)i) % SPAWN_SPOTS);
-        float u = c.startU + c.step * (c.knots - 1) * (spot + 0.5f) / SPAWN_SPOTS;
-        float v = CutAt(c, u, slope);
-        *x = c.nx * v - c.nz * u;
-        *z = c.nz * v + c.nx * u;
-        if (!SpawnSpotFits(*x, *z, clear)) continue;
-        if (skip-- == 0) return true;
-    }
-    return false;
+    int step = (index + 1) / 2;
+    return (index % 2 ? 1.0f : -1.0f) * step * SPAWN_SLIDE_STEP_M;
 }
 
-// Main thread, a frame observer, the host. The command waits for the player, so
-// it is made on every PC.
+#define SPAWN_SLIDES ((int)(SPAWN_SLIDE_M / SPAWN_SLIDE_STEP_M) * 2 + 1)
+
+// Main thread, a frame observer, the host. One customs house at a time; in a
+// session the command waits for the player, so it is made on every PC.
 static void TrySpawnCustoms(const Cut& c)
 {
-    if (g_spawnDone || g_spawnWaiting || g_spawnGaveUp || !SaveSync_IsHostRole()) return;
+    if (g_spawnDone || g_spawnWaiting || !SaveSync_IsHostRole()) return;
     bool lockstep = Commands_Capturing();
     if (lockstep && !LockstepNet_CommandsReady()) return;
-    float x, z, slope, clear = SPAWN_CLEAR_M;
+    unsigned long long seed = CutMix(ModSave_WorldSeed() ^ 0xC057u);
+    float length = c.step * (c.knots - 1);
+    float phase = (float)(seed % 1000) / 1000.0f * SPAWN_EVERY_M;
     g_measureFault = false;
-    bool found = FindSpawnSpot(c, clear, g_spawnRefused, &x, &z, &slope);
-    if (!found || g_measureFault || g_spawnRefused >= SPAWN_MAX_TRIES) {
-        g_spawnGaveUp = true;
-        Logf("republicmp  REPUBLICS: no spot for a customs house on the line (%d refused)", g_spawnRefused);
-        return;
+    for (;; g_spawnPlace++, g_spawnSlide = 0) {
+        float along = phase + SPAWN_EVERY_M * g_spawnPlace;
+        if (along >= length || g_measureFault) {
+            g_spawnDone = !g_measureFault;
+            if (g_spawnDone) Logf("republicmp  REPUBLICS: %d customs houses on the line", g_spawnMade);
+            return;
+        }
+        for (; g_spawnSlide < SPAWN_SLIDES; g_spawnSlide++) {
+            float u = c.startU + along + SpawnSlide(g_spawnSlide), slope;
+            float v = CutAt(c, u, &slope);
+            float x = c.nx * v - c.nz * u, z = c.nz * v + c.nx * u;
+            if (!SpawnSpotFits(x, z, SPAWN_CLEAR_M)) continue;
+            float at[3] = { x, 0, z }, y = 0;
+            TerrainHook_HeightAt(at, &y);
+            // The line's normal here is the building's own z axis: its road port on one
+            // side, its border port on the other. The yaw only goes in the command, which
+            // carries the number: atan2 differing by CPU cannot split the games.
+            float across[2] = { c.nx - slope * -c.nz, c.nz - slope * c.nx };
+            bool big = (CutMix(seed + (unsigned)g_spawnPlace) & 1) != 0;
+            BuildingMsg m = {};
+            m.kind = BUILDING_PLACE;
+            m.mode.rub = 1;
+            m.x = m.cursorX = x;
+            m.y = m.cursorY = y;
+            m.z = m.cursorZ = z;
+            m.cursorRot = atan2f(across[0], across[1]);
+            m.pickModes = BUILDING_PICK_NO_LINKS;
+            strncpy_s(m.typeName, big ? SPAWN_BIG : SPAWN_SMALL, _TRUNCATE);
+            g_spawnWaiting = true;
+            Logf("republicmp  REPUBLICS: place %d: %s at (%.0f, %.0f), height %.1f", g_spawnPlace, m.typeName, x, z, y);
+            if (lockstep) Commands_Submit(LS_CMD_SPAWN_BUILDING, &m, sizeof(m));
+            else Commands_SpawnBuildingNow(m);
+            return;
+        }
     }
-    float at[3] = { x, 0, z }, y = 0;
-    TerrainHook_HeightAt(at, &y);
-    // The line's normal here is the building's own z axis: its road port on one
-    // side, its border port on the other. The yaw only goes in the command, which
-    // carries the number: atan2 differing by CPU cannot split the games.
-    float across[2] = { c.nx - slope * -c.nz, c.nz - slope * c.nx };
-    BuildingMsg m = {};
-    m.kind = BUILDING_PLACE;
-    m.mode.rub = 1;
-    m.x = m.cursorX = x;
-    m.y = m.cursorY = y;
-    m.z = m.cursorZ = z;
-    m.cursorRot = atan2f(across[0], across[1]);
-    m.pickModes = BUILDING_PICK_NO_LINKS;
-    strncpy_s(m.typeName, SPAWN_TYPE, _TRUNCATE);
-    g_spawnWaiting = true;
-    Logf("republicmp  REPUBLICS: a customs house at (%.0f, %.0f), height %.1f, land for %.0f m around", x, z, y, clear);
-    if (lockstep) Commands_Submit(LS_CMD_SPAWN_BUILDING, &m, sizeof(m));
-    else Commands_SpawnBuildingNow(m);
 }
 
+// On every PC, in the order the host made them.
 static void SpawnedCustoms(bool placed)
 {
     g_spawnWaiting = false;
-    if (placed) g_spawnDone = true;
-    else g_spawnRefused++;
+    if (placed) {
+        g_spawnMade++;
+        g_spawnPlace++;
+        g_spawnSlide = 0;
+    } else {
+        g_spawnSlide++;
+    }
     Logf("republicmp  REPUBLICS: the customs house %s", placed ? "stands" : "was refused by the engine");
 }
 
@@ -750,6 +765,8 @@ static void WriteCutSection()
     float v[4 + MAX_KNOTS] = { g_savedCut.nx, g_savedCut.nz, g_savedCut.startU, g_savedCut.step };
     memcpy(v + 4, g_savedCut.off, sizeof(float) * g_savedCut.knots);
     ModSave_PutInt("customs", g_spawnDone ? 1 : 0);
+    ModSave_PutInt("customs_place", g_spawnPlace);
+    ModSave_PutInt("customs_made", g_spawnMade);
     ModSave_PutInt("knots", g_savedCut.knots);
     ModSave_PutFloats("line", v, 4 + g_savedCut.knots);
 }
@@ -757,10 +774,12 @@ static void WriteCutSection()
 static void ReadCutSection(bool found)
 {
     g_cutSaved = false;
-    long long knots = 0, spawned = 0;
-    g_spawnWaiting = g_spawnGaveUp = false;
-    g_spawnRefused = 0;
+    long long knots = 0, spawned = 0, place = 0, made = 0;
+    g_spawnWaiting = false;
+    g_spawnSlide = 0;
     g_spawnDone = found && ModSave_GetInt("customs", &spawned) && spawned == 1;
+    g_spawnPlace = found && ModSave_GetInt("customs_place", &place) ? (int)place : 0;
+    g_spawnMade = found && ModSave_GetInt("customs_made", &made) ? (int)made : 0;
     if (!found || !ModSave_GetInt("knots", &knots) || knots < 2 || knots > MAX_KNOTS) return;
     float v[4 + MAX_KNOTS];
     if (!ModSave_GetFloats("line", v, 4 + (int)knots) || v[3] <= 0) return;

@@ -13,7 +13,7 @@
 - **Fix: "citizens" desyncs around construction sites** - the game placed a
   site's worker at a point read from before the start of the piece's points
   on some stages, which is whatever the memory held on that PC. The worker now
-  stands at the piece's first point. Protocol 69 - every player needs this
+  stands at the piece's first point. Protocol 70 - every player needs this
   build.
 - **Fix: a player's view after a re-sync** - every player got the host's view
   back: the game had already set the camera from the save when RepublicMP read
@@ -64,10 +64,10 @@
   side has too. Deposits stay
   whole where they can; a resource with only one is cut in two. The log says how
   even it came out.
-- **A customs house on the line** - one road customs house is spawned free of
-  charge on the border between the players, with land 100 m around, level ground
-  and no buildings near. A test for trade
-  between the republics; it trades nothing with the other player yet.
+- **Customs houses on the line** - every 2 km along the border one is spawned free
+  of charge, big or small as the world's seed picks, with land 100 m around, level
+  ground and no buildings near. A test for trade between the republics; they trade
+  nothing with the other player yet.
 - **The cancel tools on one's own half only** (#49) - a network's cancel tool
   (cancel road and the others) removed a piece anywhere, the other
   republic's too. A piece with an end on the other half is now refused, with
