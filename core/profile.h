@@ -12,6 +12,8 @@
 //             dlc_check    refuse a join when the DLCs differ (session/save_sync)
 //             desync_resync seconds after a desync before the host re-syncs
 //                          (-1 off, 0 at once; session/save_sync)
+//             money_tolerance the host ignores money differences under 1 ruble
+//                          or dollar (lockstep/lockstep_net, off by default)
 //             workshop_sync download the host's Workshop items at a join (session/workshop)
 //   [overlay] show_cursors, ping_key (a virtual-key code; lockstep/presence)
 //   [debug]   money_trace (determinism), field_diff (lockstep/building_settings),

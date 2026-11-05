@@ -17,10 +17,21 @@
 #include <stdio.h>
 #include <stdarg.h>
 
+static volatile bool g_moneyTolerance = false; // host: money within MONEY_TOLERANCE is the same money
+
 void LockstepNet_Bind(const ModHost* host)
 {
     ModHost_Bind(host);
+    g_moneyTolerance = Profile_GetInt("profile", "money_tolerance", 0) != 0;
 }
+
+void LockstepNet_SetMoneyTolerance(bool on)
+{
+    g_moneyTolerance = on;
+    Profile_SetInt("profile", "money_tolerance", on ? 1 : 0);
+}
+
+bool LockstepNet_GetMoneyTolerance() { return g_moneyTolerance; }
 
 enum LockstepMsgType {
     LS_GRANT = 1, // host -> player: LsGrant
@@ -769,11 +780,13 @@ unsigned long long LockstepNet_LastMatchedTick()
 
 #define MONEY_TOLERANCE 1.0 // rubles or dollars apart that still count as the same money
 
-// The same bits (also a NaN or inf both PCs have) or within MONEY_TOLERANCE.
+// The same bits (also a NaN or inf both PCs have), or within MONEY_TOLERANCE
+// when the host has allowed it.
 static bool MoneyMatches(double a, double b)
 {
+    if (memcmp(&a, &b, sizeof(double)) == 0) return true;
     double d = a - b;
-    return memcmp(&a, &b, sizeof(double)) == 0 || (d > -MONEY_TOLERANCE && d < MONEY_TOLERANCE);
+    return g_moneyTolerance && d > -MONEY_TOLERANCE && d < MONEY_TOLERANCE;
 }
 
 // After the first difference only that tick is still compared: the log tells
@@ -791,8 +804,8 @@ static void Compare(int index, const LsHash& theirs)
     const StateSummary& a = mine->s;
     const StateSummary& b = theirs.s;
     char what[160] = "";
-    // The clock exactly; money (hashed raw in hashClock) within MONEY_TOLERANCE, so a
-    // difference in a double's last bits (0.000000001 rubles) does not split the session.
+    // The clock exactly; money by its bits, or within MONEY_TOLERANCE when allowed,
+    // so a difference in a double's last bits (0.000000001 rubles) does not split the session.
     bool moneyOff = !MoneyMatches(a.rub, b.rub) || !MoneyMatches(a.usd, b.usd);
     if (a.day != b.day || a.year != b.year || a.dayProgress != b.dayProgress || moneyOff) strcat_s(what, "clock/money ");
     if (!moneyOff && (a.rub != b.rub || a.usd != b.usd) && !g_moneyDriftLogged) {

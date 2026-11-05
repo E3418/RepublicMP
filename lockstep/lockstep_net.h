@@ -68,6 +68,10 @@ bool LockstepNet_IsConnected();
 // A player is ready after its own connection and hello have been set up.
 bool LockstepNet_CommandsReady();
 bool LockstepNet_IsHost();
+// Host: money that differs by under 1 ruble or dollar is not a desync. Off unless
+// the host turns it on, because it can hide a real money drift. Remembered.
+void LockstepNet_SetMoneyTolerance(bool on);
+bool LockstepNet_GetMoneyTolerance();
 // Host: the players connected now.
 int LockstepNet_PeerCount();
 // The first state difference found (host; the players get it from the host), or "".

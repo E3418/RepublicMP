@@ -302,6 +302,12 @@ static void SessionButtons(std::string& hostIp)
             ImGui::SetTooltip("Refuse a join when the two games have different DLCs installed:\n"
                               "without a DLC its maps, buildings and vehicles are drawn wrong or not at all.\n"
                               "Untick it on either PC to play anyway, on a map with no DLC content.");
+        bool moneyTolerance = LockstepNet_GetMoneyTolerance();
+        if (ImGui::Checkbox("Ignore money differences under 1", &moneyTolerance)) LockstepNet_SetMoneyTolerance(moneyTolerance);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("The host's choice. Money that differs by under 1 ruble or dollar is not a desync;\n"
+                              "the first such difference in a session is logged once.\n"
+                              "Off by default: it can hide a real money drift.");
         ImGui::Spacing();
 
         bool world = SaveSync_IsWorldLoaded();

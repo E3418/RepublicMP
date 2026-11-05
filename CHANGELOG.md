@@ -22,12 +22,13 @@
 - **Fix: removing a stop in the vehicle window** - the button took the stop off
   the clicking PC only, so that vehicle's route differed on the other PCs and
   the games parted later. It is a command now.
-- **Money within 1 ruble is the same money** - the host compared each PC's
-  rubles and dollars by their exact bits, so a difference in a double's last
-  bits (0.000000001 rubles) was a desync and a re-sync. Money that differs by
-  less than 1 ruble or 1 dollar now matches; the first such difference in a
-  session is logged once. The day and its progress are still compared
-  exactly.
+- **New: a host's option to ignore tiny money differences** - the host compares
+  each PC's rubles and dollars by their exact bits, so a difference in a
+  double's last bits (0.000000001 rubles) is a desync and a re-sync. With
+  "Ignore money differences under 1" in the RepublicMP window (off by default,
+  it can hide a real money drift), money that differs by less than 1 ruble or
+  1 dollar matches; the first such difference in a session is logged once. The
+  day and its progress are always compared exactly.
 - **Game rules that need a reload, and the waste rule** - energy, water,
   waste on or off, seasons, pollution and day/night take effect only after
   the game saves and reloads, which a session never did: such a change was
