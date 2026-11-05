@@ -485,7 +485,9 @@ static bool ApplySpawnBuilding(const BuildingMsg& m)
     unsigned char wasAnywhere = *anywhere;
     *free = 1;
     *anywhere = 1;
+    RemoteSounds_Silence(true);
     bool ok = Buildings_ApplyPlacementCommand(m);
+    RemoteSounds_Silence(false);
     *anywhere = wasAnywhere;
     *free = wasFree;
     *Rubles() = rub;

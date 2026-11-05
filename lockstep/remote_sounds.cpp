@@ -25,6 +25,7 @@ static Play2DFn o_play2D = nullptr;
 static Play3DFn o_play3D = nullptr;
 static LoopFn o_loop2D = nullptr, o_loop3D = nullptr;
 static bool g_muted = true;
+static bool g_silent = false; // RemoteSounds_Silence: nobody hears anything for now
 static bool g_log = false; // profile "debug" "sound_log": every sound with the command it came in
 static unsigned char g_active[MAX_TOOL_LOOPS];
 static size_t g_activeCount = 0;
@@ -32,7 +33,7 @@ static size_t g_activeCount = 0;
 static bool LeaveOut(const char* kind, const char* name)
 {
     bool remote = Commands_ApplyingRemote();
-    bool out = g_muted && remote;
+    bool out = g_silent || (g_muted && remote);
     if (g_log)
         Logf("republicmp  SOUND: %s [%s]%s%s", kind, name ? name : "?", Commands_Applying() ? (remote ? " in another player's command" : " in this player's command") : "",
              out ? " - left out" : "");
@@ -73,10 +74,9 @@ static unsigned char* ToolLoops(size_t* count)
     return begin;
 }
 
-void RemoteSounds_CommandBegin()
+static void KeepToolLoops()
 {
     g_activeCount = 0;
-    if (!g_muted) return;
     __try {
         size_t n;
         unsigned char* loops = ToolLoops(&n);
@@ -85,6 +85,12 @@ void RemoteSounds_CommandBegin()
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         g_activeCount = 0;
     }
+}
+
+void RemoteSounds_CommandBegin()
+{
+    g_activeCount = 0;
+    if (g_muted) KeepToolLoops();
 }
 
 void RemoteSounds_CommandEnd()
@@ -101,6 +107,13 @@ void RemoteSounds_CommandEnd()
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
     g_activeCount = 0;
+}
+
+void RemoteSounds_Silence(bool on)
+{
+    g_silent = on;
+    if (on) KeepToolLoops();
+    else RemoteSounds_CommandEnd();
 }
 
 void RemoteSounds_Bind(const ModHost* host)

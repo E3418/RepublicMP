@@ -26,6 +26,8 @@ bool RemoteSounds_Install();
 // lockstep/commands, main thread, around another player's command.
 void RemoteSounds_CommandBegin();
 void RemoteSounds_CommandEnd();
+// Main thread, around what no player did: no sound for anyone, whatever the setting.
+void RemoteSounds_Silence(bool on);
 
 // Sounds of other players' commands left out (profile "overlay" "remote_sounds" 0);
 // on by default.
