@@ -244,7 +244,10 @@ bool ViewListScope_Begin(float minX, float minZ, float maxX, float maxZ)
         g_depth++;
         return true;
     }
-    if (!g_exeBase || !TakeLock()) return false;
+    if (!g_exeBase || !TakeLock()) {
+        Logf("republicmp  VIEW LIST: the renderer's lock was not free in %d ms - this command reads this PC's camera", LOCK_WAIT_MS);
+        return false;
+    }
     float box[4] = { minX, minZ, maxX, maxZ };
     AllocateFn allocate = (AllocateFn)(g_exeBase + GAME_ALLOCATE_RVA);
     ReleaseFn release = (ReleaseFn)(g_exeBase + GAME_RELEASE_RVA);
@@ -290,6 +293,7 @@ bool ViewListScope_Begin(float minX, float minZ, float maxX, float maxZ)
         RestoreAll();
         LeaveCriticalSection(g_rendererLock);
         g_rendererLock = nullptr;
+        Logf("republicmp  VIEW LIST: the lists could not be set - this command reads this PC's camera");
         return false;
     }
     g_depth = 1;

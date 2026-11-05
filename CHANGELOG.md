@@ -10,6 +10,18 @@
   `RepublicMP\RepublicMP.profile.ini`, in the game's folder. The nick and the
   settings start from the defaults once, unless the old file is moved there.
   `imgui.ini` moved to the same folder by itself.
+- **Fix: "citizens" desyncs around construction sites** - the game placed a
+  site's worker at a point read from before the start of the piece's points
+  on some stages, which is whatever the memory held on that PC. The worker now
+  stands at the piece's first point. Protocol 59 - every player needs this
+  build.
+- **Fix: a player's view after a re-sync** - every player got the host's view
+  back: the game had already set the camera from the save when RepublicMP read
+  "the view before the load". Each PC now keeps what it last showed, in the
+  same world.
+- **Fix: removing a stop in the vehicle window** - the button took the stop off
+  the clicking PC only, so that vehicle's route differed on the other PCs and
+  the games parted later. It is a command now.
 
 ## 0.7.6
 

@@ -98,6 +98,16 @@ static const DetPatch kPatches[] = {
     // cmp byte [rdi+115a],0; je 15ba4c -> jmp 15b8d8 (past the distance test); nop8
     { 0x15b8b6, 13, { 0x80, 0xbf, 0x5a, 0x11, 0x00, 0x00, 0x00, 0x0f, 0x84, 0x89, 0x01, 0x00, 0x00 },
       { 0xe9, 0x1d, 0x00, 0x00, 0x00, NOP8 }, "construction update: every site as one on the camera" },
+    // The workers' targeting (82e590) picks a point of the site's piece around +63c, with 2 less on
+    // a stage of type 8, and takes only -1 as "before the first": -2 and -3 read the heap in front
+    // of the points, different on each PC, and the worker's position came from there.
+    // cmp ecx,-1; jne 82ee0d -> jg 82ee0d: anything below the first point takes the first point.
+    { 0x82edf8, 2, { 0x75, 0x13 }, { 0x7f, 0x13 }, "workers' target: a point before the piece's first" },
+    // The vehicle window's remove stop clears +530 when it held the removed stop's station: the
+    // command does that on every PC (game_calls), and the window's own write, a heap address SWITCH
+    // does not carry, would stay on the clicking PC until the command.
+    // jne 7d9f98 -> jmp 7d9f98
+    { 0x7d9f86, 2, { 0x75, 0x10 }, { 0xeb, 0x10 }, "vehicle window: remove a stop leaves +530 to the command" },
     // The price and era step 2fb1d0 (called by the load and the economy update) runs a new game's
     // start once more while the world request byte exe+993c66 is up (a load or a new game pending)
     // and the city is in an early era (world +d70 3..6) with at most one record in +11728: money
