@@ -39,7 +39,8 @@ static const unsigned kRegionEach[4] = { SLOT_BYTES, 0x10, 0x10, 4 };
 struct WorldRange {
     unsigned at, size;
 };
-static const WorldRange kWorldRanges[] = { { 0xAF8, 0x14 }, { 0xC798, 4 } };
+// +af8..+b04, the construction mode, are each player's own (build_modes.cpp).
+static const WorldRange kWorldRanges[] = { { 0xB08, 4 }, { 0xC798, 4 } };
 
 // Building words that are this PC's view (camera visibility and distance,
 // animation phase, ambience timer, piece index, the window's cost display):
@@ -327,10 +328,7 @@ static void Compare(const Range& r, bool click)
 // the interface's noise). The session's value - the last one ordered - is the
 // authority: every interface frame a different value is put back, and only a
 // click that writes a new value (not the one the menu kept writing on the frame
-// before the click) becomes a command. The funding switches (+af8/+afc) write
-// only on a click, flipping what they read: the value a word started the
-// session with stayed "the menu's" for good, and once the session had left it
-// neither PC could click it back.
+// before the click) becomes a command.
 #define WORLD_WORDS 6
 static unsigned g_worldAt[WORLD_WORDS];
 static int g_worldCount = 0;

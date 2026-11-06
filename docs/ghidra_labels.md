@@ -134,8 +134,8 @@ comment on each one is `RepublicMP: <note> [<file>]`.
 | `0x4184C0` | `Tool_RailPlace` | lockstep/hover_tools.cpp | rail semaphore place |
 | `0x418F90` | `Tool_RailRemove` | lockstep/hover_tools.cpp | rail_semaphorecancel |
 | `0x3C9A00` | `Tool_JoinHub` | lockstep/join_tool.cpp | join_hub_all (JoinTool_Run) |
-| `0x3C85B0` | `Tool_Buoy` | determinism/sim_patches.cpp | bojka_* |
-| `0x3CA560` | `Tool_GoThere` | determinism/sim_patches.cpp | terrain_go_there |
+| `0x3C85B0` | `Tool_Buoy` | lockstep/buoy_tool.cpp | bojka_* (BuoyTool_Run) |
+| `0x3CA560` | `Tool_GoThere` | lockstep/go_there.cpp | terrain_go_there (GoThere_Run) |
 | `0x5F78D0` | `Tool_Measurement` | determinism/sim_patches.cpp | measurement |
 | `0x5EEDF0` | `Tool_AssignCO` | lockstep/office_selection.h | area office tool (assign_co) |
 | `0x216780` | `Tool_AreaCopy` | determinism/sim_patches.cpp | area_copy |
@@ -164,7 +164,7 @@ comment on each one is `RepublicMP: <note> [<file>]`.
 | `0x1DB1B0` | `Tool_Distribution` | determinism/sim_patches.cpp | building_distribution |
 | `0x1DB9E0` | `Tool_CopyWaste` | determinism/sim_patches.cpp | building_copy_waste |
 | `0x1DBD40` | `Tool_CopyTransfer` | determinism/sim_patches.cpp | building_copy_transfer |
-| `0x2B8CE0` | `Tool_2B8CE0` | determinism/sim_patches.cpp | Late tool stub target |
+| `0x2B8CE0` | `Tool_2B8CE0` | lockstep/link_tools.cpp | worker_relocate* (LinkTools_Relocate) |
 | `0x213870` | `Tool_PickFromMap_A` | determinism/sim_patches.cpp | pick_tool_from_map |
 | `0x214530` | `Tool_PickFromMap_B` | determinism/sim_patches.cpp | pick_tool_from_map |
 | `0x3CB0D0` | `Tool_PickFromMap_C` | determinism/sim_patches.cpp | pick_tool_from_map |

@@ -45,6 +45,11 @@
 #include "call_home.h"
 #include "popups.h"
 #include "presence.h"
+#include "buoy_tool.h"
+#include "go_there.h"
+#include "christmas_lights.h"
+#include "square_tool.h"
+#include "build_modes.h"
 #include "../core/guard.h"
 #include <vector>
 #include <string.h>
@@ -82,6 +87,11 @@ void Commands_Bind(const ModHost* host)
     CallHome_Bind(host);
     Popups_Bind(host);
     Presence_Bind(host);
+    BuoyTool_Bind(host);
+    GoThere_Bind(host);
+    ChristmasLights_Bind(host);
+    SquareTool_Bind(host);
+    BuildModes_Bind(host);
 }
 
 struct Command {
@@ -195,6 +205,11 @@ static const char* KindName(int kind)
     case LS_CMD_CRIME_CANCEL: return "crime cancel";
     case LS_CMD_CALL_HOME: return "call home";
     case LS_CMD_POPUP: return "popup";
+    case LS_CMD_BUOY: return "buoy";
+    case LS_CMD_GO_THERE: return "go there";
+    case LS_CMD_LIGHTS: return "christmas lights";
+    case LS_CMD_SQUARE: return "pavement square";
+    case LS_CMD_BUILD_MODE: return "construction mode";
     }
     return "?";
 }
@@ -333,6 +348,25 @@ static bool InArea(int kind, int player, const void* p, size_t n)
         break;
     case LS_CMD_JOIN:
         if (n == sizeof(JoinMsg)) return ok(((const JoinMsg*)p)->point);
+        break;
+    case LS_CMD_BUOY:
+        if (n == sizeof(BuoyMsg)) return ok(((const BuoyMsg*)p)->point);
+        break;
+    case LS_CMD_LIGHTS:
+        if (n == sizeof(LightsMsg)) {
+            const LightsMsg& m = *(const LightsMsg*)p;
+            if (m.mode == 0) return ok(m.start) && ok(m.end);
+            for (unsigned i = 0; i < m.count && i < LIGHTS_MAX_REMOVED; i++)
+                if (!ok(m.ends[i]) || !ok(&m.ends[i][3])) return false;
+        }
+        break;
+    case LS_CMD_SQUARE:
+        if (n == sizeof(SquareMsg)) {
+            float corners[4][3];
+            SquareTool_Corners(*(const SquareMsg*)p, corners);
+            for (const float* c : corners)
+                if (!ok(c)) return false;
+        }
         break;
     case LS_CMD_HOVER: // a sign, waypoint, rail signal or junction: where the sender clicked
         if (n == sizeof(HoverMsg)) return ok((const float*)((const HoverMsg*)p)->pick.cursor);
@@ -652,6 +686,21 @@ static bool ApplyKind(const Command& c)
     case LS_CMD_POPUP:
         ok = Popups_ApplyCommand(p, n);
         break;
+    case LS_CMD_BUOY:
+        ok = BuoyTool_ApplyCommand(p, n);
+        break;
+    case LS_CMD_GO_THERE:
+        ok = GoThere_ApplyCommand(p, n);
+        break;
+    case LS_CMD_LIGHTS:
+        ok = ChristmasLights_ApplyCommand(p, n);
+        break;
+    case LS_CMD_SQUARE:
+        ok = SquareTool_ApplyCommand(p, n);
+        break;
+    case LS_CMD_BUILD_MODE:
+        ok = BuildModes_ApplyCommand(c.player, p, n);
+        break;
     }
     return ok;
 }
@@ -678,11 +727,13 @@ static void Apply(const Command& c)
     InterlockedIncrement(&g_applying);
     InterlockedIncrement64(&g_applyEpoch);
     Wallets_CommandBegin(c.player);
+    BuildModes_CommandBegin(c.player);
     double rubBefore = *Rubles(), usdBefore = *Dollars();
     InputBlock_BeginNeutral();
     // A drag the local player has under way would share the tool manager with
     // the replay and change what it builds on this PC only: it is cancelled.
-    if (c.kind == LS_CMD_SEGMENT || c.kind == LS_CMD_UPGRADE || c.kind == LS_CMD_NET_DEMOLISH || c.kind == LS_CMD_PLACE)
+    if (c.kind == LS_CMD_SEGMENT || c.kind == LS_CMD_UPGRADE || c.kind == LS_CMD_NET_DEMOLISH || c.kind == LS_CMD_PLACE ||
+        c.kind == LS_CMD_SQUARE)
         Networks_CancelLocalDrag();
     // This PC's open menus or a window under its cursor (+fbc/+fbe/+fc3) make
     // the tools return at once: a command is made with them closed, as the
@@ -709,6 +760,7 @@ static void Apply(const Command& c)
     // What the command paid or got: compared between the PCs' logs when the money differs.
     double paidRub = *Rubles() - rubBefore, paidUsd = *Dollars() - usdBefore;
     Wallets_CommandEnd();
+    BuildModes_CommandEnd();
     char money[96] = "";
     if (paidRub != 0.0 || paidUsd != 0.0)
         sprintf_s(money, " (money %+.4f rubles %+.4f dollars)", paidRub, paidUsd);
@@ -829,7 +881,7 @@ static void TakeMoney(double rub, double usd, const char* where)
 // the build menu names; the carried route tools (route_tools.cpp) by full name.
 static const char* const kCarriedTools[] = { "vehicle_addstop", "line_addstop", "line_addstop_copy", "line_addstop_copy2",
                                               "vehicle_godepo", "vehicle_godepo_batch",
-                                              // the second-road drags (a road sync category; their removal stays put away)
+                                              // the second-road drags (a road sync category; second_road_cancel stays put away)
                                               "second_road_airplane", "second_road_basicroad", "second_road_l2",
                                               "second_road_l3", "second_road_l4" };
 // Copying the weights and the fire station's dispatch are carried by
@@ -861,7 +913,16 @@ static void PutAwayUncarriedTool()
     if ((strcmp(name, "building_copyweights") == 0 || strcmp(name, "firestation_addfire") == 0) && LinkTools_PickReady())
         return; // link_tools.cpp
     if (strcmp(name, "join_hub_all") == 0 && JoinTool_Ready()) return; // join_tool.cpp
-    if (strcmp(name, "vehicle_tovehicle") == 0) return; // its click is a game call (game_calls.cpp)
+    if (strcmp(name, "vehicle_tovehicle") == 0 || strcmp(name, "vehicle_replace") == 0) return; // their clicks are game calls (game_calls.cpp)
+    if (strncmp(name, "worker_relocate", 15) == 0 && LinkTools_RelocateReady()) return; // link_tools.cpp
+    if ((strcmp(name, "vehicle_replace_auto") == 0 || strcmp(name, "vehicle_addstop_copy") == 0 ||
+         strcmp(name, "vehicle_sendconstruction") == 0) && LinkTools_VehicleReady())
+        return; // link_tools.cpp
+    if (strncmp(name, "bojka", 5) == 0 && BuoyTool_Ready()) return; // buoy_tool.cpp
+    if (strcmp(name, "terrain_go_there") == 0 && GoThere_Ready()) return; // go_there.cpp
+    if (strncmp(name, "christmas_", 10) == 0 && ChristmasLights_Ready()) return; // christmas_lights.cpp
+    size_t nameLength = strlen(name);
+    if (nameLength > 7 && strcmp(name + nameLength - 7, "_square") == 0 && SquareTool_Ready()) return; // square_tool.cpp
     bool trees = false;
     for (const char* prefix : kTreeTools) trees |= strncmp(name, prefix, strlen(prefix)) == 0;
     if ((trees && !BrushTools_Ready(3)) || (strcmp(name, "terrain_demolish_trees") == 0 && !BrushTools_Ready(1))) {
@@ -943,7 +1004,12 @@ void Commands_CaptureGameRules()
     __try {
         for (size_t i = 0; i < sizeof(kGameRules) / sizeof(kGameRules[0]); i++) {
             memcpy(m.copy[i], world + kGameRules[i].copy, kGameRules[i].bytes);
-            changed |= memcmp(world + kGameRules[i].copy, world + kGameRules[i].rule, kGameRules[i].bytes) != 0;
+            if (memcmp(world + kGameRules[i].copy, world + kGameRules[i].rule, kGameRules[i].bytes) == 0) continue;
+            changed = true;
+            unsigned from = 0, to = 0;
+            memcpy(&from, world + kGameRules[i].rule, kGameRules[i].bytes);
+            memcpy(&to, world + kGameRules[i].copy, kGameRules[i].bytes);
+            Logf("republicmp  LOCKSTEP:   rule +0x%X changes from %u to %u", kGameRules[i].rule, from, to);
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         Logf("republicmp  LOCKSTEP: the game rules could not be read - not changed");
@@ -991,6 +1057,7 @@ static bool ApplyGameRules(const void* data, size_t size)
 void Commands_Collect()
 {
     WorldWorkers_Collect(); // also releases the session's value outside a session
+    BuildModes_Collect();
     if (!g_capturing) return;
     Commands_GuardSettings();
     PutAwayUncarriedTool();

@@ -309,6 +309,21 @@
     <ClCompile Include="lockstep\join_tool.cpp">
       <Filter>lockstep</Filter>
     </ClCompile>
+    <ClCompile Include="lockstep\buoy_tool.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\go_there.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\christmas_lights.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\square_tool.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\build_modes.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
     <ClCompile Include="lockstep\cancel_tool.cpp">
       <Filter>lockstep</Filter>
     </ClCompile>
@@ -642,6 +657,21 @@
       <Filter>lockstep</Filter>
     </ClInclude>
     <ClInclude Include="lockstep\join_tool.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\buoy_tool.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\go_there.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\christmas_lights.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\square_tool.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\build_modes.h">
       <Filter>lockstep</Filter>
     </ClInclude>
     <ClInclude Include="lockstep\cancel_tool.h">

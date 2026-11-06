@@ -565,3 +565,30 @@ read in the disassembly, what a payer pays for is a guess unless said.
 - The crash report's vectored exception handler (`core/host.cpp`) runs before
   any `__try`: a caught fault still produces a `=== CRASH` report and counts
   toward a limit of 8 per process.
+
+### The relocation button and the light tools (1.1.1.9)
+
+The relocation button only selects a tool (`worker_relocate`, `_educated`,
+`_inmate`); nothing else calls its routines from a window. The tool `2b8ce0` works
+from the window's building `+d298`: workers and educated workers go one call of
+`83c6a0` at a time, up to 10 or 5, and `83c6a0` draws from the game's `rand`.
+
+A Christmas line's points are 12 bytes (`e6fb0`, `ea950`, `ebf00` divide by 0xc),
+not 0x18. `ebf00` takes a `christmas_line_` tool as "in season": out of season it
+lights the lines and draws power for their buildings while one is selected. Tools
+stay selected through a tick here, so with time passing it must not see the tool.
+
+### Draw queues and an access road's bits (1.1.1.9)
+
+The nine 0xE0-byte draw queues hold meshes they do not own (entry `+0xC0`). A frame's
+worker pass fills the back queues, `0x5858F0` at `0x31767F` copies them to the front
+ones (back + 24), and the render thread draws those. A mesh freed before the copy stays
+in the queue; the memory only shows it once something else is written there. After a
+re-sync that was the first building picked: its model is loaded there. What frees the
+mesh is not traced. RepublicMP checks the front queues after the copy, which does not
+find a freed mesh that still reads as one.
+
+A construction site's materials come from its piece's length, the float edge `+0x11C`
+(`0x3BED90`). In one placement an access road's points differed between PCs in their
+last bits: 7 points on both, the length 228 float steps apart. Which end, and why, is
+still open; a placement's log line gives both ends with all their digits.

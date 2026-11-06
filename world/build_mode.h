@@ -21,7 +21,8 @@
 //
 // A placement / path command is made with the clicking PC's mode: written
 // here just before it and the local player's own restored right after, so
-// the window keeps showing what the local player chose.
+// the window keeps showing what the local player chose. In a session each
+// player has their own (lockstep/build_modes).
 #pragma once
 
 #include "host.h"

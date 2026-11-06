@@ -153,6 +153,27 @@ static void DescribeNewObjects(float x, float z, char* out, size_t outSize)
                                 shown ? " " : "", cat, dx, dz, *(float*)(obj + OBJ_PROGRESS_OFFSET));
             if (n < 0) break;
             used += (size_t)n;
+            // A network piece's site: the piece's length, which its materials are made from
+            // (3bed90), and its points. The PCs' logs show a piece laid differently.
+            char* edge = type ? nullptr : *(char**)(obj + 0x5D0);
+            if (edge) {
+                char* first = *(char**)(edge + 8);
+                char* last = *(char**)(edge + 0x10);
+                unsigned points = first && last > first ? (unsigned)((last - first) / 0x18) : 0, hash = 2166136261u;
+                for (unsigned i = 0; i < points * 0x18 && i < 0x18 * 4096; i++) {
+                    if (i % 0x18 >= 12) continue; // a point's position
+                    hash = (hash ^ (unsigned char)first[i]) * 16777619u;
+                }
+                // Both ends to the last bit: which of them the two PCs' logs differ at.
+                const float* a = (const float*)first;
+                const float* z = points ? (const float*)(first + (size_t)(points - 1) * 0x18) : a;
+                n = _snprintf_s(out + used, outSize - used, _TRUNCATE,
+                                " {net %d/%d length %.9g, %u points %08X, from %.9g,%.9g,%.9g to %.9g,%.9g,%.9g}", *(int*)(edge + 0x120),
+                                *(int*)(edge + 0x124), *(float*)(edge + 0x11C), points, hash, points ? a[0] : 0, points ? a[1] : 0,
+                                points ? a[2] : 0, points ? z[0] : 0, points ? z[1] : 0, points ? z[2] : 0);
+                if (n < 0) break;
+                used += (size_t)n;
+            }
             shown++;
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -457,7 +478,7 @@ bool Buildings_ApplyPlacementCommand(const BuildingMsg& msg)
                 if (scoped) ViewListScope_End();
             }
             char modeText[96];
-            char made[320];
+            char made[1400];
             DescribeNewObjects(msg.cursorX, msg.cursorZ, made, sizeof(made));
             Logf("republicmp  BUILDINGS: command placement type=[%s] pay=%s cursor=(%.2f,%.2f,%.2f)%s - %s (objects %d, click result %d,%d,%d, result %d,%d,%d) %s",
                  typeName, BuildMode_Describe(msg.mode, modeText, sizeof(modeText)), msg.cursorX, msg.cursorY, msg.cursorZ,

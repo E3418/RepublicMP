@@ -6,9 +6,8 @@
 // storage slots (+970, 0xe0 each: the storage window's amounts, percentages,
 // "store this item", the auto purchase amounts - the slot's own words, its
 // +00 and +18 entries of 0x10 bytes and its +30 words) and the bottom menu's
-// world settings block (+af8 auto-build with rubles, +afc with dollars, +b00
-// immigrant auto-invite, +b04 auto-purchase of resources or goods, +b08 the
-// citizens' option, +c798). Around the interface routine, on frames with a
+// world settings (+b08 the citizens' option, +c798; +af8..+b04 are each player's
+// own, build_modes.h). Around the interface routine, on frames with a
 // click (or Enter) over the interface, they are copied and compared
 // afterwards; the changed words are put back at once and one command per
 // object writes them on every PC at the boundary. Words the building settings

@@ -69,6 +69,11 @@ enum LockstepCommandKind {
     LS_CMD_PLAN_REMOVE = 40,    // plan_remove.cpp: the factory window's "Remove from plan" (factory, entry)
     LS_CMD_CANCEL_PLANS = 41,   // cancel_plans.cpp: "Cancel all plans" (the networks by world field)
     LS_CMD_SPAWN_BUILDING = 42, // BuildingMsg: a mode's building, placed free of charge (the host's only)
+    LS_CMD_BUOY = 43,           // buoy_tool.cpp: a buoy placed or removed
+    LS_CMD_GO_THERE = 44,       // go_there.cpp: "Go there" (the vehicle, the point)
+    LS_CMD_LIGHTS = 45,         // christmas_lights.cpp: a Christmas light line made, or lines freed
+    LS_CMD_SQUARE = 46,         // square_tool.cpp: a pavement square (type, corners, yaw)
+    LS_CMD_BUILD_MODE = 47,     // build_modes.cpp: a player chose rubles, dollars or realistic
 };
 
 // Money a local action changed on this PC (an interface purchase, a terrain

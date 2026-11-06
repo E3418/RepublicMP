@@ -9,6 +9,7 @@
 #include "held_frame.h"
 #include "../lockstep/commands.h"
 #include "../lockstep/lockstep_net.h"
+#include "../lockstep/build_modes.h"
 #include "../lockstep/wallets.h"
 #include "../game/save_load.h"
 #include "../game/weather.h"
@@ -1185,12 +1186,16 @@ struct MoneyTick {
     double progress; // construction progress (+0x604) of the sites, summed
     int sites, paid;
     unsigned prices; // PriceHash
+    double accounts[4]; // Republics: half 0 rubles, dollars, half 1 rubles, dollars
+    bool haveAccounts;
+    double sitesRub, sitesUsd; // what the sites paid in this tick
 };
 #define MONEY_TRACE_TICKS 256
-#define MONEY_TRACE_DUMPED 70
+#define MONEY_TRACE_DUMPED 130 // the games are compared every 120 ticks: the tick they parted is in it
 static MoneyTick g_moneyTicks[MONEY_TRACE_TICKS];
 static unsigned long long g_moneyTickCount = 0;
 static bool g_moneyTrace = true;
+static double g_tickSitesRub = 0, g_tickSitesUsd = 0;
 
 // The construction update's inputs besides progress and materials
 // (Determinism_NoteSiteInputs).
@@ -1274,6 +1279,8 @@ void Determinism_NoteSiteInputs(unsigned char* b, float step)
 void Determinism_NoteSitePayment(unsigned char* b, double rubles, double dollars)
 {
     if (!g_moneyTrace || !g_sessionRunning || (rubles == 0 && dollars == 0)) return;
+    g_tickSitesRub += rubles;
+    g_tickSitesUsd += dollars;
     SitePayment p = {};
     if (b == g_inputsSite) p.in = g_inputs;
     g_inputsSite = nullptr;
@@ -1367,9 +1374,13 @@ static void RecordMoneyTick()
             if (*(*it + 0x608) || *(*it + 0x609)) t.paid++;
         }
         t.prices = PriceHash(world);
+        t.haveAccounts = Wallets_Read(&t.accounts[0], &t.accounts[1], &t.accounts[2], &t.accounts[3]);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return;
     }
+    t.sitesRub = g_tickSitesRub;
+    t.sitesUsd = g_tickSitesUsd;
+    g_tickSitesRub = g_tickSitesUsd = 0;
     g_moneyTicks[g_moneyTickCount++ % MONEY_TRACE_TICKS] = t;
 }
 
@@ -1388,6 +1399,11 @@ void Determinism_DumpMoneyTrace(unsigned long long tick)
         double dRub = prev ? t.rub - prev->rub : 0, dUsd = prev ? t.usd - prev->usd : 0;
         Logf("republicmp  MONEY_TRACE: tick %llu rubles %.6f (%+.6f) dollars %.6f (%+.6f), %d site(s) (%d paid), progress %.9g, prices %08X",
              t.tick, t.rub, dRub, t.usd, dUsd, t.sites, t.paid, t.progress, t.prices);
+        // The accounts are alike on every PC, the balances above are each PC's own view:
+        // these lines of the two PCs' logs are the ones to compare.
+        if (t.haveAccounts)
+            Logf("republicmp  MONEY_TRACE: tick %llu accounts half 0 %.9f rubles %.9f dollars, half 1 %.9f rubles %.9f dollars; sites paid %.9f rubles %.9f dollars",
+                 t.tick, t.accounts[0], t.accounts[1], t.accounts[2], t.accounts[3], t.sitesRub, t.sitesUsd);
         prev = &t;
     }
     // What each site paid in the last ticks: the two PCs' lines show which site paid differently.
@@ -1594,7 +1610,9 @@ static void HookedSimStep(__int64 world)
     SimPatches_BeforeEarly(world);
     g_inEarly = true;
     Wallets_SimBegin();
+    BuildModes_SimBegin();
     o_simStep(world);
+    BuildModes_SimEnd();
     Wallets_SimEnd();
     g_inEarly = false;
     SimPatches_AfterEarly();
@@ -1621,11 +1639,13 @@ void Determinism_BeforeLate()
     if (g_frameStep && g_frameEarly) {
         WriteGameSpeed(GameSpeedOf(g_tickSpeed));
         Wallets_SimBegin();
+        BuildModes_SimBegin();
     }
 }
 
 void Determinism_AfterLate()
 {
+    BuildModes_SimEnd();
     Wallets_SimEnd();
     if (!g_active) return;
     g_framePhase = 6;

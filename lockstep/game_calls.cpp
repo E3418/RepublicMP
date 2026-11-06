@@ -274,6 +274,8 @@ static const GameCallSite kSites[] = {
     // click is 68a420(the picked vehicle, the window's vehicle +d298, 1); its answer picks the
     // tool's message and ends the tool, so a captured click answers 1 (by SoylentGreed).
     { 0x2B6DF5, 0x68A420, "vehicle-to-vehicle tool: load onto the picked vehicle", "VOb", 0, 1, false },
+    { 0x2B43E1, 0x1AAAA0, "replace tool: replace the vehicle", "WoOb", 0, 0, false },
+    { 0x2B4548, 0x1AAD70, "replace tool: replace with the picked vehicle", "WOO", 0, 0, false },
     // The fund buttons (call sites by SoylentGreed): made on the clicking PC, 161440 ran there
     // once more than elsewhere, before the setting sync put the flags back - that PC's
     // construction sites went their own way (a site more, or sites gone earlier).

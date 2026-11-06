@@ -1,6 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.8.0
+
+The mod no longer needs a loader: it starts through its own `xinput9_1_0.dll`.
+Almost every tool that was put away now works in a session, ships, planes and
+helicopters can be bought with realistic construction, each player chooses rubles,
+dollars or realistic for themselves, and the Republics mode has its own money, a
+balanced border and customs houses on it. Protocol 81 - every player needs this
+build (the build check refuses another DLL).
+
+**Installing**
 
 - **New: no mod loader needed** - the mod now starts through its own proxy,
   `xinput9_1_0.dll`, which sits next to `RepublicMP.dll` in the game's folder,
@@ -10,25 +19,41 @@
   `RepublicMP\RepublicMP.profile.ini`, in the game's folder. The nick and the
   settings start from the defaults once, unless the old file is moved there.
   `imgui.ini` moved to the same folder by itself.
+
+**Tools and purchases**
+
+- **New: the tools that were put away work in a session** - each acts on every
+  PC now, as a command: the relocation button of a residential building
+  (workers, educated workers, inmates), buoys, Christmas lights, "Go there",
+  replacing a vehicle by picking, auto-replacement by picking, copying a
+  vehicle's stops, sending construction vehicles, and pavement and water
+  squares. A square shows no preview while it is dragged in a session and
+  appears on release. Only `second_road_cancel` stays put away: the bulldozer
+  removes those pieces. Thanks to SoylentGreed's research.
+- **Fix: buying ships, planes and helicopters with realistic construction** -
+  the purchase was refused without a word: no money taken, no vehicle. They now
+  arrive from the map's edge on every PC.
+- **Each player chooses rubles, dollars or realistic for themselves** - one
+  player's click in the small build window changed it for everyone. Each
+  player's choice now stays theirs and pays for what they build. A re-sync
+  gives everyone the mode in the host's save.
+- **Fix: removing a stop in the vehicle window** - the button took the stop off
+  the clicking PC only, so that vehicle's route differed on the other PCs and
+  the games parted later. It is a command now.
+
+**Fixes**
+
+- **Fix: a crash after a re-sync when a building is picked up** - the draw queues
+  kept meshes that were already freed. An entry whose mesh does not read as one is
+  now left out of the frame's drawing, and the log says where it is.
 - **Fix: "citizens" desyncs around construction sites** - the game placed a
   site's worker at a point read from before the start of the piece's points
   on some stages, which is whatever the memory held on that PC. The worker now
-  stands at the piece's first point. Protocol 79 - every player needs this
-  build.
+  stands at the piece's first point.
 - **Fix: a player's view after a re-sync** - every player got the host's view
   back: the game had already set the camera from the save when RepublicMP read
   "the view before the load". Each PC now keeps what it last showed, in the
   same world.
-- **Fix: removing a stop in the vehicle window** - the button took the stop off
-  the clicking PC only, so that vehicle's route differed on the other PCs and
-  the games parted later. It is a command now.
-- **New: a host's option to ignore tiny money differences** - the host compares
-  each PC's rubles and dollars by their exact bits, so a difference in a
-  double's last bits (0.000000001 rubles) is a desync and a re-sync. With
-  "Ignore money differences under 1" in the RepublicMP window (off by default,
-  it can hide a real money drift), money that differs by less than 1 ruble or
-  1 dollar matches; the first such difference in a session is logged once. The
-  day and its progress are always compared exactly.
 - **Game rules that need a reload, and the waste rule** - energy, water,
   waste on or off, seasons, pollution and day/night take effect only after
   the game saves and reloads, which a session never did: such a change was
@@ -41,6 +66,18 @@
   path index on a key press read straight from the keyboard; a segment
   command made while this PC's player pressed it could take another path
   there. The key reads as not pressed while the command is made.
+
+**Hosting and desync reports**
+
+- **New: a host's option to ignore tiny money differences** - the host compares
+  each PC's rubles and dollars by their exact bits, so a difference in a
+  double's last bits (0.000000001 rubles) is a desync and a re-sync. With
+  "Ignore money differences under 1" in the RepublicMP window (off by default,
+  it can hide a real money drift), money that differs by less than 1 ruble or
+  1 dollar matches; the first such difference in a session is logged once. The
+  day and its progress are always compared exactly.
+- The last game's log stays as `republicmp.previous.log`. A desync's money trace
+  covers a whole check interval and shows both republics' accounts per tick.
 
 **Republics**
 
@@ -91,9 +128,7 @@
   locomotive), else of where it is. Crossroads (their junction window and
   name) and cities (new, renamed, deleted) stay on one's own half too.
 - **The game rules are the host's, workers are each player's** - the game
-  rules page changes for the host only, with a notice for the player (the
-  bottom menu's auto-build, auto-invite and auto-purchase stay shared for
-  now). "Max.
+  rules page changes for the host only, with a notice for the player. "Max.
   workers without CO" is each player's own: a player's construction sites
   and demolitions take that player's number (a player's number is not saved;
   a load starts both from the save's).
@@ -101,6 +136,17 @@
   "cancel all plans" leave the other republic's plans alone, and the terrain
   brushes (raise, lower, level, trees, topsoil) stop at the border: a brush
   that reaches the other half is refused, with the notice.
+
+**Known problems**
+
+- A building's access road can differ in the last bits of its points between PCs.
+  The site's materials then differ a little, and the money parts until a re-sync
+  (a `clock/money` desync). The log's placement line shows the road's ends.
+- The check behind the crash fix above finds a freed mesh only when it no longer
+  reads as one; what frees it is not known yet.
+- Not tried on two PCs yet: relocation, buoys, Christmas lights, squares, "Go
+  there", the vehicle pick tools, and buying ships, planes and helicopters with
+  realistic construction.
 
 ## 0.7.6
 

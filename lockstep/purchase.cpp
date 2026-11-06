@@ -3,8 +3,7 @@
 // purchase replay (RepublicLAN, read against the disassembly of 1.1.1.9):
 // window kinds 1/2 into a depot or from the used-vehicle market, 5/6 licences
 // and 7 a factory's blueprint. What is not carried yet (category 9, trailer
-// depots, realistic purchases of categories 6/8/10 into a depot that is not a
-// customs house, kinds 9..13) is refused on the clicking PC.
+// depots, kinds 9..13) is refused on the clicking PC.
 #include "purchase.h"
 #include "commands.h"
 #include <math.h>
@@ -60,6 +59,14 @@ typedef void (*GrowFn)(BYTE* vector);                                           
 typedef int (*RandomIntFn)(int range);                                                                                  // C3DRandom_Int
 typedef void (*UsedRemoveFn)(BYTE* market, BYTE* type);                                                                 // 6624d0
 typedef void (*UsedApplyFn)(BYTE* record, BYTE* vehicle);                                                               // 660a70
+typedef float* (*NodePositionFn)(BYTE* node, float* out);                                                              // C3D_NODE::GetPosition
+typedef float* (*ArrivalFn)(BYTE* world, float* out, const float* to, int kind, unsigned __int64 western);             // 42b9b0
+typedef void (*PlaceFn)(BYTE* vehicle, const float* at, float a3, unsigned __int64 a4, float y, float a6);             // 6ad960
+typedef void (*VehicleFn)(BYTE* vehicle);                                                                              // 6ad290
+typedef void (*PushPointFn)(BYTE* vector, const float* point);                                                         // 2f2f0
+typedef void (*SendToFn)(BYTE* vehicle, BYTE* building);                                                               // 6b7070
+typedef void (*RouteFn)(BYTE* vehicle, unsigned __int64 a2, unsigned __int64 a3, unsigned __int64 a4);                 // 6b8eb0
+typedef float (*UsedPriceFn)(BYTE* record);                                                                            // 660b60
 
 struct RoutineEntry {
     unsigned rva;
@@ -79,6 +86,13 @@ static const RoutineEntry kRoutines[] = {
     { 0x0CC880, { 0x48, 0x83, 0xec, 0x28, 0x4c, 0x8b, 0x49, 0x10, 0x4c, 0x8b, 0xc1, 0x48, 0x8b, 0x51, 0x08, 0x49 } },
     { 0x6624D0, { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0x26, 0x01, 0x00, 0x00, 0x57, 0x48, 0x83, 0xec, 0x20, 0x66, 0x0f } },
     { 0x660A70, { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0xde, 0x00, 0x00, 0x00, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b } },
+    { 0x42B9B0, { 0x48, 0x8b, 0xc4, 0x53, 0x48, 0x83, 0xec, 0x60, 0x0f, 0x29, 0x70, 0xd8, 0x48, 0x8b, 0xda, 0x44 } },
+    { 0x6AD960, { 0x48, 0x8b, 0xc4, 0x55, 0x56, 0x57, 0x41, 0x55, 0x48, 0x8d, 0xa8, 0xf8, 0xfe, 0xff, 0xff, 0x48 } },
+    { 0x6AD290, { 0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x08, 0x57, 0x48, 0x81, 0xec, 0xc0, 0x00, 0x00, 0x00, 0x0f } },
+    { 0x02F2F0, { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0x48, 0x8b, 0xfa } },
+    { 0x6B7070, { 0x48, 0x89, 0x54, 0x24, 0x10, 0x55, 0x56, 0x57, 0x48, 0x81, 0xec, 0xe0, 0x01, 0x00, 0x00, 0x48 } },
+    { 0x6B8EB0, { 0x48, 0x8b, 0xc4, 0x88, 0x50, 0x10, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41 } },
+    { 0x660B60, { 0x48, 0x83, 0xec, 0x78, 0x48, 0x8b, 0x01, 0x4c, 0x8b, 0xd1, 0x0f, 0x29, 0x74, 0x24, 0x60, 0x0f } },
 };
 
 static int g_routinesOk = -1; // -1 not checked yet
@@ -499,6 +513,57 @@ static BYTE* LastVehicle(BYTE* world)
     return e > b ? e[-1] : nullptr;
 }
 
+// Realistic, into a depot that is not a customs house: a ship, a plane or a
+// helicopter comes from the map's edge (812505..8129f1). A ship's +1a3c is what its
+// trip is worth: the type's price list (+85c8, 16-byte entries: the resource and the
+// amount), by the kind's price, each step scaled when the type's count (+85bc, +85c0)
+// is above 0.
+static void ArriveFromEdge(BYTE* world, const PurchaseMsg& m, BYTE* type, BYTE* depot, BYTE* v, unsigned cat)
+{
+    float to[3], from[3] = {}, depotAt[3];
+    NodePositionFn position = *(NodePositionFn*)(g_exeBase + 0x86C7B8);
+    position(depot + 0x320, to);
+    float* at = ((ArrivalFn)(g_exeBase + 0x42B9B0))(world, from, to, 10, m.kind == 2 ? 1 : 0);
+    float point[3] = { at[0], at[1], at[2] };
+    if (cat != 6) *(int*)(v + 0x1A04) = 2;
+    ((PlaceFn)(g_exeBase + 0x6AD960))(v, point, 0.0f, 0, point[1], 0.0f);
+    ((VehicleFn)(g_exeBase + 0x6AD290))(v);
+    if (cat == 6) {
+        *(int*)(v + 0x1794) = m.kind == 2 ? -1 : -2;
+        BYTE* first = *(BYTE**)(type + 0x85C8);
+        size_t count = (size_t)((*(BYTE**)(type + 0x85D0) - first) >> 4);
+        bool scaled = (float)(m.kind == 2 ? *(int*)(type + 0x85BC) : *(int*)(type + 0x85C0)) > 0.0f;
+        double worth = 0.0;
+        for (size_t i = 0; i < count; i++) {
+            BYTE* entry = first + i * 16;
+            BYTE* resource = *(BYTE**)entry;
+            float price = *(float*)(resource + (m.kind == 2 ? 0x5C : 0x58));
+            if (m.kind == 2 && *(int*)(resource + 0x44) == -1) price *= 0.45f;
+            worth += (double)(price * *(float*)(entry + 8));
+            if (scaled) worth *= m.kind == 2 ? 1.2699999809265137 : 0.6499999761581421;
+        }
+        *(float*)(v + 0x1A3C) = (float)worth;
+        if (m.used) {
+            alignas(8) BYTE rec[USED_RECORD] = {};
+            memcpy(rec, &type, 8);
+            memcpy(rec + 8, &m.usedAge, 8);
+            memcpy(rec + 16, &m.usedAge2, 8);
+            *(float*)(v + 0x1A3C) = ((UsedPriceFn)(g_exeBase + 0x660B60))(rec);
+        }
+    } else {
+        position(depot + 0x320, depotAt);
+        ((PushPointFn)(g_exeBase + 0x2F2F0))(v + 0x738, depotAt);
+        if (cat == 8) {
+            PushFn push = (PushFn)(g_exeBase + 0xB0E90);
+            BYTE* none = nullptr;
+            push(v + 0x6A0, &none);
+            push(v + 0x6A0, &none);
+        }
+    }
+    ((SendToFn)(g_exeBase + 0x6B7070))(v, depot);
+    ((RouteFn)(g_exeBase + 0x6B8EB0))(v, 0, 0, 0);
+}
+
 // Kinds 1/2: a vehicle into a depot (810951..812f46).
 static const char* ReplayVehicle(BYTE* world, const PurchaseMsg& m, BYTE* type, BYTE* depot, BYTE* customsRub,
                                  BYTE* customsUsd, int campaign, BYTE** bought)
@@ -516,7 +581,6 @@ static const char* ReplayVehicle(BYTE* world, const PurchaseMsg& m, BYTE* type, 
     if (cat == 9) return "not carried (category 9)";
     if (dtype && dkind == 0x34 && cat == 3) return "not carried (trailer depot)";
     bool customsDepot = dtype && dkind == 0x14;
-    if (!customsDepot && realistic && (cat == 6 || cat == 8 || cat == 10)) return "not carried (realistic category)";
     // The stand-in window the customs-house refill reads and fills.
     alignas(16) BYTE win[WINDOW_BYTES] = {};
     *(BYTE**)(win + 0x240) = depot;
@@ -607,6 +671,8 @@ static const char* ReplayVehicle(BYTE* world, const PurchaseMsg& m, BYTE* type, 
             *(BYTE**)(v + 0x4F0) = *(BYTE**)(v + 0x4F8) = customs;
             *(BYTE**)(v + 0x600) = depot;
             addToSlot(slotList(customs), v);
+        } else if (vcat == 6 || vcat == 8 || vcat == 10) {
+            ArriveFromEdge(world, m, type, depot, v, vcat);
         }
     }
     return nullptr;

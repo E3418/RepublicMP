@@ -205,6 +205,11 @@
     <ClCompile Include="lockstep\office_selection.cpp" />
     <ClCompile Include="lockstep\new_city.cpp" />
     <ClCompile Include="lockstep\join_tool.cpp" />
+    <ClCompile Include="lockstep\buoy_tool.cpp" />
+    <ClCompile Include="lockstep\go_there.cpp" />
+    <ClCompile Include="lockstep\christmas_lights.cpp" />
+    <ClCompile Include="lockstep\square_tool.cpp" />
+    <ClCompile Include="lockstep\build_modes.cpp" />
     <ClCompile Include="lockstep\cancel_tool.cpp" />
     <ClCompile Include="lockstep\wallets.cpp" />
     <ClCompile Include="lockstep\world_workers.cpp" />
@@ -304,6 +309,11 @@
     <ClInclude Include="lockstep\office_selection.h" />
     <ClInclude Include="lockstep\new_city.h" />
     <ClInclude Include="lockstep\join_tool.h" />
+    <ClInclude Include="lockstep\buoy_tool.h" />
+    <ClInclude Include="lockstep\go_there.h" />
+    <ClInclude Include="lockstep\christmas_lights.h" />
+    <ClInclude Include="lockstep\square_tool.h" />
+    <ClInclude Include="lockstep\build_modes.h" />
     <ClInclude Include="lockstep\cancel_tool.h" />
     <ClInclude Include="lockstep\wallets.h" />
     <ClInclude Include="lockstep\world_workers.h" />

@@ -57,6 +57,10 @@ static void OpenLog()
 
     wchar_t file[MAX_PATH + 64];
     swprintf_s(file, L"%ls\\republicmp.log", dir);
+    // The last game's log stays: a new start must not take away the log of a desync or a crash.
+    wchar_t previous[MAX_PATH + 64];
+    swprintf_s(previous, L"%ls\\republicmp.previous.log", dir);
+    MoveFileExW(file, previous, MOVEFILE_REPLACE_EXISTING);
     g_log = CreateFileW(file, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                         nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
 }

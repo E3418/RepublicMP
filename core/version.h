@@ -14,5 +14,5 @@
 // so a build passed around without the repository still says whose it is.
 #define REPUBLICMP_AUTHORS "E3418 and Sohn (juniorsohn)"
 
-#define REPUBLICMP_VERSION "0.7.6"
-#define REPUBLICMP_PROTOCOL 79
+#define REPUBLICMP_VERSION "0.8.0"
+#define REPUBLICMP_PROTOCOL 81
