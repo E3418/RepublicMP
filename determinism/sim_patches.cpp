@@ -1525,8 +1525,27 @@ static bool CallTo(unsigned int site, BYTE* target, unsigned char out[5])
     return true;
 }
 
+// A load turns zoll_sahy, zoll_siatre and zoll_milhost (and their MIRRORZ_) into
+// DLC3_customs_* when DLC3 is owned and the state at 9d5c80 is 3..6: the engine's list
+// of models (its Import, last argument from 758f) and each building's type (1f173b).
+// That state is not the same on a PC's first load and later ones, so PCs differed,
+// and a customs house spawned on the line lost its house. These types stay what they
+// are, from the game's start: a world may be loaded before a session begins.
+static void KeepCustomsTypes()
+{
+    static const unsigned char engineWas[2] = { 0x77, 0x0f }, engineNow[2] = { 0xeb, 0x0f };
+    static const unsigned char loadWas[6] = { 0x0f, 0x87, 0x83, 0x01, 0x00, 0x00 }, loadNow[6] = { 0x90, 0xe9, 0x83, 0x01, 0x00, 0x00 };
+    if (memcmp(g_exeBase + 0x758F, engineWas, 2) != 0 || memcmp(g_exeBase + 0x1F173B, loadWas, 6) != 0) {
+        Logf("republicmp  SIM_PATCHES: unexpected bytes at the customs types' swap - left as it is");
+        return;
+    }
+    Write(g_exeBase + 0x758F, engineNow, 2);
+    Write(g_exeBase + 0x1F173B, loadNow, 6);
+}
+
 bool SimPatches_Install()
 {
+    KeepCustomsTypes();
     bool officeGuard = OfficeGuard_Install();
     bool late = InstallInlineHook(g_exeBase + LATE_RVA, (void*)&HookedLate, (void**)&o_late,
                                   kLateExpect, sizeof(kLateExpect), "republicmp late body");

@@ -13,7 +13,7 @@
 - **Fix: "citizens" desyncs around construction sites** - the game placed a
   site's worker at a point read from before the start of the piece's points
   on some stages, which is whatever the memory held on that PC. The worker now
-  stands at the piece's first point. Protocol 77 - every player needs this
+  stands at the piece's first point. Protocol 78 - every player needs this
   build.
 - **Fix: a player's view after a re-sync** - every player got the host's view
   back: the game had already set the camera from the save when RepublicMP read
@@ -69,6 +69,9 @@
   world's seed picks, with land 100 m around, level
   ground and no buildings near. A test for trade between the republics; they trade
   nothing with the other player yet.
+- **Fix: customs types changing at a load** - with DLC3, loading a world could turn
+  the older customs houses into the DLC3 ones, on some loads and not others, so
+  players could differ. They now stay the type they were built as.
 - **The cancel tools on one's own half only** (#49) - a network's cancel tool
   (cancel road and the others) removed a piece anywhere, the other
   republic's too. A piece with an end on the other half is now refused, with

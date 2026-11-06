@@ -342,6 +342,13 @@ Inferred, several sites each.
   set at `0x2D636E` for every building, and the engine draws no model with `+0x54` or
   `+0x55` (DLL `0x338F2`); a site's end clears it (`0x15C576`). The customs models hold
   no ground: the flat surfaces near y = 0 total under 70 m2.
+- **Customs types change at a load.** With DLC3 owned (`0x996832`) and the state at
+  `0x9D5C80` in 3..6, a load renames `zoll_sahy`, `zoll_siatre`, `zoll_milhost` and
+  their `MIRRORZ_` to `DLC3_customs_small`, `_medium`, `_big`: the engine's Import
+  (DLC `0x2ED2D`, last argument from `0x758F`) and each building (`0x1F173B`). The state
+  differed between a PC's first load and later ones. A save loaded this way wrote no
+  `zoll_*` in `buildings.bin` and showed the ground without the house. Both are patched
+  off from the start (`KeepCustomsTypes`).
 
 ## Clock and threads
 
