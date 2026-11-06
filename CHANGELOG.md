@@ -13,7 +13,7 @@
 - **Fix: "citizens" desyncs around construction sites** - the game placed a
   site's worker at a point read from before the start of the piece's points
   on some stages, which is whatever the memory held on that PC. The worker now
-  stands at the piece's first point. Protocol 78 - every player needs this
+  stands at the piece's first point. Protocol 79 - every player needs this
   build.
 - **Fix: a player's view after a re-sync** - every player got the host's view
   back: the game had already set the camera from the save when RepublicMP read
@@ -65,8 +65,8 @@
   whole where they can; a resource with only one is cut in two. The log says how
   even it came out.
 - **Customs houses on the line** - every 4 km along the border one is spawned free
-  of charge (at least two on a map), its ports across the line, big or small as the
-  world's seed picks, with land 100 m around, level
+  of charge (at least a medium and a big one on a map), its ports across the line,
+  small, medium or big as the world's seed picks, with land 100 m around, level
   ground and no buildings near. A test for trade between the republics; they trade
   nothing with the other player yet.
 - **Fix: customs types changing at a load** - with DLC3, loading a world could turn

@@ -169,6 +169,11 @@ static bool OutOfPlayable(const float p[3])
 #define PATCH_WEIGHT 0.25     // one patch beyond an even count
 #define CUT_WEIGHT 0.08       // a deposit cut in halves, while the resource has others
 #define LONE_WEIGHT 0.5       // the only deposit of a resource not cut in halves
+// That deposit wholly on one side: how far the line is from it, per km. Without a
+// slope to follow, moves that only bring the line nearer change nothing and are lost,
+// and on some seeds one player got all of it.
+#define LONE_MISS_SHARE 0.02
+#define LONE_DISTANCE_WEIGHT 0.3
 #define RESOURCE_CHANNELS 5 // coal, iron, oil, bauxite, uranium: resourcemap RGB, resourcemap2 RG
 #define RESOURCE_CELL 8     // texels added into one point
 #define MAX_CROSSINGS 1024
@@ -343,6 +348,7 @@ struct FramePoint {
     int kind, deposit;
 };
 static std::vector<FramePoint> g_frameResources, g_frameCrossings, g_frameCells, g_frameCustoms;
+static std::vector<double> g_frameDepositU, g_frameDepositV; // each deposit's middle, by its amount
 static std::vector<int> g_coarseCells; // an even grid of the playable cells
 
 static void MakeFrame(float nx, float nz)
@@ -353,8 +359,14 @@ static void MakeFrame(float nx, float nz)
     g_frameCustoms.clear();
     for (const Crossing& p : g_customs)
         g_frameCustoms.push_back({ p.z * nx - p.x * nz, p.x * nx + p.z * nz, 1.0f, 0, 0 });
-    for (const ResourcePoint& p : g_resources)
+    g_frameDepositU.assign(g_deposits.size(), 0.0);
+    g_frameDepositV.assign(g_deposits.size(), 0.0);
+    for (const ResourcePoint& p : g_resources) {
         g_frameResources.push_back({ p.z * nx - p.x * nz, p.x * nx + p.z * nz, p.amount, p.channel, p.deposit });
+        const FramePoint& f = g_frameResources.back();
+        g_frameDepositU[p.deposit] += (double)f.u * f.amount / g_deposits[p.deposit].amount;
+        g_frameDepositV[p.deposit] += (double)f.v * f.amount / g_deposits[p.deposit].amount;
+    }
     for (const Crossing& p : g_crossings)
         g_frameCrossings.push_back({ p.z * nx - p.x * nz, p.x * nx + p.z * nz, 1.0f, p.group, p.bloc });
     for (int k : g_coarseCells)
@@ -407,8 +419,11 @@ static CutScore ScoreCut(const Cut& c)
         if (d.amount < g_resourceTotal[d.channel] * DEPOSIT_MIN_SHARE) continue;
         double low = g_depositLow[i] / d.amount;
         if (low >= 0.5) lows[d.channel]++;
-        if (patches[d.channel] == 1) s.cuts += fabs(2 * low - 1) * LONE_WEIGHT;
-        else s.cuts += (low < 0.5 ? low : 1 - low) * 2 * CUT_WEIGHT;
+        if (patches[d.channel] == 1) {
+            s.cuts += fabs(2 * low - 1) * LONE_WEIGHT;
+            if (low <= LONE_MISS_SHARE || low >= 1 - LONE_MISS_SHARE)
+                s.cuts += fabs(g_frameDepositV[i] - shift - CutAt(c, (float)g_frameDepositU[i])) / 1000.0 * LONE_DISTANCE_WEIGHT;
+        } else s.cuts += (low < 0.5 ? low : 1 - low) * 2 * CUT_WEIGHT;
     }
     for (int i = 0; i < RESOURCE_CHANNELS; i++) {
         int off = abs(2 * lows[i] - patches[i]);
@@ -617,6 +632,8 @@ static void MakeCut(float w, float h)
     std::vector<ResourcePoint>().swap(g_resources);
     std::vector<Deposit>().swap(g_deposits);
     std::vector<double>().swap(g_depositLow);
+    std::vector<double>().swap(g_frameDepositU);
+    std::vector<double>().swap(g_frameDepositV);
     std::vector<FramePoint>().swap(g_frameResources);
     std::vector<FramePoint>().swap(g_frameCrossings);
     std::vector<FramePoint>().swap(g_frameCells);
@@ -629,8 +646,8 @@ static void MakeCut(float w, float h)
 //
 // Every SPAWN_EVERY_M along the line a customs house, spawned free of charge, its
 // middle between its ports exactly on the line and its ports across it, so each
-// player reaches it from their own side; the world's seed picks which are big and
-// which small. A place: land all around within SPAWN_CLEAR_M and inside the playable
+// player reaches it from their own side; the world's seed picks which are small,
+// medium and big. A place: land all around within SPAWN_CLEAR_M and inside the playable
 // border, level to SPAWN_LEVEL_M within SPAWN_LEVEL_RADIUS_M, no building near. One
 // that does not fit moves along the line up to SPAWN_SLIDE_M; a place with none is
 // left out. Fewer than SPAWN_MIN_HOUSES on the whole line: a second pass between the
@@ -646,6 +663,7 @@ struct SpawnType {
     float middle;
 };
 static const SpawnType kSpawnSmall = { "zoll_sahy", false, 0.758f };   // a road: z 17.53 and -16.01
+static const SpawnType kSpawnMedium = { "zoll_siatre", false, -1.564f }; // a road and rails: z 23.48 and -26.61
 static const SpawnType kSpawnBig = { "zoll_milhost", true, 4.524f };   // roads and rails: x 64.30 and -55.26
 #define SPAWN_EVERY_M 4000.0f
 #define SPAWN_MIN_HOUSES 2
@@ -746,12 +764,12 @@ static void TrySpawnCustoms(const Cut& c)
             float size = sqrtf(across[0] * across[0] + across[1] * across[1]);
             across[0] /= size;
             across[1] /= size;
-            // The first two are one of each, the seed says which comes first; the rest as it falls.
+            // The first two are a medium and a big one, the seed says which comes first; the rest as it falls.
+            static const SpawnType* const kSpawnTypes[3] = { &kSpawnSmall, &kSpawnMedium, &kSpawnBig };
             bool firstBig = (CutMix(seed) & 1) != 0;
-            bool big = g_spawnMade == 0   ? firstBig
-                       : g_spawnMade == 1 ? !firstBig
-                                          : (CutMix(seed + (unsigned)g_spawnMade) & 1) != 0;
-            const SpawnType& type = big ? kSpawnBig : kSpawnSmall;
+            const SpawnType& type = g_spawnMade == 0   ? (firstBig ? kSpawnBig : kSpawnMedium)
+                                    : g_spawnMade == 1 ? (firstBig ? kSpawnMedium : kSpawnBig)
+                                                       : *kSpawnTypes[CutMix(seed + (unsigned)g_spawnMade) % 3];
             // The yaw turns the axis with the ports onto the normal: x lies a quarter turn from z. It
             // only goes in the command, which carries the number: atan2 differing by CPU cannot split the games.
             float yaw = atan2f(across[0], across[1]);
