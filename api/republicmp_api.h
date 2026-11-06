@@ -56,6 +56,9 @@
 // --- Each republic's money (Wallets_On, Wallets_Read).
 #include "../lockstep/wallets.h"
 
+// --- The citizens' averages each player sees (CitizenStats_SetHalfRule).
+#include "../lockstep/citizen_stats.h"
+
 // --- Pause and speed: ReadGameSpeed, WriteGameSpeed, EnsureGamePaused,
 // EnsureGameUnpaused (in a co-op session the host decides them).
 #include "../session/game_speed.h"

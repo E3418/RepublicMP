@@ -1255,6 +1255,7 @@ void Republics_Bind(const ModHost* host)
     Commands_SetGlobalRule(GlobalRule);
     Commands_SetBorderRule(BorderRule);
     Wallets_SetHalfRule(OwnerHalf);
+    CitizenStats_SetHalfRule(OwnerHalf);
     Commands_SetSpawned(SpawnedCustoms);
     ModSave_Add("republics", WriteCutSection, ReadCutSection);
     Determinism_AddFrameObserver(SampleBorder);

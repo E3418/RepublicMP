@@ -92,6 +92,12 @@ build (the build check refuses another DLL).
   the building's republic. The loan windows show and count your own loans only.
   What is left without an owner is split in two and logged. A save of a session
   keeps both accounts when it is loaded and hosted again.
+- **Each republic sees its own citizens** - the top bar's happiness, health and
+  food, the citizens and education panels and the population window averaged
+  every citizen on the map. They now count the player's own half only: a
+  citizen by their home, else by the building or vehicle they are at. The
+  graphs and the change since the last record are still the whole map's, and
+  so is everything the simulation reads.
 - **A random, balanced border** - a broken line now, with bends about 2.5 km
   apart, from the world's seed, the same on every PC and kept in the save. Both
   halves get the same playable land (water does not count), the line stays 500 m

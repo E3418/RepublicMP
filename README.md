@@ -9,7 +9,7 @@ tick (**lockstep**).
 A second mode, **Republics** (in development), gives two players a republic
 each on one map cut in two by a broken line the world's seed picks: equal playable area,
 as even a share of border crossings and resources as the map allows; so far each builds on their own half
-only, and each has their own money.
+only, each has their own money, and each sees their own citizens' averages.
 
 **Status:** alpha, tested with up to four players. Current version: **0.8.0**
 ([changelog](CHANGELOG.md)).
