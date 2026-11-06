@@ -71,7 +71,7 @@ void Determinism_SessionSpeed(bool* paused, int* speed);
 // Main thread, whether or not the layer
 // is active - for modules that sample or set state at a fixed point of the
 // step (session/sync_check, session/weather). Up to DETERMINISM_MAX_OBSERVERS.
-#define DETERMINISM_MAX_OBSERVERS 4
+#define DETERMINISM_MAX_OBSERVERS 8
 typedef void (*StepObserverFn)(void);
 void Determinism_AddStepObserver(StepObserverFn fn);
 // Called on every frame of an active layer (paused too), at the end of
