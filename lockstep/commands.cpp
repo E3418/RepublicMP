@@ -50,6 +50,7 @@
 #include "christmas_lights.h"
 #include "square_tool.h"
 #include "build_modes.h"
+#include "../determinism/waste_trace.h"
 #include "../core/guard.h"
 #include <vector>
 #include <string.h>
@@ -87,6 +88,7 @@ void Commands_Bind(const ModHost* host)
     CallHome_Bind(host);
     Popups_Bind(host);
     Presence_Bind(host);
+    WasteTrace_Bind(host);
     BuoyTool_Bind(host);
     GoThere_Bind(host);
     ChristmasLights_Bind(host);

@@ -77,7 +77,8 @@ build (the build check refuses another DLL).
   1 dollar matches; the first such difference in a session is logged once. The
   day and its progress are always compared exactly.
 - The last game's log stays as `republicmp.previous.log`. A desync's money trace
-  covers a whole check interval and shows both republics' accounts per tick.
+  covers a whole check interval and shows both republics' accounts per tick and
+  the waste trucks' job searches (`WASTE_TRACE`).
 
 **Republics**
 

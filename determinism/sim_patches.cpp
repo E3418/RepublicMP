@@ -21,6 +21,7 @@
 #include "../lockstep/go_there.h"
 #include "../lockstep/christmas_lights.h"
 #include "../lockstep/square_tool.h"
+#include "waste_trace.h"
 #include "../lockstep/cargo_settings.h"
 #include "../lockstep/source_slots.h"
 #include "../lockstep/link_tools.h"
@@ -789,7 +790,6 @@ static const unsigned kToolCalls[][2] = {
     { 0x314829, 0x2B6F30 }, { 0x314849, 0x2B78B0 }, { 0x314869, 0x2B8780 }, { 0x314889, 0x216780 },
     { 0x3148A9, 0x216970 }, { 0x3148CD, 0x5EEDF0 }, { 0x314913, 0x5F78D0 }, { 0x314930, 0x3CA560 },
     { 0x31494D, 0x3CB0D0 }, { 0x31495E, 0x214530 }, { 0x314968, 0x213870 },
-    { 0x315723, 0xEA950 }, // the Christmas light tool: after the name chain, every frame
 };
 #define TOOL_CALL_COUNT (sizeof(kToolCalls) / sizeof(kToolCalls[0]))
 #define TOOL_STUB_SIZE 32
@@ -934,7 +934,6 @@ static bool InstallToolStubs()
                                   : kToolCalls[i][1] == 0x1D88A0 ? (unsigned __int64)&LinkTools_SendConstruction
                                   : kToolCalls[i][1] == 0x3C85B0 ? (unsigned __int64)&BuoyTool_Run
                                   : kToolCalls[i][1] == 0x3CA560 ? (unsigned __int64)&GoThere_Run
-                                  : kToolCalls[i][1] == 0xEA950  ? (unsigned __int64)&ChristmasLights_Tool
                                                                  : (unsigned __int64)(g_exeBase + kToolCalls[i][1]);
         p = EmitImm(p, 0x49, 0xBB, target); // mov r11, target
         p = EmitImm(p, 0x49, 0xBA, (unsigned __int64)common);                        // mov r10, common
@@ -1447,6 +1446,32 @@ static U64 DetQueueCopy(U64 a1, U64 flag, U64 a3, U64 a4)
     return r;
 }
 
+// The light tool's call in Late (315723) comes on every frame, whatever is selected:
+// only with a light tool does it get the tools' scope of a tick's frame, so that an
+// ordinary tick's Late goes on as it did.
+static void DetLightsTool(U64 manager, float t)
+{
+    const char* tool = *(const char**)(g_exeBase + WORLD_RVA + 0xD428);
+    bool lights = false;
+    __try {
+        lights = tool && strncmp(tool, "christmas_", 10) == 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    if (lights) ToolEnter();
+    ChristmasLights_Tool(manager, t);
+    if (lights) ToolLeave();
+}
+
+static U64 DetFindWaste(U64 w, U64 office, float capacity, U64 list, unsigned char flag, U64* resource, U64 list2)
+{
+    return WasteTrace_FindWaste(w, office, capacity, list, flag, resource, list2);
+}
+
+static U64 DetFindUnload(U64 w, U64 vehicle, U64 resource, float radius, unsigned char flag)
+{
+    return WasteTrace_FindUnload(w, vehicle, resource, radius, flag);
+}
+
 static void DetLightsDraw(U64 manager, float t)
 {
     ChristmasLights_Draw(manager, t);
@@ -1595,21 +1620,21 @@ static bool SiteUpdateCallIs()
     return *call == 0xE8 && SITE_UPDATE_CALL + 5 + rel == SITE_UPDATE_RVA;
 }
 
-#define STEP_CALL_COUNT 37
+#define STEP_CALL_COUNT 40
 static const unsigned kStepCalls[STEP_CALL_COUNT] = { 0x30E3AC, 0x30E3B8, 0x30E3C4, 0x30D9DD, 0x30D9E7, 0x30D6BC, 0x30D6C4, 0x3155F4,
                                                       0x6F91DF, 0x6F92C8, 0x6F940E, 0x6FA603, 0x6FA657, 0x7FCAE6, 0x7FCBDC, 0x7FCD00,
                                                       0x2B2800, 0x2B4B03, 0x2B505C, 0x2B3790, 0x2B75E9, 0x2B8480,
                                                       0x1D4D35, 0x1D74C4, 0x3DD999, 0xAD26,
                                                       0x2B9263, 0x2B9065, 0x2B49DF, 0x2B2152, 0x1D9188, 0x1D8EA6, 0x1D8ECC,
-                                                      0x315749, 0x3CFF11, 0x3CFF38, 0x31767F };
+                                                      0x315749, 0x3CFF11, 0x3CFF38, 0x31767F, 0x315723, 0x1C5413, 0x1C5251 };
 static const unsigned kStepTargets[STEP_CALL_COUNT] = { 0x547EF0, 0x547EF0, 0x547EF0, 0x333BD0, 0x5CFEA0, 0x12FD80, 0x12EC40, 0x40ECE0,
                                                         0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0,
                                                         0x2B5120, 0x2B5120, 0x40CDE0, 0x40BD60, 0x40BD60, 0x40BD60,
                                                         0x40BD60, 0x40BD60, 0x2DC470, 0x2DC470,
                                                         0x40BD60, 0x40BD60, 0x40BD60, 0x40BD60, 0x40BD60, 0x40BD60, 0x40BD60,
-                                                        0xEBF00, 0x3CE6C0, 0x3CE6C0, 0x5858F0 };
+                                                        0xEBF00, 0x3CE6C0, 0x3CE6C0, 0x5858F0, 0xEA950, 0x19E330, 0x19E750 };
 static const int kStepSlots[STEP_CALL_COUNT] = { 6, 6, 6, 7, 8, 9, 10, 11, 12, 12, 12, 12, 12, 12, 12, 12, 15, 16, 17, 18, 21, 21,
-                                                 21, 21, 22, 22, 21, 21, 21, 21, 21, 21, 21, 24, 25, 26, 27 }; // relay slot of each site
+                                                 21, 21, 22, 22, 21, 21, 21, 21, 21, 21, 21, 24, 25, 26, 27, 28, 29, 30 }; // relay slot of each site
 static bool VerifyStepCalls()
 {
     for (int i = 0; i < STEP_CALL_COUNT; i++) {
@@ -1627,7 +1652,7 @@ static bool VerifyStepCalls()
 
 // A relay page near the exe: one `jmp [rip+0]` per target, 16 bytes apart.
 static BYTE* g_relay = nullptr;
-#define RELAY_SLOTS 28
+#define RELAY_SLOTS 31
 
 static bool CallTo(unsigned int site, BYTE* target, unsigned char out[5])
 {
@@ -1684,7 +1709,8 @@ bool SimPatches_Install()
                               (void*)&DetPlacePress, (void*)&DetBuyPress, (void*)&DetStopPickVehicle, (void*)&DetStopPickLine,
                               (void*)&DetLineMark, (void*)&DetDepotMark, (void*)&DetPickRay, (void*)&DetSiteUpdate,
                               (void*)&DetLinkMark, (void*)&DetSiteDraw, (void*)&DetCursorPick,
-                              (void*)&DetLightsDraw, (void*)&DetSquarePreview, (void*)&DetSquareFinal, (void*)&DetQueueCopy };
+                              (void*)&DetLightsDraw, (void*)&DetSquarePreview, (void*)&DetSquareFinal, (void*)&DetQueueCopy,
+                              (void*)&DetLightsTool, (void*)&DetFindWaste, (void*)&DetFindUnload };
         for (int i = 0; i < RELAY_SLOTS; i++) {
             BYTE* r = g_relay + i * 16;
             r[0] = 0xff; r[1] = 0x25; r[2] = r[3] = r[4] = r[5] = 0;

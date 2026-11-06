@@ -35,6 +35,8 @@ static bool Ensure()
         g_load = load;
         g_ready = true;
         g_use = USE_VIEW;
+        char text[96];
+        Logf("republicmp  BUILD MODE: every player starts with: %s", BuildMode_Describe(g_own, text, sizeof(text)));
     }
     return true;
 }

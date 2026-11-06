@@ -10,6 +10,7 @@
 #include "../lockstep/commands.h"
 #include "../lockstep/lockstep_net.h"
 #include "../lockstep/build_modes.h"
+#include "waste_trace.h"
 #include "../lockstep/wallets.h"
 #include "../game/save_load.h"
 #include "../game/weather.h"
@@ -1420,6 +1421,7 @@ void Determinism_DumpMoneyTrace(unsigned long long tick)
              in.world5bc, (unsigned long long)in.worldCb88);
     }
     LogPrices();
+    WasteTrace_Dump(tick);
 }
 
 // Session log every 300 ticks: whether time, money and construction move -
