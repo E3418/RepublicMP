@@ -15,4 +15,4 @@
 #define REPUBLICMP_AUTHORS "E3418 and Sohn (juniorsohn)"
 
 #define REPUBLICMP_VERSION "0.8.0"
-#define REPUBLICMP_PROTOCOL 81
+#define REPUBLICMP_PROTOCOL 82

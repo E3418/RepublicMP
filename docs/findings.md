@@ -281,6 +281,21 @@ Inferred unless noted.
 - `0x2DF4D0` / `0x2DF554` draw a ship under construction in a shipyard
   (vehicle type at `b+0x11C8`, progress `b+0xFC0 < 2`), not the building.
 
+### The border check of a border building (1.1.1.9)
+
+`$BORDER_BUILDING` is type `+0xAE0`. In `Building_Place` (2bade0), for both the
+preview and the placement: a type without the flag must not be outside the border
+(410d50, error 5 / 0x48A). With the flag, 2caf91 calls 411270(world, type, matrix),
+its only caller; false gives error 5 / 0x4E1F. 411270 answers true with the byte at
+a54bc0 set or no mesh (type `+0x418`), otherwise when the model's box (mesh `+0x74`,
+C3DBBOX) crosses a segment of the world's border list (`+0xFC50`, 0x48-byte entries,
+doubles at +8 and +0x18). The matrix is the model's to the world; 411270 takes the
+inverse. Then, with the rule at world `+0x14453`, 411640 (distance to the real east
+and west border) picks `pipeline_to_east/west` for category 0x6B and the same for
+0x1F, and every connection point (type `+0x2F8`) must not be outside the real border
+(error 0x4EB3). Types with the flag: the foreign pipeline, the power connections and
+the customs houses.
+
 ## Networks (roads, rails, pipes, power lines...)
 
 Inferred unless noted.

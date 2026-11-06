@@ -1472,6 +1472,31 @@ static U64 DetFindUnload(U64 w, U64 vehicle, U64 resource, float radius, unsigne
     return WasteTrace_FindUnload(w, vehicle, resource, radius, flag);
 }
 
+// The game's check that a border building crosses the border (411270, called only
+// from Building_Place at 2caf91): where it says no, the session's mode may still let
+// it stand. The box is the one 411270 reads, on the ground in the world.
+#define BORDER_CHECK_RVA 0x411270
+#define TRANSFORM_COORD_IMPORT 0x86C608 // C3DVec3TransformCoord
+#define TYPE_MESH 0x418
+#define MESH_BOX 0x74 // C3DBBOX: float min[3], max[3]
+static bool DetBorderCheck(U64 world, U64 type, void* matrix)
+{
+    if (((bool (*)(U64, U64, void*))(g_exeBase + BORDER_CHECK_RVA))(world, type, matrix)) return true;
+    typedef void* (*TransformFn)(float* out, const float* in, const void* m);
+    __try {
+        const float* box = (const float*)(*(U64*)(type + TYPE_MESH) + MESH_BOX);
+        TransformFn transform = *(TransformFn*)(g_exeBase + TRANSFORM_COORD_IMPORT);
+        float corners[4][3];
+        for (int i = 0; i < 4; i++) {
+            float local[3] = { box[i & 1 ? 3 : 0], box[1], box[i & 2 ? 5 : 2] };
+            transform(corners[i], local, matrix);
+        }
+        return Commands_BorderAllows(type, corners);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 static void DetLightsDraw(U64 manager, float t)
 {
     ChristmasLights_Draw(manager, t);
@@ -1620,21 +1645,21 @@ static bool SiteUpdateCallIs()
     return *call == 0xE8 && SITE_UPDATE_CALL + 5 + rel == SITE_UPDATE_RVA;
 }
 
-#define STEP_CALL_COUNT 40
+#define STEP_CALL_COUNT 41
 static const unsigned kStepCalls[STEP_CALL_COUNT] = { 0x30E3AC, 0x30E3B8, 0x30E3C4, 0x30D9DD, 0x30D9E7, 0x30D6BC, 0x30D6C4, 0x3155F4,
                                                       0x6F91DF, 0x6F92C8, 0x6F940E, 0x6FA603, 0x6FA657, 0x7FCAE6, 0x7FCBDC, 0x7FCD00,
                                                       0x2B2800, 0x2B4B03, 0x2B505C, 0x2B3790, 0x2B75E9, 0x2B8480,
                                                       0x1D4D35, 0x1D74C4, 0x3DD999, 0xAD26,
                                                       0x2B9263, 0x2B9065, 0x2B49DF, 0x2B2152, 0x1D9188, 0x1D8EA6, 0x1D8ECC,
-                                                      0x315749, 0x3CFF11, 0x3CFF38, 0x31767F, 0x315723, 0x1C5413, 0x1C5251 };
+                                                      0x315749, 0x3CFF11, 0x3CFF38, 0x31767F, 0x315723, 0x1C5413, 0x1C5251, 0x2CAF91 };
 static const unsigned kStepTargets[STEP_CALL_COUNT] = { 0x547EF0, 0x547EF0, 0x547EF0, 0x333BD0, 0x5CFEA0, 0x12FD80, 0x12EC40, 0x40ECE0,
                                                         0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0,
                                                         0x2B5120, 0x2B5120, 0x40CDE0, 0x40BD60, 0x40BD60, 0x40BD60,
                                                         0x40BD60, 0x40BD60, 0x2DC470, 0x2DC470,
                                                         0x40BD60, 0x40BD60, 0x40BD60, 0x40BD60, 0x40BD60, 0x40BD60, 0x40BD60,
-                                                        0xEBF00, 0x3CE6C0, 0x3CE6C0, 0x5858F0, 0xEA950, 0x19E330, 0x19E750 };
+                                                        0xEBF00, 0x3CE6C0, 0x3CE6C0, 0x5858F0, 0xEA950, 0x19E330, 0x19E750, 0x411270 };
 static const int kStepSlots[STEP_CALL_COUNT] = { 6, 6, 6, 7, 8, 9, 10, 11, 12, 12, 12, 12, 12, 12, 12, 12, 15, 16, 17, 18, 21, 21,
-                                                 21, 21, 22, 22, 21, 21, 21, 21, 21, 21, 21, 24, 25, 26, 27, 28, 29, 30 }; // relay slot of each site
+                                                 21, 21, 22, 22, 21, 21, 21, 21, 21, 21, 21, 24, 25, 26, 27, 28, 29, 30, 31 }; // relay slot of each site
 static bool VerifyStepCalls()
 {
     for (int i = 0; i < STEP_CALL_COUNT; i++) {
@@ -1652,7 +1677,7 @@ static bool VerifyStepCalls()
 
 // A relay page near the exe: one `jmp [rip+0]` per target, 16 bytes apart.
 static BYTE* g_relay = nullptr;
-#define RELAY_SLOTS 31
+#define RELAY_SLOTS 32
 
 static bool CallTo(unsigned int site, BYTE* target, unsigned char out[5])
 {
@@ -1710,7 +1735,7 @@ bool SimPatches_Install()
                               (void*)&DetLineMark, (void*)&DetDepotMark, (void*)&DetPickRay, (void*)&DetSiteUpdate,
                               (void*)&DetLinkMark, (void*)&DetSiteDraw, (void*)&DetCursorPick,
                               (void*)&DetLightsDraw, (void*)&DetSquarePreview, (void*)&DetSquareFinal, (void*)&DetQueueCopy,
-                              (void*)&DetLightsTool, (void*)&DetFindWaste, (void*)&DetFindUnload };
+                              (void*)&DetLightsTool, (void*)&DetFindWaste, (void*)&DetFindUnload, (void*)&DetBorderCheck };
         for (int i = 0; i < RELAY_SLOTS; i++) {
             BYTE* r = g_relay + i * 16;
             r[0] = 0xff; r[1] = 0x25; r[2] = r[3] = r[4] = r[5] = 0;

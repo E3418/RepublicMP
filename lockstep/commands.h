@@ -125,6 +125,14 @@ void Commands_SetAreaRule(CommandAreaFn fn);
 // null: everyone may.
 typedef bool (*CommandGlobalFn)(int player);
 void Commands_SetGlobalRule(CommandGlobalFn fn);
+// A mode's rule on the game's check that a border building crosses the border
+// (411270): true lets this one stand where the game said no. corners: its model's
+// box on the ground, in the world. It must depend on nothing but these and the
+// world, as it runs in the preview and in a command on every PC. Inside the game's
+// own call; null: the game's answer stands.
+typedef bool (*CommandBorderFn)(unsigned long long type, const float corners[4][3]);
+void Commands_SetBorderRule(CommandBorderFn fn);
+bool Commands_BorderAllows(unsigned long long type, const float corners[4][3]);
 
 // A mode hears how its LS_CMD_SPAWN_BUILDING ended, on every PC.
 typedef void (*CommandSpawnedFn)(bool placed);

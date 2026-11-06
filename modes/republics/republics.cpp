@@ -31,9 +31,10 @@ typedef bool (*OutOfPlayableFn)(void* world, const float* xyz);
 #define BORDER_POINTS 512
 #define BORDER_REFRESH_MS 5000
 #define REFUSED_NOTICE_MS 3000
-// Metres on each side of the cut open to both players: a road or rail can
-// only join the two halves through it.
-#define BORDER_BAND_M 50.0f
+// A customs house on the line is both players': its position this near the cut
+// counts as either half (AreaRule). Nothing else near the line is shared.
+#define LINE_CUSTOMS_M 50.0f
+#define LINE_CUSTOMS_SAME_M 1.0f // the point is that house's position
 // The playable area is measured on a grid of CUT_GRID x CUT_GRID cells
 // (100 m on a stock map).
 #define CUT_GRID 200
@@ -900,12 +901,32 @@ static int LocalPlayer()
     return SaveSync_IsHostRole() ? 0 : 1;
 }
 
-// 0 the first half, 1 the second; -1 in the band along the cut, which
-// belongs to both.
+// 0 the first half, 1 the second.
 static int HalfOf(const float p[3], const Cut& c)
 {
-    float d = CutDistance(c, p);
-    return d < -BORDER_BAND_M ? 0 : d > BORDER_BAND_M ? 1 : -1;
+    return CutDistance(c, p) < 0 ? 0 : 1;
+}
+
+// The point is the position of a customs house standing on the line. Its settings
+// and purchases name it by that position, whichever half its middle fell on.
+static bool LineCustomsAt(const float p[3], const Cut& c)
+{
+    if (fabsf(CutDistance(c, p)) > LINE_CUSTOMS_M) return false;
+    unsigned char** begin = nullptr;
+    unsigned char** end = nullptr;
+    if (!World_Buildings(&begin, &end)) return false;
+    __try {
+        for (unsigned char** b = begin; b < end; ++b) {
+            if (!*b) continue;
+            const BYTE* type = *(const BYTE**)(*b + BUILDING_TYPE);
+            if (!type || *(const int*)(type + TYPE_CATEGORY) != CATEGORY_CUSTOMS) continue;
+            float pos[3];
+            if (!World_BuildingPos(*b, pos)) continue;
+            if (fabsf(pos[0] - p[0]) < LINE_CUSTOMS_SAME_M && fabsf(pos[2] - p[2]) < LINE_CUSTOMS_SAME_M) return true;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return false;
 }
 
 // Commands_SetAreaRule: a player builds and demolishes on their own half only,
@@ -921,20 +942,36 @@ static bool AreaRule(int player, const float pos[3], bool notify)
     if (!c) return true;
     if (local) player = LocalPlayer();
     if (!isfinite(pos[0]) || !isfinite(pos[2])) return false;
-    int half = HalfOf(pos, *c);
     int hostHalf = SaveSync_GetHostSide(); // the host's choice: the player has the other half
-    bool ok = half < 0 || half == (player == 0 ? hostHalf : 1 - hostHalf);
+    bool ok = HalfOf(pos, *c) == (player == 0 ? hostHalf : 1 - hostHalf) || LineCustomsAt(pos, *c);
     if (!ok && notify && player == LocalPlayer()) g_refusedAt = GetTickCount64();
     return ok;
 }
 
-// Wallets_SetHalfRule: whose money a building or a vehicle spends. No band here:
-// everything belongs to one of the two. Inside the game's own calls.
+// Wallets_SetHalfRule: whose money a building or a vehicle spends: everything
+// belongs to one of the two. Inside the game's own calls.
 static int OwnerHalf(const float pos[3])
 {
     const Cut* c = ReadyCut();
     if (!c) return -1;
-    return CutDistance(*c, pos) < 0 ? 0 : 1;
+    return HalfOf(pos, *c);
+}
+
+// Commands_SetBorderRule: the line between the republics is a border for a foreign
+// pipeline and a power connection, as the game's own border is: the model has to
+// cross it. Customs houses come with the mode (TrySpawnCustoms), a player builds none.
+// Only the geometry of what is being placed, so every PC answers the same; a
+// command's area rule has measured the cut by then. Inside the game's own call.
+static bool BorderRule(unsigned long long type, const float corners[4][3])
+{
+    const Cut* c = ReadyCut();
+    if (!c) return false;
+    const BYTE* t = (const BYTE*)type;
+    if (!t[TYPE_BORDER_FLAG] || *(const int*)(t + TYPE_CATEGORY) == CATEGORY_CUSTOMS) return false;
+    int half = HalfOf(corners[0], *c);
+    for (int i = 1; i < 4; i++)
+        if (HalfOf(corners[i], *c) != half) return true;
+    return false;
 }
 
 // Commands_SetGlobalRule: the game's rules (the rules page) are the host's.
@@ -1216,6 +1253,7 @@ void Republics_Bind(const ModHost* host)
     g_showSigns = Profile_GetInt("overlay", "border_signs", 1) != 0;
     Commands_SetAreaRule(AreaRule);
     Commands_SetGlobalRule(GlobalRule);
+    Commands_SetBorderRule(BorderRule);
     Wallets_SetHalfRule(OwnerHalf);
     Commands_SetSpawned(SpawnedCustoms);
     ModSave_Add("republics", WriteCutSection, ReadCutSection);

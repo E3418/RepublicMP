@@ -333,13 +333,15 @@ static bool InArea(int kind, int player, const void* p, size_t n)
                 if ((e[i].args.hasPos && !ok(e[i].args.pos)) || (e[i].args.hasPos2 && !ok(e[i].args.pos2))) return false;
         }
         break;
-    case LS_CMD_BRUSH: // the brush's centre and eight points on its rim (the 50 m band covers between them)
+    case LS_CMD_BRUSH: // the brush's centre and points on its rim
         if (n == sizeof(BrushMsg)) {
-            static const float kRim[8][2] = { { 1, 0 }, { 0.7071f, 0.7071f }, { 0, 1 }, { -0.7071f, 0.7071f },
-                                              { -1, 0 }, { -0.7071f, -0.7071f }, { 0, -1 }, { 0.7071f, -0.7071f } };
+            static const float kRim[16][2] = { { 1, 0 }, { 0.9239f, 0.3827f }, { 0.7071f, 0.7071f }, { 0.3827f, 0.9239f },
+                                               { 0, 1 }, { -0.3827f, 0.9239f }, { -0.7071f, 0.7071f }, { -0.9239f, 0.3827f },
+                                               { -1, 0 }, { -0.9239f, -0.3827f }, { -0.7071f, -0.7071f }, { -0.3827f, -0.9239f },
+                                               { 0, -1 }, { 0.3827f, -0.9239f }, { 0.7071f, -0.7071f }, { 0.9239f, -0.3827f } };
             const BrushSample& s = ((const BrushMsg*)p)->sample;
             if (!ok(s.cursor)) return false;
-            for (int k = 0; k < 8; k++) {
+            for (int k = 0; k < 16; k++) {
                 float q[3] = { s.cursor[0] + s.brush * kRim[k][0], s.cursor[1], s.cursor[2] + s.brush * kRim[k][1] };
                 if (!ok(q)) return false;
             }
@@ -502,6 +504,13 @@ int Commands_ApplyingPlayer()
 static CommandGlobalFn g_globalRule = nullptr;
 
 void Commands_SetGlobalRule(CommandGlobalFn fn) { g_globalRule = fn; }
+
+static CommandBorderFn g_borderRule = nullptr;
+void Commands_SetBorderRule(CommandBorderFn fn) { g_borderRule = fn; }
+bool Commands_BorderAllows(unsigned long long type, const float corners[4][3])
+{
+    return g_borderRule && g_borderRule(type, corners);
+}
 
 static CommandSpawnedFn g_spawned = nullptr;
 void Commands_SetSpawned(CommandSpawnedFn fn) { g_spawned = fn; }

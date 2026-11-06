@@ -6,7 +6,7 @@ The mod no longer needs a loader: it starts through its own `xinput9_1_0.dll`.
 Almost every tool that was put away now works in a session, ships, planes and
 helicopters can be bought with realistic construction, each player chooses rubles,
 dollars or realistic for themselves, and the Republics mode has its own money, a
-balanced border and customs houses on it. Protocol 81 - every player needs this
+balanced border and customs houses on it. Protocol 82 - every player needs this
 build (the build check refuses another DLL).
 
 **Installing**
@@ -137,6 +137,14 @@ build (the build check refuses another DLL).
   "cancel all plans" leave the other republic's plans alone, and the terrain
   brushes (raise, lower, level, trees, topsoil) stop at the border: a brush
   that reaches the other half is refused, with the notice.
+- **No shared strip along the border** - the 50 m on each side of the line that
+  were open to both players are gone: a place belongs to one republic, up to the
+  line. Roads and rails now join the republics only through the customs houses on
+  the line, whose ports lie on each side; those houses stay both players'.
+- **A foreign pipeline and a power connection on the border between the republics**
+  - the game now takes the line for a border for these two, as for its own: they
+  stand across it, placed from your own half. They still trade abroad, with the
+  nearest real border's side; nothing flows between the republics through them yet.
 
 **Known problems**
 
