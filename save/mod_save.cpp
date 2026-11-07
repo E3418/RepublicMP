@@ -168,10 +168,16 @@ static bool ReadFile(const char* name, std::vector<Entry>& out)
     _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\" MOD_SAVE_FILE, folder);
     FILE* f = nullptr;
     if (fopen_s(&f, path, "rb") != 0 || !f) return false;
+    // Whole, so a line has no length limit (a module's history is one line a record).
+    std::string all;
+    char chunk[4096];
+    for (size_t got; (got = fread(chunk, 1, sizeof(chunk), f)) > 0;) all.append(chunk, got);
+    fclose(f);
     std::string section;
-    char line[1024];
-    while (fgets(line, sizeof(line), f)) {
-        std::string l = line;
+    for (size_t at = 0, next; at < all.size(); at = next) {
+        size_t newline = all.find('\n', at);
+        next = newline == std::string::npos ? all.size() : newline + 1;
+        std::string l = all.substr(at, next - at);
         Trim(l);
         if (l.empty() || l[0] == ';' || l[0] == '#') continue;
         if (l[0] == '[') {
@@ -186,7 +192,6 @@ static bool ReadFile(const char* name, std::vector<Entry>& out)
         Trim(e.value);
         if (!e.key.empty()) out.push_back(e);
     }
-    fclose(f);
     return true;
 }
 
