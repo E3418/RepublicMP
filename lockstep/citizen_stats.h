@@ -19,8 +19,18 @@
 // city's own record.
 //
 // A citizen belongs to the half of its home, else of the building or vehicle
-// it is at; one with neither counts on both. The graphs (the history) and the
-// change since the last record are still the whole map's.
+// it is at; one with neither counts on both.
+//
+// The history stays the whole map's too (the day's price update reads it).
+// When the day tick pushes a record (4488d0), 2fd2e0 counts its citizens again
+// once per half into a record of the mod's, on the simulation thread: the same
+// numbers on every PC. They are kept by the record's place in the history (one
+// date can have several records) and in the save's republicmp.ini; the
+// population window's graphs (34b470) draw a copy of each record with this
+// PC's half. A record from before (an older save, a session that was not
+// Republics) is drawn whole. Still the whole map's: the births, deaths,
+// escapes and immigrants (counted as they happen) and the change since the last
+// record in the panels (8d490, 8c3c0).
 #pragma once
 
 #include "host.h"

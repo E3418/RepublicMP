@@ -20,6 +20,8 @@
 //   [camera]      each player's view (save/camera_keep)
 //   [wallets]     each republic's money (lockstep/wallets)
 //   [republics]   where the cut runs (modes/republics)
+//   [citizen_history]  each republic's citizens per history record (lockstep/citizen_stats)
+//   [economy]     each republic's share of the economy lists (lockstep/economy_stats)
 //   a mode adds its own sections (e.g. Republics' parameters).
 #pragma once
 

@@ -26,6 +26,7 @@
 #include "../determinism/probe_watch.h"
 #include "../lockstep/wallets.h"
 #include "../lockstep/citizen_stats.h"
+#include "../lockstep/economy_stats.h"
 #include "../save/save_zip.h"
 #include "../transport/network.h"
 #include "../session/save_sync.h"
@@ -103,6 +104,7 @@ static void BindModules(const ModHost* host)
     ProbeWatch_Bind(host);
     BuildingSettings_Bind(host);
     CitizenStats_Bind(host);
+    EconomyStats_Bind(host);
     Republics_Bind(host);
 }
 
@@ -185,6 +187,9 @@ static int InstallHooks()
 
     bool okCitizenStats = CitizenStats_Install();
     Logf("republicmp  republics' citizen averages: %d%s", okCitizenStats, okCitizenStats ? "" : " - each player sees the whole map's");
+
+    bool okEconomyStats = EconomyStats_Install();
+    Logf("republicmp  republics' economy statistics: %d%s", okEconomyStats, okEconomyStats ? "" : " - no republic's share is kept");
 
     bool okSounds = RemoteSounds_Install();
     Logf("republicmp  remote command sounds: %d%s", okSounds, okSounds ? "" : " - other players' commands are heard here");

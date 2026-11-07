@@ -330,6 +330,9 @@
     <ClCompile Include="lockstep\citizen_stats.cpp">
       <Filter>lockstep</Filter>
     </ClCompile>
+    <ClCompile Include="lockstep\economy_stats.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
     <ClCompile Include="lockstep\wallets.cpp">
       <Filter>lockstep</Filter>
     </ClCompile>
@@ -684,6 +687,9 @@
       <Filter>lockstep</Filter>
     </ClInclude>
     <ClInclude Include="lockstep\citizen_stats.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\economy_stats.h">
       <Filter>lockstep</Filter>
     </ClInclude>
     <ClInclude Include="lockstep\wallets.h">

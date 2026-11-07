@@ -96,8 +96,10 @@ build (the build check refuses another DLL).
   food, the citizens and education panels and the population window averaged
   every citizen on the map. They now count the player's own half only: a
   citizen by their home, else by the building or vehicle they are at. The
-  graphs and the change since the last record are still the whole map's, and
-  so is everything the simulation reads.
+  population window's graphs too, from each republic's own history kept in the
+  save (a record from an older save is the whole map's). Still the whole map's:
+  births, deaths, escapes and immigrants, the change since the last record, and
+  everything the simulation reads.
 - **A random, balanced border** - a broken line now, with bends about 2.5 km
   apart, from the world's seed, the same on every PC and kept in the save. Both
   halves get the same playable land (water does not count), the line stays 500 m

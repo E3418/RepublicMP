@@ -61,6 +61,10 @@ void Wallets_SimEnd();
 
 // The accounts are in use.
 bool Wallets_On();
+// The republic whose account the balances hold now, 0 or 1: a command's
+// player's, or the building, vehicle or loan a tick is updating. -1 for the rest
+// (a tick's code without an owner, this PC's view) and with the accounts off.
+int Wallets_Half();
 // Half 0 and half 1: rubles and dollars. False when not in use.
 bool Wallets_Read(double* rub0, double* usd0, double* rub1, double* usd1);
 // A line in the log: both accounts and the money the ticks split so far.

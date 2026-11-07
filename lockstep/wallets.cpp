@@ -217,6 +217,13 @@ bool Wallets_On()
     return g_on;
 }
 
+int Wallets_Half()
+{
+    if (!g_on) return -1;
+    if (g_use == USE_COMMAND) return g_commandHalf;
+    return g_use == USE_SIM ? g_scope : -1; // SCOPE_NONE is -1
+}
+
 bool Wallets_Read(double* rub0, double* usd0, double* rub1, double* usd1)
 {
     if (!g_on) return false;
